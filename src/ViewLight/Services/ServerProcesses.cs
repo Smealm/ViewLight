@@ -17,7 +17,8 @@ public sealed record RunningServerProcess(int Id, string? ExecutablePath);
 /// A server the launcher starts can outlive the launcher: if ViewLight is killed, or crashes, the
 /// Director keeps running and keeps every port it bound - 12000, the game realms, the patch server and
 /// the embedded database. The next Play then starts a second Director that fails to bind any of them,
-/// which looks like the server simply being broken.
+/// which looks like the server simply being broken. The launcher's local patch server has the same
+/// problem on its own port, so the same guard covers it.
 /// <para>
 /// Only processes started from the managed install's own executable are touched. An Imlight someone
 /// runs from somewhere else on the machine is their server, not this launcher's, and killing it would
@@ -27,7 +28,14 @@ public sealed record RunningServerProcess(int Id, string? ExecutablePath);
 public static class ServerProcesses {
 
     /// <summary>The process name Imlight's Director runs under, without the extension.</summary>
-    public static string ProcessName => Path.GetFileNameWithoutExtension(ImlightConfig.ServerExecutableName);
+    public static string ProcessName => ProcessNameOf(ImlightConfig.ServerExecutableName);
+
+    /// <summary>
+    /// The process name an executable runs under, without the extension - which is what Windows
+    /// enumerates processes by.
+    /// </summary>
+    public static string ProcessNameOf(string executableName)
+        => Path.GetFileNameWithoutExtension(executableName);
 
     /// <summary>How long to wait for a stopped process to actually exit.</summary>
     public static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(10);
@@ -52,12 +60,18 @@ public static class ServerProcesses {
         => candidates.Where(candidate => IsSameExecutable(managedExecutablePath, candidate.ExecutablePath)).ToList();
 
     /// <summary>Every running process carrying Imlight's process name, with the executable it runs from.</summary>
-    public static IReadOnlyList<RunningServerProcess> Running() {
+    public static IReadOnlyList<RunningServerProcess> Running() => Running(ProcessName);
+
+    /// <summary>
+    /// Every running process carrying <paramref name="processName"/>, with the executable it runs
+    /// from.
+    /// </summary>
+    public static IReadOnlyList<RunningServerProcess> Running(string processName) {
         var found = new List<RunningServerProcess>();
 
         Process[] processes;
         try {
-            processes = Process.GetProcessesByName(ProcessName);
+            processes = Process.GetProcessesByName(processName);
         }
         catch (Exception) {
             // Enumeration is best effort: a locked-down machine can refuse it, and that must not stop
@@ -79,15 +93,23 @@ public static class ServerProcesses {
     /// reports each one through <paramref name="log"/>.
     /// </summary>
     /// <returns>The process ids that were stopped.</returns>
-    public static IReadOnlyList<int> StopAll(string managedExecutablePath, Action<LogLevel, string> log) {
+    public static IReadOnlyList<int> StopAll(string managedExecutablePath, Action<LogLevel, string> log)
+        => StopAll(managedExecutablePath, ImlightConfig.ServerExecutableName, log);
+
+    /// <summary>
+    /// The same for any of the launcher's own managed executables, so the patch server gets the guard
+    /// too rather than a copy of it.
+    /// </summary>
+    public static IReadOnlyList<int> StopAll(
+        string managedExecutablePath, string executableName, Action<LogLevel, string> log) {
         var stopped = new List<int>();
 
-        foreach (var leftover in BelongingTo(managedExecutablePath, Running())) {
+        foreach (var leftover in BelongingTo(managedExecutablePath, Running(ProcessNameOf(executableName)))) {
             try {
                 using var process = Process.GetProcessById(leftover.Id);
 
                 log(LogLevel.Warning,
-                    $"Another {ImlightConfig.ServerExecutableName} from this server folder is still running "
+                    $"Another {executableName} from this folder is still running "
                     + $"(PID {leftover.Id}); it would hold the ports the new one needs. Stopping it first…");
 
                 process.Kill(entireProcessTree: true);

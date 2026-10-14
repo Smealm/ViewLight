@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ViewLight.Views.PreloadPatchServerDialog"
+        Title="Copy the game's files?"
+        Width="560"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ContentBackgroundBrush}">
+
+  <StackPanel Margin="24" Spacing="14">
+
+    <TextBlock Classes="cardTitle" FontSize="17"
+               x:Name="HeadlineText"
+               TextWrapping="Wrap" />
+
+    <TextBlock Classes="muted" x:Name="DetailText" TextWrapping="Wrap" />
+
+    <TextBlock Classes="muted" TextWrapping="Wrap"
+               Text="The files are copied from your own Wizard101 install, so nothing is downloaded. What is left of the revision after that is fetched as usual, as the patch server already does." />
+
+    <CheckBox x:Name="DontAskAgainCheck"
+              Content="Don't ask me again for this revision" />
+
+    <!-- Playing without the copy is the default: the copy is tens of gigabytes, so it takes a click. -->
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
+      <Button Content="Play without it" MinWidth="150"
+              IsDefault="True" IsCancel="True" Click="OnPlayWithoutItClick" />
+      <Button Classes="accent" Content="Copy them and play" MinWidth="190"
+              Click="OnCopyThemClick" />
+    </StackPanel>
+
+  </StackPanel>
+</Window>

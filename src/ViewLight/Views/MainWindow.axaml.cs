@@ -30,6 +30,7 @@ public partial class MainWindow : Window {
         _viewModel = new MainWindowViewModel {
             PickFolderAsync = PickFolderAsync,
             PickImageAsync = PickImageAsync,
+            AskAboutPreloadAsync = AskAboutPreloadAsync,
         };
 
         DataContext = _viewModel;
@@ -92,6 +93,41 @@ public partial class MainWindow : Window {
         });
 
         return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+    }
+
+    /// <summary>
+    /// Asks whether the patch server should be filled in from a Wizard101 install on this machine before
+    /// this session's server is started.
+    /// </summary>
+    /// <remarks>
+    /// Asked here rather than in the view model because a dialog needs a window to be owned by. Anything
+    /// that goes wrong answers "play without it": the copy is an improvement to the session, not a
+    /// condition of one.
+    /// </remarks>
+    private async Task<PreloadOfferAnswer> AskAboutPreloadAsync(PatchServerPreloadPlan plan) {
+        if (_promptIsOpen) {
+            return new PreloadOfferAnswer(Preload: false, DontAskAgain: false);
+        }
+
+        _promptIsOpen = true;
+
+        try {
+            var dialog = new PreloadPatchServerDialog {
+                Headline = MainWindowViewModel.PreloadOfferHeadline(plan),
+                Detail = MainWindowViewModel.PreloadOfferDetail(plan),
+            };
+
+            return await dialog.ShowDialog<PreloadOfferAnswer>(this);
+        }
+        catch (Exception ex) {
+            _viewModel?.AppendLog(LogLevel.Error,
+                $"Could not ask whether to fill the patch server in: {ex.Message}");
+
+            return new PreloadOfferAnswer(Preload: false, DontAskAgain: false);
+        }
+        finally {
+            _promptIsOpen = false;
+        }
     }
 
     private async Task<IStorageFolder?> TryGetFolderAsync(string? path) {

@@ -355,6 +355,10 @@ public class ServerRunnerTests {
         lock (lines) {
             Assert.Contains(lines, entry => entry.Level == LogLevel.Warning
                                             && entry.Message.Contains("not tied to ViewLight"));
+
+            // Everything the server's own runner reports is tagged as the server's, so the Log's box for
+            // it is about one process rather than about who typed the sentence.
+            Assert.All(lines, entry => Assert.Equal(LogSource.Server, entry.Source));
         }
 
         await runner.StopAsync();

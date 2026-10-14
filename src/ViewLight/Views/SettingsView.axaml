@@ -121,12 +121,184 @@
         </StackPanel>
       </Border>
 
+      <!-- ==================================================== the patch server
+           Not optional - Imlight loads Root.wad and the world data from a patch server, so every session
+           has one - and the only real question is whose. Aurorium is the Revive101 project's file server:
+           installed here, started before the server and pointed at from Imlight's config, the whole thing
+           runs on this machine. The remote branch is an address and nothing else, because that is all the
+           launcher has to say about somebody else's server. -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Patch server (Aurorium)" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Imlight asks a patch server for Root.wad and the world data, so a session always has one; the only question is whose. One here makes the whole thing local - Aurorium is the Revive101 project's own file server - while a remote one is reached over the network, the public instance being the community's machine. Downloading Aurorium takes a moment (about 9 MB); its first start then fetches the game's files from Wizard101's own patch server - 3,825 files, about 18 GB - or it can be handed them by a copy of the game on this machine, which takes minutes." />
+
+          <!-- The one question, and it is not "use a patch server or not": Imlight cannot boot without one,
+               so what is being chosen is whose. The two options are the same setting from both sides, and
+               everything below follows from the answer. -->
+          <StackPanel Spacing="6">
+            <TextBlock Classes="label" Text="Use patch server" />
+            <RadioButton GroupName="PatchServerSource" Content="Run one on this machine"
+                         IsChecked="{Binding UseLocalPatchServer, Mode=TwoWay}" />
+            <RadioButton GroupName="PatchServerSource" Content="Use a remote patch server"
+                         IsChecked="{Binding UsesRemotePatchServer, Mode=TwoWay}" />
+          </StackPanel>
+
+          <!-- Remote: the address Imlight keeps, which the launcher does not touch. Play leaves it exactly as
+               it is, so the public instance and somebody else's Aurorium are both reached by being left alone
+               rather than by the launcher rewriting them. -->
+          <StackPanel Spacing="4" IsVisible="{Binding UsesRemotePatchServer}">
+            <TextBlock Classes="label" Text="Patch server address (PatchServerInternalUrl)" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Text="{Binding PatchServerUrl, Mode=TwoWay}"
+                       Watermark="https://patcher.phill030.de" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Use the public one"
+                      Command="{Binding UsePublicPatchServerCommand}" />
+            </Grid>
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="Imlight downloads Root.wad from a patch server, so a server that is not answering stops the whole thing booting. The public address the Revive101 team runs is the default. Nothing here is written by Play: the address in the box is the one Imlight keeps." />
+          </StackPanel>
+
+          <!-- This machine's: the folder, the port, how the launcher runs it, and what it does with a patch
+               server that holds nothing yet. -->
+          <StackPanel Spacing="12" IsVisible="{Binding UseLocalPatchServer}">
+            <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding !PatchServerInstalled}"
+                       Text="There is no patch server here yet. Imlight keeps whatever address its own config has - the public one, unless it has been changed - so a session still runs; download Aurorium below and Play starts using it." />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Patch server folder" />
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBox Text="{Binding PatchServerPath, Mode=TwoWay}" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Use recommended"
+                      Command="{Binding UseRecommendedPatchServerFolderCommand}" />
+              <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                      Command="{Binding BrowsePatchServerFolderCommand}" />
+            </Grid>
+            <TextBlock Classes="status" Text="{Binding PatchFolderStatus}" />
+          </StackPanel>
+
+          <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto">
+            <TextBlock Classes="label" Text="Installed" />
+            <TextBlock Grid.Column="1" Classes="value" Text="{Binding PatchInstalledText}" />
+
+            <TextBlock Grid.Row="1" Classes="label" Text="Newest release" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Classes="value"
+                       Text="{Binding LatestPatchReleaseText}" />
+
+            <TextBlock Grid.Row="2" Classes="label" Text="State" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Classes="value"
+                       Text="{Binding PatchServerRowState}" />
+          </Grid>
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Check for updates" Command="{Binding CheckForPatchServerUpdatesCommand}" />
+            <Button Classes="accent" Content="Download the patch server"
+                    Command="{Binding DownloadPatchServerCommand}" />
+            <Button Content="Start" Command="{Binding StartPatchServerCommand}" />
+            <Button Content="Stop" Command="{Binding StopPatchServerCommand}" />
+          </StackPanel>
+
+          <Border Classes="glass" IsVisible="{Binding IsPatchBusy}">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding PatchInstallStage}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Cancel" Command="{Binding CancelPatchInstallCommand}" />
+              </Grid>
+              <ProgressBar Value="{Binding PatchInstallProgress}" Maximum="100" />
+            </StackPanel>
+          </Border>
+
+          <TextBlock Classes="error" Text="{Binding PatchCheckError}"
+                     IsVisible="{Binding HasPatchCheckError}" />
+
+          <Grid ColumnDefinitions="*,16,*">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="label" Text="Port it listens on" />
+              <TextBox Text="{Binding PatchServerPort, Mode=TwoWay}" />
+              <TextBlock Classes="muted"
+                         Text="Written into the patch server's own config.toml the next time it starts, along with the short retry interval and the download count its first fetch needs to finish." />
+              <TextBlock Classes="error" TextWrapping="Wrap"
+                         Text="{Binding PatchServerPortClashWarning}"
+                         IsVisible="{Binding PatchServerPortClashes}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Spacing="4">
+              <TextBlock Classes="label" Text="On this machine" />
+              <TextBlock Classes="value" Text="{Binding LocalPatchServerUrl}" />
+              <Button HorizontalAlignment="Left" Content="Use this patch server"
+                      Command="{Binding UseThisMachinesPatchServerCommand}" />
+            </StackPanel>
+          </Grid>
+
+          <!-- Filling the revision in from a copy of the game on this machine. It is the same revision
+               Wizard101's own patch server is serving, and a Steam install holds exactly that revision,
+               so the files copied in are the files that would have been downloaded. -->
+          <Border Classes="glass" IsVisible="{Binding PatchServerInstalled}">
+            <StackPanel Spacing="10">
+              <TextBlock Classes="label" Text="Filling it in from a copy of the game" />
+
+              <TextBlock Classes="muted" TextWrapping="Wrap"
+                         Text="The patch server fetches a revision whole, and it fetches only what it is missing: it never looks again at a file it already has. So a machine that already holds the game's files can hand them to it instead of waiting for the download - which matters most for the files that are too large to arrive at all, since Aurorium gives up on a download that runs past its own two-minute limit. Nothing is overwritten and nothing is invented: only files of the right name and the right length go in, so an install of any other revision is left alone." />
+
+              <StackPanel Spacing="4">
+                <TextBlock Classes="label" Text="Copy from" />
+                <Grid ColumnDefinitions="*,Auto,Auto">
+                  <TextBox Text="{Binding PreloadSourcePath, Mode=TwoWay}" Watermark="Found automatically" />
+                  <Button Grid.Column="1" Margin="8,0,0,0" Content="Find it"
+                          Command="{Binding FindPreloadSourceCommand}" />
+                  <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                          Command="{Binding BrowsePreloadSourceCommand}" />
+                </Grid>
+                <TextBlock Classes="status" TextWrapping="Wrap" Text="{Binding PreloadSourceInUse}" />
+              </StackPanel>
+
+              <TextBlock Classes="status" TextWrapping="Wrap" Text="{Binding PreloadStatus}"
+                         IsVisible="{Binding HasPreloadStatus}" />
+
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Classes="accent" Content="Copy the game's files in"
+                        Command="{Binding PreloadPatchServerCacheCommand}" />
+                <Button Content="Stop" Command="{Binding CancelPreloadCommand}" />
+              </StackPanel>
+
+              <StackPanel Spacing="10" IsVisible="{Binding IsPreloading}">
+                <TextBlock Text="{Binding PreloadStage}" VerticalAlignment="Center" />
+                <ProgressBar Value="{Binding PreloadProgress}" Maximum="100" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <CheckBox Content="Start it with the server, and stop it with the server"
+                    IsChecked="{Binding PatchServerManaged, Mode=TwoWay}" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="With this on, Play starts the patch server first, then the server, then Wizard101, and Imlight is given this machine's address so it loads its files from here. Both go down together when the server stops - unless the patch server is still fetching its files, when it is left running, because stopping it would stop the download. Turn this off to start and stop Aurorium yourself and be left alone." />
+
+          <!-- The copy, without the question: the offer before a session asks, this does it. -->
+          <CheckBox Content="Fill it in from the game folder if it has nothing yet, without asking"
+                    IsChecked="{Binding PatchServerPreloadAutomatically, Mode=TwoWay}" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="A patch server that has not fetched the session's revision yet is one Imlight falls back to its own Root.wad cache for, or stops on. With this on, Play fills it in from the Wizard101 install on this machine before the server starts - the same copy the offer asks about and the button above starts: tens of gigabytes read and written, minutes rather than the hour a download takes, and the only route there is for the files too large for the patch server's own download limit. Leave it off to be asked once per revision instead." />
+
+          <CheckBox Content="Make the server accept the patch server's revision (GameRevision)"
+                    IsChecked="{Binding MirrorPatchServerRevision, Mode=TwoWay}" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Imlight asks its patch server for V_{GameRevision}, and that same revision is the one the server accepts clients on. Your server build pins the revision it was published with, while a patch server can only ever hold what Wizard101 currently offers - so a game that has been patched past the server build is one the server turns away. With this on, the launcher reads the revision the patch server actually holds and writes it into GameRevision, so the two match and the client is accepted. It is applied every time the launcher starts the patch server - Play's own start included - and when it is turned on while one is already running; turning it off puts the value the config had before back. Only this machine's patch server is asked, so the switch does nothing while a remote one is in use. The GameRevision box in Network is greyed out while this is on." />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
       <!-- ==================================================== administrator -->
       <Border Classes="card">
         <StackPanel Spacing="10">
           <TextBlock Classes="cardTitle" Text="Administrator account" />
           <TextBlock Classes="muted"
                      Text="Imlight creates this account on boot. Do not leave the stock values in place." />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Imlight only ever creates this account - a password changed here after the first boot is not applied to it by the server - so ViewLight puts this password on the account in the player database itself, and says so below when it does." />
 
           <Grid ColumnDefinitions="*,16,*">
             <StackPanel>
@@ -143,36 +315,32 @@
               </Grid>
             </StackPanel>
           </Grid>
+
+          <TextBlock Classes="status" Text="{Binding AdminPasswordNotice}"
+                     IsVisible="{Binding HasAdminPasswordNotice}" />
         </StackPanel>
       </Border>
 
       <!-- ==================================================== making an account
-           Here rather than on the profile tab, with the rest of account management: making an account is a
-           thing an owner does to their server, not something about who is playing right now. It writes
-           straight into the server's own database in the shape Imlight writes, because Imlight's own way of
-           making one is a chat command typed inside the game. -->
+           Instructions rather than a form, and this is the one place in the launcher where that is a
+           deliberate removal. Writing an account document into Imlight's own player database worked, and
+           it was the launcher authoring the server's storage: an overstep that the server itself has no
+           need for, because it makes accounts its own way - .account create, typed by the admin account
+           inside the game. Nothing else about accounts changed: the list, the picker and the profile are
+           all reads of a database the server owns. -->
       <Border Classes="card" IsVisible="{Binding ServerInstalled}">
         <StackPanel Spacing="12">
 
           <Grid ColumnDefinitions="*,Auto">
-            <TextBlock Classes="cardTitle" Text="Create an account" VerticalAlignment="Center" />
-            <TextBlock Grid.Column="1" Classes="muted" Text="Your server's player database"
+            <TextBlock Classes="cardTitle" Text="Making another account" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Classes="muted" Text="Made by the server, in the game"
                        VerticalAlignment="Center" />
           </Grid>
 
-          <TextBlock Classes="muted" Text="{Binding CreateAccountSummary}" TextWrapping="Wrap" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding CreateAccountSummary}" />
 
-          <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="10">
-            <TextBox Grid.Column="0" Text="{Binding NewAccountUsername, Mode=TwoWay}"
-                     Watermark="Username" />
-            <TextBox Grid.Column="1" Text="{Binding NewAccountPassword, Mode=TwoWay}"
-                     Watermark="Password" PasswordChar="•" />
-            <Button Grid.Column="2" Classes="accent" Content="Create account"
-                    Command="{Binding CreateAccountCommand}" />
-          </Grid>
-
-          <TextBlock Classes="muted" Text="{Binding CreateAccountNotice}" TextWrapping="Wrap"
-                     IsVisible="{Binding HasCreateAccountNotice}" />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Nothing here writes into the server's database, so an account is made the way the server expects: it owns its own storage, and the launcher only ever reads it." />
 
         </StackPanel>
       </Border>
@@ -186,6 +354,15 @@
 
           <CheckBox Content="Skip the tutorial (TutorialDisabled)"
                     IsChecked="{Binding TutorialDisabled, Mode=TwoWay}" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="A new character drops into the starting zone instead of the tutorial. What the tutorial would have given the character is not given, so read the warning below before leaving this on." />
+
+          <!-- Skipping the tutorial is three separate omissions in the game, none of which it mentions:
+               the school's first spell, the equipped starter kit, and the tutorial's own items - which can
+               arrive twice instead. All three are fixable in the game, so the fix is the warning. -->
+          <TextBlock Classes="warning" TextWrapping="Wrap" IsVisible="{Binding TutorialDisabled}"
+                     Text="The tutorial is off. New characters are not granted their school's first spell, are not equipped with the starter items, and can be granted tutorial items twice. Fix those in the game: walk to Ravenwood, learn your school's spell from the trainer, then equip the starter items from your inventory." />
 
           <Grid ColumnDefinitions="*,16,*">
             <StackPanel>
@@ -346,18 +523,6 @@
           </StackPanel>
 
           <StackPanel Spacing="4">
-            <TextBlock Classes="label" Text="Patch server (PatchServerInternalUrl)" />
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBox Text="{Binding PatchServerUrl, Mode=TwoWay}"
-                       Watermark="https://patcher.phill030.de" />
-              <Button Grid.Column="1" Margin="8,0,0,0" Content="Use the public one"
-                      Command="{Binding UsePublicPatchServerCommand}" />
-            </Grid>
-            <TextBlock Classes="muted"
-                       Text="Imlight downloads Root.wad from a patch server, so a server that is not answering stops the whole thing booting. Leave this on the public address the Revive101 team runs, or point it at your own patch server (Aurorium)." />
-          </StackPanel>
-
-          <StackPanel Spacing="4">
             <TextBlock Classes="label" Text="Client launch arguments" />
             <TextBlock Classes="value" Text="{Binding ClientLaunchArguments}" />
           </StackPanel>
@@ -382,7 +547,11 @@
 
             <StackPanel Grid.Column="2">
               <TextBlock Classes="label" Text="Client revision this server accepts (GameRevision)" />
-              <TextBox Text="{Binding GameRevision, Mode=TwoWay}" IsEnabled="False" />
+              <TextBox Text="{Binding GameRevision, Mode=TwoWay}"
+                       IsEnabled="{Binding CanEditGameRevision}" />
+              <TextBlock Classes="muted" TextWrapping="Wrap"
+                         Text="{Binding PatchServerRevisionStatus}"
+                         IsVisible="{Binding HasPatchServerRevisionStatus}" />
             </StackPanel>
           </Grid>
 
@@ -431,7 +600,7 @@
                     IsChecked="{Binding ConfirmCloseWhenServerRunning, Mode=TwoWay}" />
 
           <TextBlock Classes="muted"
-                     Text="Closing ViewLight stops the server it started, so it asks first. That is true even if the launcher is killed outright, so the server can never be left holding its ports." />
+                     Text="Closing ViewLight stops everything it started - the server and the patch server - so it asks first. That is true even if the launcher is killed outright, so neither can ever be left holding its ports." />
 
           <!-- Milestones are the rungs of two long ladders - every five levels of every school, every ten
                duels - so somebody levelling or farming earns a run of them in one session. -->

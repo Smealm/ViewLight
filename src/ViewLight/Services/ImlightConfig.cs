@@ -293,6 +293,24 @@ public sealed class ImlightConfig {
         set => Ini.Set(SectionPatch, "PatchServerInternalUrl", NormalizePatchServerUrl(value));
     }
 
+    /// <summary>
+    /// The port Imlight's <b>own</b> patch server listens on.
+    /// </summary>
+    /// <remarks>
+    /// Not to be confused with <see cref="PatchServerUrl"/>, which is the patch server Imlight
+    /// <i>downloads from</i>. This one is the listener Imlight runs for the game client: it relays the
+    /// file list and the archives, so the client never talks to the download source itself. Stock is
+    /// 12500, and because it is a real listener, nothing else may hold that port - a second Imlight, or a
+    /// patch server of one's own pointed at it, stops the server dead during boot with
+    /// <c>TcpListener for Imlight.Patch on port 12500 failed</c>.
+    /// </remarks>
+    public const int DefaultPatchServerPort = 12500;
+
+    public int PatchServerPort {
+        get => GetInt(SectionPatch, "PatchServerPort", DefaultPatchServerPort);
+        set => Ini.Set(SectionPatch, "PatchServerPort", value.ToString());
+    }
+
     /// <summary>Strips the trailing slash Imlight's own URL building would double up.</summary>
     public static string NormalizePatchServerUrl(string? url)
         => (url ?? string.Empty).Trim().TrimEnd('/');

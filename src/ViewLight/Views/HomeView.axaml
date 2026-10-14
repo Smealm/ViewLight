@@ -112,6 +112,21 @@
           <Border Classes="list">
             <StackPanel Spacing="8">
 
+              <!-- The patch server, while the launcher runs one. It is part of the same stack - started
+                   before the server, stopped with it - so it is reported in the same place as the other
+                   two rather than only in the Log. -->
+              <Grid ColumnDefinitions="Auto,110,*" ColumnSpacing="10"
+                    IsVisible="{Binding ShowPatchServerRow}">
+                <Border Classes="dot" VerticalAlignment="Center"
+                        Classes.working="{Binding IsPatchWorking}"
+                        Classes.ready="{Binding IsPatchReady}"
+                        Classes.faulted="{Binding IsPatchFaulted}"
+                        Classes.pulsing="{Binding IsPatchWorking}" />
+                <TextBlock Grid.Column="1" Text="{Binding PatchServerRowLabel}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding PatchServerRowState}" FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+              </Grid>
+
               <Grid ColumnDefinitions="Auto,110,*" ColumnSpacing="10">
                 <Border Classes="dot" VerticalAlignment="Center"
                         Classes.working="{Binding IsServerWorking}"
@@ -137,10 +152,10 @@
           </Border>
 
           <StackPanel Orientation="Horizontal" Spacing="8">
-            <!-- Shown whenever a local server is actually alive, so joining somebody else's server does
-                 not strand one this launcher started. -->
-            <Button Content="Stop the server" Command="{Binding StopServerCommand}"
-                    IsVisible="{Binding ServerIsRunning}" />
+            <!-- Shown whenever anything the launcher started is actually alive, so joining somebody
+                 else's server does not strand one of them. Both are stopped by one press. -->
+            <Button Content="{Binding StopButtonLabel}" Command="{Binding StopServerCommand}"
+                    IsVisible="{Binding AnythingIsRunning}" />
             <Button Content="Open the log" Command="{Binding NavigateCommand}" CommandParameter="Logs" />
           </StackPanel>
 

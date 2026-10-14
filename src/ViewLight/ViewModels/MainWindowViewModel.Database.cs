@@ -59,6 +59,12 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
+        // A launcher stopped on its first screen is not reading anything: there is no install to read it
+        // with, and holding a database open for a launcher nobody can use is work for nothing.
+        if (RequiresImlight) {
+            return;
+        }
+
         var setup = EmbeddedRavenSetup.For(_config, ServerPath, LauncherPaths.DataRoot, out var problem);
         if (setup is null) {
             IdleDatabaseStatus = $"{problem} It is read while the server is running instead.";

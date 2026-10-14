@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ViewLight.Models;
 using ViewLight.Services;
 using Xunit;
@@ -32,9 +33,15 @@ public class PlayerDatabaseTests {
             ["AccountId"] = accountId,
             ["Username"] = username,
             ["PasswordHash"] = passwordHash,
+            ["CharacterIds"] = Array.Empty<ulong>(),
             ["@metadata"] = new Dictionary<string, object?> {
                 ["@id"] = documentId,
                 ["@collection"] = "Accounts",
+
+                // The server owns these, and they come back with any document read on its own.
+                ["@change-vector"] = "A:2-h0nU4Ky8pkeTwlPr1tC/Jw",
+                ["@last-modified"] = "2026-10-14T12:19:20.0564344Z",
+                ["Raven-Clr-Type"] = "Imlight.CoreLib.WizardData.Models.Player.Account, Imlight.CoreLib",
             },
         });
 
@@ -149,16 +156,51 @@ public class PlayerDatabaseTests {
     }
 
     [Fact]
-    public async Task TheAdminHashHasToBeThePasswordInImlightIni() {
-        // The anchor is only an anchor because the password is known: an admin account whose hash is
-        // some other password is a database the launcher does not understand.
+    public async Task AnAdminPasswordChangedAfterImlightMadeTheAccountIsNotThisDatabasesFault() {
+        // Measured on a real install: the admin account was created on Imlight's stock password at the first
+        // boot, and the password in Imlight.ini was changed minutes later - which Imlight never applies to an
+        // account it already has. The database is still Imlight's own, so it is read, its accounts are used,
+        // and the account that is on another password is named so the launcher can put the config's on it.
         var handler = HandlerFor(Listing(
-            Account(AdminAccountId, AdminUsername, PlayerPassword.Hash("a different password"))));
+            Account(AdminAccountId, AdminUsername, PlayerPassword.Hash("the stock password")),
+            Account(2222222222222222222, "exampleuser", PlayerPassword.Hash("hunter2"), "accounts/2-A")));
+
+        var contents = await ReadAsync(handler);
+
+        Assert.True(contents.IsTrustworthy, contents.Problem);
+        Assert.Null(contents.Problem);
+        Assert.Equal(2, contents.Accounts.Count);
+
+        var drift = Assert.IsType<AdminPasswordDrift>(contents.AdminPassword);
+        Assert.Equal("accounts/1-A", drift.DocumentId);
+        Assert.Equal(AdminUsername, drift.Username);
+
+        // The account's own document travels with it, so the one field can be changed and the rest written
+        // back exactly as it was read - the database's single-document read does not answer on the route
+        // this Raven build serves.
+        Assert.Equal(AdminAccountId, drift.Document["AccountId"]!.GetValue<ulong>());
+        Assert.Equal("Accounts", drift.Document["@metadata"]!["@collection"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task AnAdminHashInTheWrongShapeIsStillRefused() {
+        // What is left of the anchor: an account of the configured name holding something Imlight would
+        // never write is a database this launcher does not understand, password or no password.
+        var handler = HandlerFor(Listing(Account(AdminAccountId, AdminUsername, "not-a-hash")));
 
         var contents = await ReadAsync(handler);
 
         Assert.False(contents.IsTrustworthy);
         Assert.Contains("hash", contents.Problem!);
+        Assert.Null(contents.AdminPassword);
+    }
+
+    [Fact]
+    public async Task NoDriftIsReportedWhileThePasswordAgrees() {
+        var contents = await ReadAsync(HandlerFor(Listing(AdminAccount())));
+
+        Assert.True(contents.IsTrustworthy, contents.Problem);
+        Assert.Null(contents.AdminPassword);
     }
 
     [Fact]
@@ -292,6 +334,99 @@ public class PlayerDatabaseTests {
 
         Assert.Null(key);
         Assert.Empty(handler.Requests);
+    }
+
+    // ------------------------------------------------------------------ putting the config's password on it
+
+    [Fact]
+    public async Task TheConfigsPasswordIsPutOnAnAdminAccountCreatedWithAnotherOne() {
+        var bodies = new List<string?>();
+        var handler = new FakeHttpHandler(request => {
+            if (request.Method == HttpMethod.Put) {
+                bodies.Add(request.Content!.ReadAsStringAsync().Result);
+
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent(
+                    Listing(Account(AdminAccountId, AdminUsername, PlayerPassword.Hash("the stock password"))),
+                    Encoding.UTF8, "application/json"),
+            };
+        });
+
+        using var client = new PlayerDatabaseClient(new HttpClient(handler));
+        var contents = await client.ReadAsync(Port, AdminUsername, AdminPassword);
+
+        Assert.Null(await client.AlignAdminPasswordAsync(Port, contents, AdminPassword));
+
+        using var json = JsonDocument.Parse(Assert.Single(bodies)!);
+        var written = json.RootElement;
+
+        // The one field that was out of date...
+        Assert.Equal(PlayerPassword.Hash(AdminPassword), written.GetProperty("PasswordHash").GetString());
+
+        // ...and nothing else lost with it: the rest of the account is written back as it was read, and the
+        // fields the server owns are not sent back as if the launcher had read a version it did not.
+        Assert.Equal(AdminAccountId, written.GetProperty("AccountId").GetUInt64());
+        Assert.Equal(AdminUsername, written.GetProperty("Username").GetString());
+        Assert.True(written.TryGetProperty("CharacterIds", out _));
+
+        var metadata = written.GetProperty("@metadata");
+        Assert.Equal("Accounts", metadata.GetProperty("@collection").GetString());
+        Assert.False(metadata.TryGetProperty("@id", out _));
+        Assert.False(metadata.TryGetProperty("@change-vector", out _));
+        Assert.False(metadata.TryGetProperty("@last-modified", out _));
+    }
+
+    [Fact]
+    public async Task NothingIsWrittenWhileTheAdminPasswordAlreadyAgrees() {
+        var methods = new List<string>();
+        var handler = RecordingHandler(Listing(AdminAccount()), methods, []);
+
+        using var client = new PlayerDatabaseClient(new HttpClient(handler));
+        var contents = await client.ReadAsync(Port, AdminUsername, AdminPassword);
+
+        Assert.Null(contents.AdminPassword);
+        Assert.Null(await client.AlignAdminPasswordAsync(Port, contents, AdminPassword));
+        Assert.Empty(methods);
+    }
+
+    [Fact]
+    public async Task NothingIsWrittenWhenNoPasswordIsConfigured() {
+        var methods = new List<string>();
+        var handler = RecordingHandler(
+            Listing(Account(AdminAccountId, AdminUsername, PlayerPassword.Hash("the stock password"))),
+            methods, []);
+
+        // A config with no password is a database whose anchor cannot be checked at all, so there is
+        // nothing to put on the account either.
+        using var client = new PlayerDatabaseClient(new HttpClient(handler));
+        var contents = await client.ReadAsync(Port, AdminUsername, string.Empty);
+
+        Assert.Null(contents.AdminPassword);
+        Assert.Null(await client.AlignAdminPasswordAsync(Port, contents, string.Empty));
+        Assert.Empty(methods);
+    }
+
+    [Fact]
+    public async Task NothingIsWrittenToADatabaseThatWasNotRecognised() {
+        var bodies = new List<string?>();
+        var document = JsonNode.Parse(Account(AdminAccountId, AdminUsername, "stored"))!.AsObject();
+        var contents = new PlayerDatabaseContents(
+            [], [], "The admin account \"exampleadmin\" Imlight creates on boot is not in the database.",
+            new AdminPasswordDrift("accounts/1-A", AdminUsername, document));
+
+        var handler = new FakeHttpHandler(request => {
+            bodies.Add(request.Content?.ReadAsStringAsync().Result);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        });
+
+        using var client = new PlayerDatabaseClient(new HttpClient(handler));
+        var refused = await client.AlignAdminPasswordAsync(Port, contents, AdminPassword);
+
+        Assert.NotNull(refused);
+        Assert.Empty(bodies);
     }
 
     [Fact]

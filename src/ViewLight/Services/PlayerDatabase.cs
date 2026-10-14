@@ -8,11 +8,44 @@ using ViewLight.Models;
 
 namespace ViewLight.Services;
 
+/// <summary>
+/// The admin account Imlight created with a password other than the one its config names now.
+/// </summary>
+/// <param name="DocumentId">The document to write, when the config's password is put on the account.</param>
+/// <param name="Username">The account, for a sentence a person has to read.</param>
+/// <param name="Document">
+/// The account's own document, as it was read, so the one field can be changed and the whole thing written
+/// back. Carried rather than fetched again because the database's own single-document read does not answer
+/// on the route this build serves: <c>GET /databases/{db}/docs?id=…</c> returns the paged listing.
+/// </param>
+/// <remarks>
+/// <b>Imlight only ever creates this account.</b> Its boot calls
+/// <c>DatabaseUtilities.CreateEmbeddedDatabaseAccount</c> with the password from <c>Imlight.ini</c> on every
+/// start, but <c>AccountCollection.CreateAccount</c> refuses a username it already holds - so changing that
+/// password after the first boot leaves the account on the one it was made with, and the game refuses the
+/// sign-in the config (and the launcher's own Settings screen) advertises.
+/// <para>
+/// That is a fact about the password rather than about the database, so it is reported here and repaired
+/// by <see cref="PlayerDatabaseClient.AlignAdminPasswordAsync"/> instead of being treated as a database the
+/// launcher does not understand. Measured on a real install: an admin account created in October 2026 held
+/// <c>base64(SHA512("compsci"))</c> - the password Imlight ships - minutes after the config's password had
+/// been changed by the launcher's own Generate button, with the account otherwise entirely Imlight's own
+/// (<c>accounts/1-A</c>, a <c>Raven/Hilo/accounts</c> document beside it, <c>Raven-Clr-Type</c> naming its
+/// <c>Account</c> model).
+/// </para>
+/// </remarks>
+public sealed record AdminPasswordDrift(string DocumentId, string Username, JsonObject Document);
+
 /// <summary>What the player database held when it was read.</summary>
+/// <param name="AdminPassword">
+/// The admin account whose stored password is not the one <c>Imlight.ini</c> names, or <c>null</c> when they
+/// agree. Its own fact rather than part of <see cref="Problem"/>: the database is readable either way.
+/// </param>
 public sealed record PlayerDatabaseContents(
     IReadOnlyList<PlayerAccount> Accounts,
     IReadOnlyList<PlayerSessionKey> SessionKeys,
-    string? Problem) {
+    string? Problem,
+    AdminPasswordDrift? AdminPassword = null) {
 
     /// <summary>Nothing could be read, and this says why.</summary>
     public static PlayerDatabaseContents Unreadable(string problem) => new([], [], problem);
@@ -442,6 +475,85 @@ public sealed class PlayerDatabaseClient : IDisposable {
         return (AccountCreation.Created, null);
     }
 
+    /// <summary>
+    /// Puts the password <c>Imlight.ini</c> names on the admin account Imlight created with another one.
+    /// </summary>
+    /// <returns>A sentence saying what happened when it could not be done, or <c>null</c> when it was.</returns>
+    /// <remarks>
+    /// Only ever that one field on that one document, and only ever after the layout has been recognised -
+    /// the same rule every other write here follows. Imlight will not do it itself: its create refuses a
+    /// username it already holds, so without this the password its own config names - and the one the
+    /// launcher's Settings screen shows - is not the one the account has, and the game refuses the sign-in
+    /// both of them advertise. See <see cref="AdminPasswordDrift"/> for how that happens.
+    /// </remarks>
+    public async Task<string?> AlignAdminPasswordAsync(
+        int port,
+        PlayerDatabaseContents contents,
+        string password,
+        CancellationToken cancellationToken = default) {
+
+        var drift = contents.AdminPassword;
+        if (drift is null || string.IsNullOrEmpty(password)) {
+            return null;
+        }
+
+        if (!contents.IsTrustworthy) {
+            return "the database was not recognised, so its admin account was left alone";
+        }
+
+        try {
+            var document = drift.Document;
+            document["PasswordHash"] = PlayerPassword.Hash(password);
+            DropServerMetadata(document);
+
+            using var content = new StringContent(document.ToJsonString(), Encoding.UTF8, "application/json");
+            using var response = await _http
+                .PutAsync($"{BaseUrl(port)}/databases/{_databaseName}/docs?id={Uri.EscapeDataString(drift.DocumentId)}",
+                    content, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (response.IsSuccessStatusCode) {
+                return null;
+            }
+
+            // The database's own reason rather than the status alone: a repair that fails quietly leaves a
+            // password nobody can sign in with and nothing to go on.
+            var reason = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            return $"{BaseUrl(port)} refused the change ({(int)response.StatusCode}: {Clipped(reason)})";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException
+                                      or InvalidOperationException or NotSupportedException) {
+            return $"{BaseUrl(port)} refused the change ({ex.Message})";
+        }
+    }
+
+    /// <summary>
+    /// The first of an error body, in one line, for a sentence in the Log. Raven answers a refused write
+    /// with a paragraph of its own diagnostics, and the first line of it is the part that says what is
+    /// wrong.
+    /// </summary>
+    private static string Clipped(string reason) {
+        var oneLine = string.Join(' ', reason.Split('\n', '\r').Select(l => l.Trim()).Where(l => l.Length > 0));
+
+        return oneLine.Length <= 300 ? oneLine : oneLine[..300] + "…";
+    }
+
+    /// <summary>
+    /// Drops the fields the database server owns, which come back with a document but are not the
+    /// launcher's to send: a change vector written back is a version the launcher is not claiming to have
+    /// read, and the server rejects the write when it no longer matches.
+    /// </summary>
+    private static void DropServerMetadata(JsonObject document) {
+        if (document["@metadata"] is not JsonObject metadata) {
+            return;
+        }
+
+        foreach (var field in new[] { "@id", "@change-vector", "@last-modified", "@etag" }) {
+            metadata.Remove(field);
+        }
+    }
+
     /// <summary>Writes a document, with the metadata the collection is taken from.</summary>
     private async Task WriteDocumentAsync(
         int port, string id, JsonObject document, CancellationToken cancellationToken) {
@@ -558,37 +670,49 @@ internal static class PlayerDatabaseLayout {
             return new PlayerDatabaseContents(accounts, keys, null);
         }
 
-        problem ??= AnchorProblem(accounts, documents, adminUsername, adminPassword);
+        var (anchorProblem, drift) = Anchor(accounts, documents, adminUsername, adminPassword);
+        problem ??= anchorProblem;
 
-        return new PlayerDatabaseContents(accounts, keys, problem);
+        return new PlayerDatabaseContents(accounts, keys, problem, problem is null ? drift : null);
     }
 
     /// <summary>
-    /// The anchor: an account named the way <c>Config/Imlight.ini</c> says has to exist, with a password
-    /// hash of the right shape - and, when the launcher knows the password, the right value.
+    /// The anchor: an account named the way <c>Config/Imlight.ini</c> says has to exist, holding a password
+    /// hash of the shape Imlight writes - and, when that hash is of a different password than the config
+    /// names, the fact that it is.
     /// </summary>
-    private static string? AnchorProblem(
+    /// <remarks>
+    /// The password's *value* is deliberately not part of what makes this database recognisable. Imlight
+    /// creates the admin account once and never updates it, so a config whose password has been changed
+    /// since the first boot holds an account whose hash is something else - while the account, the hash's
+    /// shape, and every other document are Imlight's own. Requiring the two to agree made a legitimate
+    /// database unreadable and accounts impossible to add, which is what this reports instead.
+    /// </remarks>
+    private static (string? Problem, AdminPasswordDrift? Drift) Anchor(
         List<PlayerAccount> accounts,
         IReadOnlyList<JsonElement> documents,
         string adminUsername,
         string adminPassword) {
 
         if (string.IsNullOrWhiteSpace(adminUsername)) {
-            return "No admin username is set, so the player database cannot be recognised.";
+            return ("No admin username is set, so the player database cannot be recognised.", null);
         }
 
         var anchor = accounts.FirstOrDefault(a => string.Equals(a.Username, adminUsername, StringComparison.Ordinal));
         if (anchor is null) {
-            return $"The admin account \"{adminUsername}\" Imlight creates on boot is not in the database.";
+            return ($"The admin account \"{adminUsername}\" Imlight creates on boot is not in the database.",
+                null);
         }
 
-        var hash = documents
+        var document = documents
             .Where(d => CollectionOf(d) == AccountsCollection)
-            .Where(d => TryReadUlong(d, "AccountId", out var id) && id == anchor.AccountId)
-            .Select(d => d.TryGetProperty("PasswordHash", out var p) && p.ValueKind == JsonValueKind.String
-                ? p.GetString()
-                : null)
-            .FirstOrDefault();
+            .FirstOrDefault(d => TryReadUlong(d, "AccountId", out var id) && id == anchor.AccountId);
+
+        var hash = document.ValueKind == JsonValueKind.Object
+                   && document.TryGetProperty("PasswordHash", out var property)
+                   && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
 
         // Imlight writes base64(SHA512(password)): 88 characters decoding to 64 bytes.
         var hashIsShapedRight = !string.IsNullOrEmpty(hash)
@@ -596,15 +720,32 @@ internal static class PlayerDatabaseLayout {
                                 && written == 64;
 
         if (!hashIsShapedRight) {
-            return $"The password hash stored for \"{adminUsername}\" is not in the shape Imlight writes.";
+            return ($"The password hash stored for \"{adminUsername}\" is not in the shape Imlight writes.",
+                null);
         }
 
-        if (!string.IsNullOrEmpty(adminPassword) && !PlayerPassword.Matches(adminPassword, hash)) {
-            return $"\"{adminUsername}\" in the database does not hash the password set in Imlight.ini.";
+        if (string.IsNullOrEmpty(adminPassword) || PlayerPassword.Matches(adminPassword, hash)) {
+            return (null, null);
         }
 
-        return null;
+        // A document with no id is one the launcher could not put right, but it is still an account it can
+        // read - so this is not a problem either way, and without an id there is nothing to say.
+        var documentId = DocumentIdOf(document);
+
+        return (null, documentId.Length == 0
+            ? null
+            : new AdminPasswordDrift(documentId, anchor.Username,
+                JsonNode.Parse(document.GetRawText())!.AsObject()));
     }
+
+    /// <summary>The id a document's own metadata carries, or empty when it carries none.</summary>
+    internal static string DocumentIdOf(JsonElement document)
+        => document.TryGetProperty("@metadata", out var metadata)
+           && metadata.ValueKind == JsonValueKind.Object
+           && metadata.TryGetProperty("@id", out var id)
+           && id.ValueKind == JsonValueKind.String
+            ? id.GetString()!
+            : string.Empty;
 
     internal static string? CollectionOf(JsonElement document)
         => document.TryGetProperty("@metadata", out var metadata)
@@ -651,14 +792,9 @@ internal static class PlayerDatabaseLayout {
             return false;
         }
 
-        var documentId = document.TryGetProperty("@metadata", out var metadata)
-                         && metadata.TryGetProperty("@id", out var id)
-                         && id.ValueKind == JsonValueKind.String
-            ? id.GetString()!
-
-            // Without an id the key could not be replaced, which is worth knowing about rather than
-            // working around.
-            : string.Empty;
+        // Without an id the key could not be replaced, which is worth knowing about rather than working
+        // around.
+        var documentId = DocumentIdOf(document);
 
         if (documentId.Length == 0) {
             problem = "A session key document carried no document id.";

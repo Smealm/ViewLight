@@ -1,39 +1,55 @@
-using System.Text.Json;
 using ViewLight.Models;
 
 namespace ViewLight.Services;
 
 /// <summary>
-/// Persists the launcher's own profiles to <c>profiles.json</c> in the launcher's data root.
+/// The launcher's own profiles: what a Wizard101 account is to <i>this machine</i>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Kept apart from <c>launcher.json</c> on purpose: the settings file is small and read at startup, while
-/// this one grows with every session and every badge, and a corrupt badge file must not cost the user
-/// their folders. The two also fail in opposite directions - a settings file that will not load is
-/// recreated from the defaults, while this one is recreated empty and simply starts collecting again.
+/// The whole of the launcher's notes about a server - the profiles, their playtime and badges, and which
+/// world each zone belongs to - reached through one surface so nothing above has to know where they are kept.
+/// They used to be <c>profiles.json</c>; they are the launcher's own database now, which is one document per
+/// profile rather than one file holding everything
+/// (see <see cref="DatabaseProfilePersistence"/>). <see cref="IProfilePersistence"/> is where that difference
+/// lives, and this class is the same surface it always was.
 /// </para>
 /// <para>
-/// Nothing here is ever sent anywhere. A profile is what a Wizard101 account is to this machine, and the
-/// achievement system it feeds is a local one by design - see <see cref="ProfileLedger"/>.
+/// <b>A store with nothing attached yet holds nothing.</b> That is not a half-built state to paper over: the
+/// launcher's database takes tens of seconds to come up, and until it does there is nowhere for a note to go.
+/// Saving before then is refused and said so rather than written somewhere else - a launcher writing its notes
+/// to a file and to a database would have two answers to every question and no way to know which is newer.
+/// Nothing is lost by it in practice, because the notes are only ever added to while the server is running,
+/// and the server is only started once the database is up.
 /// </para>
 /// </remarks>
 public sealed class ProfileStore {
 
-    private static readonly JsonSerializerOptions s_options = new() {
-        WriteIndented = true,
-    };
-
     private LauncherProfiles _file = new();
+    private IProfilePersistence? _persistence;
 
-    public string FilePath { get; }
-
-    public ProfileStore(string? filePath = null) {
-        FilePath = filePath ?? LauncherPaths.ProfilesFile;
-        _file = Load();
+    /// <summary>A store with nowhere to keep anything yet: the launcher's own database has not come up.</summary>
+    public ProfileStore() {
     }
 
-    /// <summary>Every profile, in the order they were first created.</summary>
+    /// <summary>A store over a file. The suite's store, and what an old launcher's notes are read from.</summary>
+    public ProfileStore(string filePath) => Attach(new JsonProfilePersistence(filePath));
+
+    public ProfileStore(IProfilePersistence persistence) => Attach(persistence);
+
+    /// <summary>
+    /// Why the notes could not be read or written, or <c>null</c> when everything went through.
+    /// </summary>
+    /// <remarks>
+    /// Kept rather than thrown: a database that has stopped answering must not take the profile screen down
+    /// with it, and the same field carries the smaller news of a note or two that had to be skipped.
+    /// </remarks>
+    public string? Problem { get; private set; }
+
+    /// <summary>Whether there is anywhere to keep notes at all yet.</summary>
+    public bool IsAttached => _persistence is not null;
+
+    /// <summary>Every profile, in the order they were first seen.</summary>
     public IReadOnlyList<LauncherProfile> Profiles => _file.Profiles;
 
     /// <summary>
@@ -45,6 +61,44 @@ public sealed class ProfileStore {
     /// the one being played on.
     /// </remarks>
     public Dictionary<string, string> ZoneWorlds => _file.ZoneWorlds;
+
+    /// <summary>
+    /// Points the store at where the notes are kept, and reads what is there.
+    /// </summary>
+    /// <remarks>
+    /// Called when the launcher's own database comes up, which is after this is built: the store has to exist
+    /// before anything asks it for a profile, and the database takes tens of seconds to answer.
+    /// </remarks>
+    /// <returns>Whether anything was read. Nothing is lost when nothing was: the launcher simply has no
+    /// profiles yet, which is what a first run looks like too.</returns>
+    public bool Attach(IProfilePersistence persistence) {
+        _persistence = persistence;
+        return Reload();
+    }
+
+    /// <summary>
+    /// Re-reads everything from where it is kept.
+    /// </summary>
+    /// <remarks>
+    /// What is already held is left alone when the read fails: an empty set in its place would be written back
+    /// over the database the moment anything changed, which is how a database would lose everything it holds
+    /// to a moment of the server not answering.
+    /// </remarks>
+    public bool Reload() {
+        if (_persistence is null) {
+            return false;
+        }
+
+        var loaded = _persistence.Load(out var problem);
+        Problem = problem;
+
+        if (loaded is null) {
+            return false;
+        }
+
+        _file = loaded;
+        return true;
+    }
 
     /// <summary>
     /// The profile for an account, created if this is the first time the account has been seen.
@@ -78,36 +132,32 @@ public sealed class ProfileStore {
     public bool Has(ulong accountId) => _file.Profiles.Any(p => p.AccountId == accountId);
 
     /// <summary>
-    /// The absolute path of an image a profile uses, or null when it has none.
+    /// Keeps an image for a profile: into the profile's own document, so it is part of what the launcher's
+    /// database holds and part of any backup of it.
     /// </summary>
+    /// <returns>The recorded file name, or null when the picture could not be kept.</returns>
     /// <remarks>
-    /// Only the file name is stored, and it is resolved against the profile's folder inside the launcher's
-    /// data root. That is what keeps a portable launcher portable: move the folder and the pictures come
-    /// with it, because nothing wrote down where the folder was.
+    /// Kept under a name of the launcher's own choosing, so a file called the same as another profile's
+    /// picture cannot end up as both. The kind is in the name so replacing a banner cannot overwrite an
+    /// avatar.
     /// </remarks>
-    public static string? ImagePath(ulong accountId, string? fileName)
-        => string.IsNullOrWhiteSpace(fileName)
-            ? null
-            : Path.Combine(LauncherPaths.ProfileDirectory(accountId), fileName);
+    public async Task<string?> AdoptImageAsync(
+        LauncherProfile profile, string sourcePath, bool banner, CancellationToken token = default) {
 
-    /// <summary>
-    /// Copies an image into the profile's own folder and records it, so the profile keeps working when the
-    /// file it was picked from is moved or deleted.
-    /// </summary>
-    /// <returns>The recorded file name, or null when the file could not be read.</returns>
-    public string? AdoptImage(LauncherProfile profile, string sourcePath, bool banner) {
+        if (_persistence is null) {
+            Problem = "The launcher's own database is not up yet, so the picture was not kept.";
+            return null;
+        }
+
         try {
-            var directory = LauncherPaths.ProfileDirectory(profile.AccountId);
-            Directory.CreateDirectory(directory);
+            var content = await File.ReadAllBytesAsync(sourcePath, token).ConfigureAwait(true);
 
-            // Kept under a name of the launcher's own choosing, so a file called the same as another
-            // profile's picture cannot end up as both. The kind is in the name so replacing a banner
-            // cannot overwrite an avatar.
             var kind = banner ? "banner" : "avatar";
             var name = $"{kind}{Path.GetExtension(sourcePath)}";
-            var destination = Path.Combine(directory, name);
 
-            File.Copy(sourcePath, destination, overwrite: true);
+            if (!await _persistence.WriteImageAsync(profile.AccountId, name, content, token).ConfigureAwait(true)) {
+                return null;
+            }
 
             if (banner) {
                 profile.BannerFile = name;
@@ -124,8 +174,22 @@ public sealed class ProfileStore {
         }
     }
 
-    /// <summary>Forgets a profile's picture, leaving the file where it is - it may be another profile's.</summary>
-    public void ClearImage(LauncherProfile profile, bool banner) {
+    /// <summary>
+    /// A profile's picture, as the bytes to show, or null when it has none - or when it cannot be read just
+    /// now, which the profile screen answers by showing the initial-letter circle instead.
+    /// </summary>
+    public async Task<byte[]?> ReadImageAsync(ulong accountId, string? fileName, CancellationToken token = default) {
+        if (_persistence is null || string.IsNullOrWhiteSpace(fileName)) {
+            return null;
+        }
+
+        return await _persistence.ReadImageAsync(accountId, fileName, token).ConfigureAwait(true);
+    }
+
+    /// <summary>Forgets a profile's picture, and takes it out of what is kept.</summary>
+    public async Task ClearImageAsync(LauncherProfile profile, bool banner, CancellationToken token = default) {
+        var name = banner ? profile.BannerFile : profile.AvatarFile;
+
         if (banner) {
             profile.BannerFile = null;
         }
@@ -133,33 +197,25 @@ public sealed class ProfileStore {
             profile.AvatarFile = null;
         }
 
+        if (_persistence is not null && !string.IsNullOrWhiteSpace(name)) {
+            await _persistence.DeleteImageAsync(profile.AccountId, name, token).ConfigureAwait(true);
+        }
+
         Save();
     }
 
+    /// <summary>Writes everything that is held back to where it is kept.</summary>
     public void Save() {
-        var directory = Path.GetDirectoryName(FilePath);
-        if (!string.IsNullOrEmpty(directory)) {
-            Directory.CreateDirectory(directory);
+        if (_persistence is null) {
+            Problem = "The launcher's own database is not up yet, so this was not kept anywhere.";
+            return;
         }
 
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(_file, s_options));
-    }
-
-    private LauncherProfiles Load() {
-        try {
-            if (!File.Exists(FilePath)) {
-                return new LauncherProfiles();
-            }
-
-            var json = File.ReadAllText(FilePath);
-
-            // Written from the launcher, read back by it: a file that will not parse is one this launcher
-            // did not write, or one that was cut short. Either way an empty set that collects from here is
-            // better than refusing to start, and never worse than acting on half a file.
-            return JsonSerializer.Deserialize<LauncherProfiles>(json, s_options) ?? new LauncherProfiles();
+        if (_persistence.Save(_file, out var problem)) {
+            Problem = problem;
+            return;
         }
-        catch (Exception) {
-            return new LauncherProfiles();
-        }
+
+        Problem = problem ?? "The launcher's own notes could not be saved.";
     }
 }

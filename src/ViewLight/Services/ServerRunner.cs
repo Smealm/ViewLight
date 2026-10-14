@@ -573,8 +573,12 @@ public sealed class ServerRunner : IDisposable {
         StateChanged?.Invoke(this, state);
     }
 
+    /// <summary>
+    /// Everything this runner reports - the process's output and the launcher's own narration about it -
+    /// is tagged as the server's, because that is where somebody quietening one thing down looks for it.
+    /// </summary>
     private void Log(LogLevel level, string message)
-        => Output?.Invoke(this, new LogEntry(DateTimeOffset.Now, level, message));
+        => Output?.Invoke(this, new LogEntry(DateTimeOffset.Now, level, message, LogSource.Server));
 
     public void Dispose() {
         _disposed = true;

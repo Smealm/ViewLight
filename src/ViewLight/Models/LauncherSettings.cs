@@ -55,6 +55,105 @@ public sealed class LauncherSettings {
     /// <summary>Check GitHub for a newer build when the launcher starts.</summary>
     public bool CheckForUpdatesOnStartup { get; set; } = true;
 
+    // ---------------------------------------------------------------- the patch server
+
+    /// <summary>
+    /// Folder the local patch server (Aurorium) is installed into. Empty until it has been downloaded,
+    /// which is also how the launcher knows there is not one to run.
+    /// </summary>
+    public string PatchServerPath { get; set; } = string.Empty;
+
+    /// <summary>Tag of the patch server release currently installed, if any.</summary>
+    public string? PatchServerInstalledTag { get; set; }
+
+    /// <summary>When it was written to disk.</summary>
+    public DateTimeOffset? PatchServerInstalledAt { get; set; }
+
+    /// <summary>Asset URL of the installed patch server (used to tell "same build" from "new build").</summary>
+    public string? PatchServerInstalledAssetUrl { get; set; }
+
+    /// <summary>
+    /// Whether the patch server a session is given is this machine's own - the one in the folder below,
+    /// run from here - rather than one somebody else runs.
+    /// </summary>
+    /// <remarks>
+    /// On by default, because a local stack is what the launcher is for. It is deliberately not "whether to
+    /// use a patch server": Imlight cannot boot without one, so the only thing being chosen is whose. Off
+    /// means a remote address is the one in use and this machine's patch server is neither started nor
+    /// pointed at, whatever else is configured here.
+    /// </remarks>
+    public bool UseLocalPatchServer { get; set; } = true;
+
+    /// <summary>
+    /// Whether the launcher runs the patch server: started with the server, stopped with the server. Only
+    /// meaningful while <see cref="UseLocalPatchServer"/> is on.
+    /// </summary>
+    /// <remarks>
+    /// On by default once one is installed, because a patch server that is not started before the server is
+    /// exactly the case this exists to remove; it can be turned off so a patch server the user starts
+    /// themselves is left alone.
+    /// </remarks>
+    public bool PatchServerManaged { get; set; } = true;
+
+    /// <summary>
+    /// Whether a patch server that holds nothing for the session's revision is filled in from the game
+    /// folder on this machine without being asked.
+    /// </summary>
+    /// <remarks>
+    /// Off by default: the copy is tens of gigabytes read and written, and when to spend that is the user's
+    /// decision - which is what the offer before a session is for. On, the offer stops being a question and
+    /// Play copies what it can, saying so in the Log.
+    /// </remarks>
+    public bool PatchServerPreloadAutomatically { get; set; }
+
+    /// <summary>
+    /// The port the patch server listens on, and the port Imlight is pointed at for it.
+    /// </summary>
+    /// <remarks>
+    /// Kept in step with <see cref="Services.PatchServerConfig.DefaultPort"/> by a test, so the stock
+    /// Imlight config's own <c>http://127.0.0.1:12369</c> is where a default install ends up.
+    /// </remarks>
+    public int PatchServerPort { get; set; } = 12369;
+
+    /// <summary>
+    /// Whether the launcher makes Imlight accept the revision the patch server holds, by writing that
+    /// revision into <c>GameRevision</c>.
+    /// </summary>
+    /// <remarks>
+    /// Off by default. A server build pins the revision it was published with, and a patch server can
+    /// only ever hold what Wizard101 currently offers, so the two disagree the moment the game is patched
+    /// past the server build - which shows up as a 404 during boot and a refused login. Turning this on
+    /// is the deliberate act of saying the client that is here now is the one to accept.
+    /// </remarks>
+    public bool MirrorPatchServerRevision { get; set; }
+
+    /// <summary>
+    /// The <c>GameRevision</c> the config held when mirroring was turned on, so turning it off can put
+    /// the release's own value back. <c>null</c> until the toggle has been used with a config to read.
+    /// </summary>
+    public string? RevisionBeforeMirror { get; set; }
+
+    /// <summary>
+    /// What the launcher last wrote into <c>GameRevision</c>, so a value that has moved on since - a
+    /// newer server build, or an edit by hand - is not mistaken for the launcher's own to undo.
+    /// </summary>
+    public string? MirroredRevision { get; set; }
+
+    /// <summary>
+    /// The Wizard101 install the patch server's files are copied from, or empty to use whichever install on
+    /// this machine is the revision the patch server holds.
+    /// </summary>
+    public string PatchServerPreloadSource { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The revision whose preload offer was turned down with "don't ask again".
+    /// </summary>
+    /// <remarks>
+    /// A revision rather than a switch, because a new revision is a new question: the files that cannot be
+    /// downloaded at all are per-revision, and somebody who said no to one has said nothing about the next.
+    /// </remarks>
+    public string? PatchServerPreloadDeclinedRevision { get; set; }
+
     /// <summary>
     /// Which theme to use: <see cref="ThemeChoices.System"/>, Light or Dark. Stored as text so a value
     /// written by a future version does not fail to load.

@@ -46,7 +46,10 @@ public sealed partial class MainWindowViewModel {
 
     private CancellationTokenSource? _profileWatch;
 
-    /// <summary>The picture and banner currently decoded, so they are not re-read on every refresh.</summary>
+    /// <summary>
+    /// The picture and banner currently decoded, by the names the profile shows, so they are not read out of
+    /// the launcher's database again on every refresh.
+    /// </summary>
     private (ulong AccountId, string? Avatar, string? Banner) _profileImages;
 
     /// <summary>The log the watch is reading, or null when nothing is being watched.</summary>
@@ -192,9 +195,9 @@ public sealed partial class MainWindowViewModel {
         }
 
         return $"Imlight creates “{admin}” the first time the server boots, so it is the only account that "
-               + "exists before anybody has signed in. Make another under Settings, where the server's "
-               + "account management is, or sign in as this one and say .account create $username $password "
-               + "in the game — every account appears here as a profile once the server has been started.";
+               + "exists before anybody has signed in. Make another one in the game: sign in as this account "
+               + "and say .account create $username $password — the server writes it itself, and every "
+               + "account appears here as a profile once the server has been started.";
     }
 
     /// <summary>The letters a profile with no picture of its own is drawn under.</summary>
@@ -440,6 +443,15 @@ public sealed partial class MainWindowViewModel {
     /// Makes an account in the player database, in the shape Imlight's own accounts have.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <b>Kept, but reachable from nowhere.</b> Accounts are made by the server, in the game, with its own
+    /// <c>.account create</c> command - the launcher authoring a document in Imlight's player database is an
+    /// overstep, and the card that did it is gone from Settings. The code is left in place rather than
+    /// deleted so the decision can be reversed in one edit if the server ever grows a command channel a
+    /// launcher may use; what must not come back on its own is a button. See
+    /// <see cref="CreateAccountSummary"/>, which is what Settings says instead.
+    /// </para>
+    /// <para>
     /// This is the launcher writing Imlight's own storage format, which is why it is fenced the way it is:
     /// the database has to read back as the layout the launcher knows - anchored on the admin account
     /// Imlight creates on boot - before a single document is written, and the whole of that document is
@@ -502,15 +514,20 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// What the account form says it will do, in the words of the guard that decides whether it can.
+    /// How an account is made now, in the server's own words rather than a form's.
     /// </summary>
+    /// <remarks>
+    /// Instructions, not a form. The launcher used to write the account document into Imlight's player
+    /// database itself, which worked and was an overstep: that storage is the server's, and the server
+    /// already knows how to make an account - <c>.account create</c>, typed by its own admin account inside
+    /// the game. So there is nothing to download, nothing to stop, and nothing the launcher writes.
+    /// </remarks>
     public string CreateAccountSummary => _config is null
-        ? "Download the server first: an account needs a database to live in."
-        : "The account is written straight into your server's player database, in the same shape Imlight "
-          + "writes its own — so it works in the game with no restart, and the launcher needs nothing from "
-          + "the server but its files. Sign in as your admin account in the game and say "
-          + ".account create $username $password for the same thing, or make one here while the server is "
-          + "stopped.";
+        ? "Download the server first: accounts belong to it."
+        : "Sign in to the game as the admin account above, then say .account create $username $password in "
+          + "the chat. The server makes the account itself - the launcher only reads that database, never "
+          + "writes it - so close the client when you are done and the new account is offered here as a "
+          + "profile to play as.";
 
     // ---------------------------------------------------------------- starting and stopping
 
@@ -847,16 +864,15 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// Decodes a profile's picture and banner, once per pair of files.
+    /// Decodes a profile's picture and banner, once per pair of pictures.
     /// </summary>
     /// <remarks>
-    /// The paths are the cache key, so a screen refresh that changes nothing does not read two image files
-    /// off disk again - which matters because this is called from every derived-state refresh.
+    /// The names are the cache key, so a screen refresh that changes nothing does not read the pictures out of
+    /// the launcher's own database again - which matters because this is called from every derived-state
+    /// refresh.
     /// </remarks>
     private void LoadProfileImages(LauncherProfile? profile) {
-        var key = (profile?.AccountId ?? 0,
-            ProfileStore.ImagePath(profile?.AccountId ?? 0, profile?.AvatarFile),
-            ProfileStore.ImagePath(profile?.AccountId ?? 0, profile?.BannerFile));
+        var key = (profile?.AccountId ?? 0, profile?.AvatarFile, profile?.BannerFile);
 
         if (key == _profileImages) {
             return;
@@ -867,14 +883,26 @@ public sealed partial class MainWindowViewModel {
     }
 
     private async Task DecodeProfileImagesAsync((ulong AccountId, string? Avatar, string? Banner) key) {
-        var avatar = await DecodeAsync(key.Avatar).ConfigureAwait(true);
-        var banner = await DecodeAsync(key.Banner).ConfigureAwait(true);
+        var avatar = await DecodeAsync(await ReadImageAsync(key.AccountId, key.Avatar).ConfigureAwait(true))
+            .ConfigureAwait(true);
 
-        // Only if nothing has been picked since the files were read.
+        var banner = await DecodeAsync(await ReadImageAsync(key.AccountId, key.Banner).ConfigureAwait(true))
+            .ConfigureAwait(true);
+
+        // Only if nothing has been picked since the pictures were read.
         if (_profileImages == key) {
             ProfileAvatar = avatar;
             ProfileBanner = banner;
         }
+    }
+
+    /// <summary>A profile's picture, or null when it has none - or when it cannot be read just now.</summary>
+    private async Task<byte[]?> ReadImageAsync(ulong accountId, string? fileName) {
+        if (accountId == 0 || string.IsNullOrWhiteSpace(fileName)) {
+            return null;
+        }
+
+        return await _profiles.ReadImageAsync(accountId, fileName).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -904,8 +932,8 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
-        if (_profiles.AdoptImage(SelectedProfile, picked, banner: false) is null) {
-            AppendLog(LogLevel.Error, $"Could not copy {picked} into the profile's folder.");
+        if (await _profiles.AdoptImageAsync(SelectedProfile, picked, banner: false) is null) {
+            AppendLog(LogLevel.Error, $"Could not keep {picked} as the profile's picture.");
             return;
         }
 
@@ -924,8 +952,8 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
-        if (_profiles.AdoptImage(SelectedProfile, picked, banner: true) is null) {
-            AppendLog(LogLevel.Error, $"Could not copy {picked} into the profile's folder.");
+        if (await _profiles.AdoptImageAsync(SelectedProfile, picked, banner: true) is null) {
+            AppendLog(LogLevel.Error, $"Could not keep {picked} as the profile's banner.");
             return;
         }
 
@@ -936,24 +964,24 @@ public sealed partial class MainWindowViewModel {
     private bool CanClearProfilePicture() => SelectedProfile?.AvatarFile is not null;
 
     [RelayCommand(CanExecute = nameof(CanClearProfilePicture))]
-    private void ClearProfilePicture() {
+    private async Task ClearProfilePictureAsync() {
         if (SelectedProfile is null) {
             return;
         }
 
-        _profiles.ClearImage(SelectedProfile, banner: false);
+        await _profiles.ClearImageAsync(SelectedProfile, banner: false).ConfigureAwait(true);
         RefreshProfiles();
     }
 
     private bool CanClearProfileBanner() => SelectedProfile?.BannerFile is not null;
 
     [RelayCommand(CanExecute = nameof(CanClearProfileBanner))]
-    private void ClearProfileBanner() {
+    private async Task ClearProfileBannerAsync() {
         if (SelectedProfile is null) {
             return;
         }
 
-        _profiles.ClearImage(SelectedProfile, banner: true);
+        await _profiles.ClearImageAsync(SelectedProfile, banner: true).ConfigureAwait(true);
         RefreshProfiles();
     }
 

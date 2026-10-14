@@ -48,6 +48,7 @@ public sealed class LauncherSettingsStore {
             // so they are turned back into absolute paths before anything else looks at them.
             loaded.ClientPath = LauncherPaths.ResolveStoredPath(loaded.ClientPath);
             loaded.ServerPath = LauncherPaths.ResolveStoredPath(loaded.ServerPath);
+            loaded.PatchServerPath = LauncherPaths.ResolveStoredPath(loaded.PatchServerPath);
 
             // Empty paths are left empty on purpose: a path the user cleared must stay cleared, and
             // the first-run setup asks for them rather than having them silently reappear.
@@ -92,16 +93,19 @@ public sealed class LauncherSettingsStore {
         // Written with its own folders stored relative to the root in portable mode, so the whole folder
         // can be moved between drives. The live settings keep the absolute paths the rest of the
         // launcher uses; they are put back as soon as the file is written.
-        var (clientPath, serverPath) = (Settings.ClientPath, Settings.ServerPath);
+        var (clientPath, serverPath, patchServerPath) =
+            (Settings.ClientPath, Settings.ServerPath, Settings.PatchServerPath);
 
         try {
             Settings.ClientPath = LauncherPaths.ToStoredPath(clientPath);
             Settings.ServerPath = LauncherPaths.ToStoredPath(serverPath);
+            Settings.PatchServerPath = LauncherPaths.ToStoredPath(patchServerPath);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(Settings, s_options));
         }
         finally {
             Settings.ClientPath = clientPath;
             Settings.ServerPath = serverPath;
+            Settings.PatchServerPath = patchServerPath;
         }
     }
 }
@@ -149,6 +153,12 @@ public static class LauncherPaths {
 
     /// <summary>The folder the launcher suggests when the user has no preference.</summary>
     public static string DefaultServerPath => Path.Combine(DataRoot, "server");
+
+    /// <summary>
+    /// Where the local patch server is installed by default: beside the server, inside the launcher's
+    /// own folder, so a portable launcher carries it too.
+    /// </summary>
+    public static string DefaultPatchServerPath => Path.Combine(DataRoot, "patchserver");
 
     /// <summary>
     /// Where portable mode keeps the game once it has been copied in, and where Play looks for it by

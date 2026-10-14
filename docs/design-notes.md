@@ -35,9 +35,10 @@ build onto disk, editing `Imlight.ini` by hand, and remembering to start the ser
    releases and unpacks it into your server folder.
 3. **Edits settings for you.** Admin credentials, tutorial behaviour, the starter kit, ports, world data
    and the embedded database port are all fields that write straight into `Config/Imlight.ini`.
-4. **Warms up, then plays.** Press **Play** and it starts the server, waits until the account server is
-   genuinely listening, then launches the client pointed at it - signed in as the account chosen on Home,
-   without the game's login screen.
+4. **Warms up, then plays.** Press **Play** and it starts the patch server if there is one (and waits
+   until it answers), starts the Imlight server, waits until the account server is genuinely listening,
+   then launches the client pointed at it - signed in as the account chosen on Home, without the game's
+   login screen.
 5. **Updates without losing anything.** Updating replaces the binaries and merges your settings back
    over the new defaults.
 
@@ -45,6 +46,12 @@ build onto disk, editing `Imlight.ini` by hand, and remembering to start the ser
 
 - Windows (the Wizard101 client is Windows-only; Steam detection reads the Windows registry)
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) to build; the app targets `net10.0`
+- **A machine .NET runtime with ASP.NET Core**, which is what the launcher's own database runs in: the
+  RavenDB the server ships is framework-dependent even though Imlight's own build is not. Checked on the
+  first screen rather than discovered at a database that will not start, so a machine without one is told
+  what it needs instead of being left with an empty profile screen
+- An Imlight install - the launcher stands down without one, and says so rather than showing a Home screen
+  whose only working button is a download
 - A Wizard101 client you obtained yourself - Imlight is BYOD and ships no game files
 - Internet access for the first install
 
@@ -83,6 +90,74 @@ if it does not exist.
 A candidate only counts if it actually contains one of the two files above, so a stray folder named
 `Wizard101` is not mistaken for the game.
 
+### Imlight is a requirement, and the launcher stops and says so
+
+**There is no launcher without Imlight.** ViewLight is a launcher for it: the server is what it installs,
+configures, runs and plays. And since the launcher's own data moved into a database run from the RavenDB
+the server ships ([task 4](#4-the-launchers-own-data-moves-into-a-launcher-database---done)) - the profiles,
+the playtime, the badges, kept in the launcher's own folder - the install is also where the *engine* for the
+launcher's own notes comes from. So a launcher with no install has nothing to configure, nothing to start,
+and nowhere to keep your progress.
+
+That was the user's call rather than the code's: the launcher used to be able to sit there with no server
+and offer a download, which is a screen of buttons that do not work. What happens now is `MainWindow`'s
+fourth layer - after the folders question - which covers the whole window until there is an install it
+can work with. `ImlightRequirements.For` is the rule, and what it checks is the order the pieces have to be
+fixed in:
+
+| What | Why it is needed |
+| --- | --- |
+| A folder | So there is somewhere to look. |
+| `Config\Imlight.ini` in it | That is what "installed" means everywhere else in the launcher. |
+| `Imlight.Director.exe` | Play starts it. |
+| `RavenDBServer\Raven.Server.dll` | The database the launcher's own data lives in. |
+| The .NET runtime that database asks for | Because that database is framework-dependent (below). |
+
+The screen says which piece is missing in a sentence, keeps the folder box so another folder can be
+pointed at, offers the download, and has **Check again** for somebody who installed .NET or copied an
+install across while it was open. Nothing behind it is shown - not the navigation, not the account card -
+so there is no half-working launcher to wander into.
+
+**The .NET gap also says how to install it.** Its link is a version's page of downloads rather than an
+installer, and nothing on that page says which of its several downloads this launcher wants, so the screen
+says it: press it, take *ASP.NET Core Runtime* for Windows x64, run the installer, come back and press
+**Check again**. It says the last part because it is true - the runtime answer is forgotten when the button
+is pressed, so a restart is not needed - and it is the last step precisely so that installing the runtime
+and being believed look like one action rather than two.
+
+**Check again also settles the launcher in.** Once nothing is missing it does what a start with the
+dependency already there would have done: opens the server's own RavenDB, so profiles and accounts are read
+without starting the server. Without it, somebody who installed .NET would get the launcher back with its
+own database still shut until the next run - the gate would have lifted and nothing else would have
+changed. The button is still not a *Play*: nothing here starts Imlight.
+
+**The .NET runtime is part of the requirement, which is not obvious.** Measured on a real install:
+Imlight's Windows build is *self-contained* (`Imlight.Director.runtimeconfig.json` has
+`includedFrameworks`, with `coreclr.dll` and `hostfxr.dll` beside it), so Imlight itself needs nothing from
+the machine. The RavenDB inside it is the other way round: `RavenDBServer\Raven.Server.runtimeconfig.json`
+names `Microsoft.NETCore.App` **and** `Microsoft.AspNetCore.App` as shared frameworks, and that folder
+holds 198 DLLs with no ASP.NET Core among them. `EmbeddedRaven` starts it with a machine `dotnet`, so a
+machine-wide runtime has to exist and has to have the frameworks the database asks for. What it asks for is
+read from that file rather than hard-coded, and the rule is the runtime's own roll-forward: the same
+framework, the same major, a version at least as high. An Imlight that ever shipped the database
+self-contained would need nothing here and the screen would not ask for anything.
+
+What that means for a user is the point of the screen rather than a consequence to soften. The launcher's
+own release is self-contained, so a machine with no .NET at all still **starts** - the launcher, the
+folders question, and this screen all work - and only the server's database is what cannot run. The screen
+uses that shape deliberately: it says the launcher itself starts without .NET, names the frameworks the
+database asked for, and links to the version's page, so a machine missing one dependency is walked through
+it instead of meeting a launcher that never appears, does nothing, or dies with an error nobody can read.
+Nothing starts a database before that screen is satisfied: holding one open for a launcher nobody can use
+is work for nothing.
+
+**One state that is now unreachable, kept anyway.** Home's one button used to say *Download server* where
+there was no server, and it is what downloaded one. It cannot any more - the launcher does not show Home
+without an install - so `PrimaryActionLabel`'s download state and the branch behind it are now defensive
+rather than reachable. They stay, because the button's two jobs are the button's two jobs and deleting half
+of it would make the gate's screen the only place a download could ever come from; what is written down
+here is that Home is not where a user meets it.
+
 ## The tabs
 
 | Tab | What it is for |
@@ -90,8 +165,8 @@ A candidate only counts if it actually contains one of the two files above, so a
 | **Home** | The Wizard101 banner and its Play button; everything about the server sits in one quiet strip beneath it |
 | **Profile** | What this launcher knows about the account Play signs in as on this server: picture and banner, playtime, standing, the score circle, and the wizards on it |
 | **Profile → Achievements** | Everything that account has earned on this server, grouped by category, with a milestone card for each ladder. A page of Profile rather than a tab of its own, opened from the score circle |
-| **Settings** | Both locations, every value ViewLight writes into `Config/Imlight.ini`, the theme, and the launcher's own close prompt |
-| **Log** | Launcher messages and live server output |
+| **Settings** | Both locations, every value ViewLight writes into `Config/Imlight.ini`, the patch server (Aurorium) and its own config, the theme, and the launcher's own close prompt |
+| **Log** | Everything the launcher, the server and the patch server have said, drawn as one terminal |
 | **About** | Versions, links, and what is still stubbed |
 
 There is deliberately no separate menu for starter items: it is a setting, so it lives in Settings
@@ -101,7 +176,9 @@ alongside everything else.
 
 Home is built around one thing: getting into Wizard101. A wide banner carries the game's own art, its
 wordmark, and the Play button; below it the server is present but deliberately unremarkable - a status
-dot, one line of state, and the start/stop/log buttons, followed by the build and update panel. Which
+dot, one line of state, and the start/stop/log buttons, followed by the build and update panel. The one
+row added since is the patch server's, drawn only while the launcher runs one and only when Play has
+something on screen to attach it to, so a launcher with no patch server looks exactly as it did. Which
 account Play signs in as lives on **Profile**, with the rest of what the launcher knows about that account -
 the picker is one list, and it is the same choice either way. The
 intent is that pressing Play looks like starting a game rather than operating a server, with the
@@ -167,6 +244,62 @@ button is a gradient split hard down the middle (`Button.heroPlay`), and the ban
 so the art stays visible instead of sitting behind a composited blur. Every one of those renders the
 same way on Windows and on a Linux build, which is the point - see [a Linux build](#a-linux-build).
 
+### The Log is a terminal, not a list of rows
+
+**What was asked for.** The Log drawn as a terminal rather than a row per line, with the display faults
+that came with the rows fixed: art and tables printed by a process arriving in the shape they were written
+in, and a copy taking a whole region rather than one line. Checkboxes for the launcher, the server and the
+patch server, so one of them can be quietened down. And a line that repeats over and over folded to a
+single line with the count, openable so the lines can be read and copied, and foldable again.
+
+**The rows were the fault, not the formatting.** Every line was a `ListBoxItem` with a three-column grid
+around it, so a line had to fit the column it was given: a process's ASCII art was re-wrapped and the
+indentation that made it readable was gone, and a `SelectableTextBlock` per row means a drag selects one
+row. `LogDocument` now builds the Log as **blocks**: one run of lines drawn as one piece of monospace text
+per block, never wrapped, with a horizontal scrollbar instead of a fold.
+
+**A block is a run of lines with the same severity and source**, which is what lets a block carry one
+colour without any per-line decoration, and it is capped at 200 lines. The cap is not cosmetic: a block is
+one piece of text to lay out, so appending a line only ever re-lays out the last block rather than the five
+thousand lines behind it. Blocks are also why a copy takes as much as the block - up to 200 lines - rather
+than one row. One thing to know about the cost: the Log is drawn as a document with no virtualization
+behind it, so a Log that alternates between sources line by line is a lot of small blocks on screen at
+once. Five thousand lines is the ceiling that keeps that affordable, and a real session - a launcher's own
+messages, then long stretches of one process - is a handful of blocks, not hundreds.
+
+**Appending touches the bottom block and nothing else**, except when the Log is full and the oldest line is
+dropped, which takes the first line off the top block and drops the block itself once it is empty. That
+keeps a busy server's output from costing a rebuild of the whole Log per line, and it means the blocks
+always hold exactly the lines the Log is keeping - which is asserted: building the Log line by line and
+building it again from the lines it holds have to draw the same screen.
+
+**Folding is decided by everything about a line except when it arrived.** Thirty identical lines are one
+line with `+30` where the severity tag would be - the count goes in a column that is already being read, so
+a folded run does not disturb the alignment of the lines around it - and pressing it swaps the marker to
+`-30` and draws the lines underneath with the time each one actually arrived. The fold is remembered by the
+run's first line rather than by the block object, which is what lets a fold stay open across a filter
+change: changing a box rebuilds the whole Log, and a run that folded itself back up under somebody
+halfway through copying it out would be the Log undoing their work.
+
+**The three boxes are a source, set where a line is written.** Launcher lines are the launcher's;
+everything a runner reports carries the process it is about, its own narration included - somebody
+quietening the server down wants the line that says the server stopped as much as they want the line the
+server printed. Hidden lines are still held and still count against the 5,000-line cap, so unticking a box
+is asking not to look at something rather than asking for it to be thrown away. The consequence is
+recorded rather than hidden: with the server hidden and the server spamming, its lines are what the cap
+drops - the line under the Log says how many are being held back, so a quiet-looking Log explains itself
+to an empty one that says nothing.
+
+**Verified, and how.** `LogDocument` is tested on its own: what folds and what does not, opening and
+folding back, the filters and what they leave, the 200-line cap, the 5,000-line one, a folded run counting
+down as its oldest lines are dropped, the two ways of building the Log agreeing, and the columns a line is
+written in. The launcher has no view test in it, so the layout itself was checked against a real Avalonia
+window - hidden, but real, so the styles and the fonts were the launcher's own - and it holds: the fold row
+is at the same pixel as the text under it and exactly one line tall, a 1,600-pixel line of art is drawn as
+one line with the Log scrolling sideways, the message column is the same for every kind of line, opening a
+run draws every line at that column, opening a run above the viewport does not drag the page to the bottom,
+and the tail is followed as it arrives.
+
 ## Settings the launcher writes
 
 All of these live in `{server}/Config/Imlight.ini`. That file stays the single source of truth - the
@@ -212,6 +345,16 @@ The other end is capped too: RavenDB batches at 16, so 16 is the maximum.
 The stock config hands out QA and resist gear through the tutorial
 (`1317124`-`1317133`, `1317234`, `284071`). Applying the preset removes those from a normal
 character's start.
+
+**Skipping the tutorial is one setting with three consequences, and the setting now says so.**
+`TutorialDisabled` puts a new character straight into the starting zone, but three things the tutorial does
+are not done behind its back: the school's first spell is not granted, the starter items are not equipped,
+and the tutorial's own items can be granted a second time. All three are the game's behaviour rather than
+the launcher's, and all three are fixable in the game - walk to Ravenwood, learn the school's spell from the
+trainer, then equip the starter items out of the inventory - so the card carries that as a warning while
+the setting is on rather than leaving it to be discovered by a character that starts wrong. The warning
+lives in the view rather than in the view model because it is a paragraph of instructions with nothing to
+compute; everything else on that card is a value the launcher writes.
 
 ### How the launcher edits the INI
 
@@ -299,6 +442,293 @@ address back.
 
 The first boot after this is fixed downloads `Root.wad` (about 281 MB) into the launcher's cache, and
 the server keeps a copy of it afterwards, so it is a one-time cost.
+
+#### Running one instead of visiting one
+
+The repair above makes a session *work*; it does not make it local. Imlight still fetches the game's own
+files from the community's machine, which is the last part of the stack that does not live on this PC -
+and the reason a zone load is slow on a busy day. So the launcher can run the patch server itself:
+[Aurorium](https://github.com/Revive101/Aurorium), the Revive101 project's own file server, which fetches
+the assets and serves them over HTTP.
+
+**Install is one file.** Unlike an Imlight release, Aurorium publishes `aurorium.exe` directly rather
+than an archive, so installing it is a download, a copy, and a config file - `PatchServerInstallService`
+had no unpacking to do and no overlay to merge. The release lookup is therefore a second repository to
+ask, which is why `GitHubReleaseFeed` exists: the refusal messages, the prerelease ordering and the JSON
+parsing are the same for both, and they now live once.
+
+**The config is written, but only when there is a reason.** Aurorium generates its own `config.toml` with
+its author's defaults, and the launcher has an opinion about the endpoint - because that is the address
+Imlight is pointed at - and about the three fetch settings below it, because a first fetch that finishes
+is the difference between a local patch server and a decoration. `PatchServerConfig.EnsureConfig` writes
+the whole file in Aurorium's documented shape when it is missing or names another port, and otherwise
+only when the file is **an unmodified copy of a template this launcher wrote earlier**: the two templates
+it has shipped are compared byte for byte, so a machine set up before those settings changed is updated
+rather than left running the cadence it was set up with.
+
+The comparison is what keeps the other half true. A config somebody has grown by hand (a different
+`fetch_interval`, a bigger download queue) matches no template of ours, so it is never rewritten - the
+file stops being ours the moment somebody edits it - and the test asserts both: the hand-written line
+survives, and the untouched copy of the old template does not.
+
+The fetch settings are the launcher's own values rather than Aurorium's, and each one is there for a
+measured reason: `fetch_interval` is 300 seconds against its 28800 (see below - it is the retry cadence,
+not just the new-revision timer), `concurrent_downloads` is 4 against its 2, and `file_logging` is on
+because a fetch that will not finish should leave something to read.
+
+**The default port is not arbitrary.** Aurorium's default and Imlight's stock `PatchServerInternalUrl`
+are both `127.0.0.1:12369`, so a patch server on the default port is the one Imlight already looks for -
+and `ServerConfigRepair` leaves the stock address alone when something is genuinely listening on it. The
+two constants live in different layers (`LauncherSettings.PatchServerPort` in `Models`,
+`PatchServerConfig.DefaultPort` in `Services`), so a test keeps them in step the same way the section
+names are kept in step.
+
+**Readiness is the endpoint, and it is probed like the server's.** Aurorium logs through `tracing` and
+prints nothing that reliably means "the file server is bound" - any such line changes with a build or a
+log level. What does mean it is a TCP connection to the address it was told to serve on being accepted,
+which is exactly what the client will do, so `PatchServerRunner` probes the port and then waits a short
+settle window (2s, against the Imlight server's 10s: the HTTP server behind the socket is up almost
+immediately). The measured run below is what the settle window is for.
+
+**Answering is not serving, and that is why nothing asks.** Aurorium binds its endpoint seconds
+after it starts and only then begins work: it connects to Wizard101's own patch server, fetches
+`LatestFileList.xml`/`.bin` for the new revision into `{save_directory}/{revision}/`, writes that revision
+and its asset list **into its database**, and only then downloads the assets themselves into the same
+folder. Its routes serve off the disk. Between "the port is open" and "the files are there", every real
+request is a 404 - and Imlight reports it as:
+
+```
+ERR : Error while downloading file http://127.0.0.1:12369/V_r803238.Wizard_1_610/Data/GameData/Root.wad
+      from patch server endpoint: Response status code does not indicate success: 404 (Not Found)
+```
+
+and then dies, because it cannot load `Root.wad`. Worse, Imlight's own reachability check makes this
+invisible: `GetServerUrlStatus` sends a `HEAD` to `{url}/V_{revision}` and treats *any* response - 404
+included - as "the endpoint is available", so Imlight walks into this believing the patch server is
+fine.
+
+`GET /revisions` does not answer it either, and that is the trap: the revision row and its asset list are
+written **before** the downloads start, so a fresh patch server lists a revision whose files are not on
+disk yet. `LatestFileList` is not a useful proxy either, because Aurorium serves it from the requested
+revision directly, bypassing the asset lookup - so it can be there while `Root.wad` is not. The only
+question that would answer it is a request for the files themselves.
+
+**What the first fetch actually costs, measured.** Aurorium's own log at `trace` level, run against this
+machine's install, is the source for the numbers here. Revision `V_r806919.Wizard_1_610` is **3825
+assets, 18.39 GB of them**, of which `Data/GameData/Root.wad` alone is 281 MiB (295405277 bytes, summed
+from the revision's own `LatestFileList.xml`). The upstream chain is worth
+writing down once because none of it is configurable and all of it matters: the patch server on
+`patch.us.wizard101.com:12500` speaks Wizard101's own protocol over a raw socket and hands Aurorium two
+URLs - the manifest at
+`http://versionak.us.wizard101.com/WizPatcher/V_r806919.Wizard_1_610/Windows/LatestFileList.bin` and the
+asset prefix `http://versionak.us.wizard101.com/WizPatcher/V_r806919.Wizard_1_610/LatestBuild` - and every
+asset is fetched from `{prefix}/{file}`. The launcher configures none of this beyond the host and port it
+was handed, because there is nothing else to configure.
+
+At the several MB/s this connection manages, the whole revision is over an hour of continuous running,
+which is what a correctly configured patch server does when it is left alone: **1169 of the 3825 files and 2.2 GB in the
+nine minutes it was observed here**, with no failures on the small files. Two things stop it:
+
+- **Aurorium gives every request two minutes.** A file that cannot arrive inside that is aborted -
+  `Failed to read chunk: error decoding response body` - and the `.part` is deleted, so nothing is
+  resumed. Measured twice in a row on this machine: `Equipment-HighDetail.wad` started 15:00:35 and failed
+  15:02:35, `Equipment-WorldData.wad` started 15:02:28 and failed 15:04:28. Exactly 120 seconds each. At
+  this connection's speed that is a coin toss for `Root.wad`, which is why the fetch needs more than one
+  attempt at it.
+- **A pass that ends sleeps for `fetch_interval`.** Aurorium's default of eight hours is the whole of what
+  "the patch server is up and nothing is happening" looks like: one aborted big file and the revision waits
+  most of a day. The launcher writes five minutes instead.
+
+The third thing was the launcher's own. The fetch only ever advances while the process is alive, and
+stopping the server used to stop the patch server with it - so the shape of a first session was: Play
+starts Aurorium, Aurorium fetches for two minutes, Imlight 404s on `Root.wad`, the session ends, the stop
+that follows takes the download with it. 2.2 GB of an 18.39 GB job per attempt - and the files it gave up
+on, which are the ones that matter for a boot, still not there. That is what "the patch server has no assets and nothing happens" was.
+
+#### Filling it in from a copy of the game
+
+**The insight is that there is nothing to guess at.** A patch server does not choose a revision: Wizard101's
+own patch server hands it one over the socket, and Aurorium mirrors exactly that revision - here
+`V_r806919.Wizard_1_610`, fetched from `versionak.us.wizard101.com/WizPatcher/...`. A Steam install of
+Wizard101 comes off the same channel, and its own `Bin\revision.dat` says `r806919.Wizard_1_610`, which is
+the revision the patch server's folder is named after. The two are the same build - and that is checkable
+rather than merely plausible, on the real files:
+
+| Compared | Result |
+| --- | --- |
+| The revision's own file list (3825 files, 18.39 GB) against the Steam build beside it | 3725 present, **0 at the wrong size**, 100 absent - all of `Windows\Bin\` (3) and `PatchClient\` (97) |
+| Every file the patch server had already fetched against that build, byte for byte | **2700 compared, 0 different** (78 s, 5 GB) |
+
+**The patch server itself cannot close that gap, and that is the point.** Aurorium fetches a file only when
+it is missing and never looks again at one it has - `if save_path.exists()` - and it aborts a download that
+runs past its own two-minute limit. So the large files are not slow, they are unreachable: every pass starts
+them again, every pass gives up on them, and a server can sit at "fetching" forever while those files are
+never written. Handing it a copy is not a shortcut around a slow job; for those files it is the only route
+there is. Measured on this machine the day it was built: the patch server held **2703 of the 3825 files**,
+and the game folder next to it could supply **1025 of the rest, 13.76 GB** - the remaining 97 being the
+`Windows\Bin`/`PatchClient` files that neither has. Copying 13.76 GB is minutes of local IO; fetching it is
+over an hour, and the `Equipment-WorldData.wad`s of the revision never finish at all.
+
+**Exactness is the whole safety argument, and it is enforced rather than assumed.** Three rules, and they
+are the difference between filling a patch server in and inventing one:
+
+| Rule | Why it is there |
+| --- | --- |
+| A copy is only ever planned for an install whose build **is** the revision the patch server is holding (`PatchServerPreload.IsTheBuild`) | the revision folder is named after the build, and the folder plus its file list only exist once Aurorium has fetched that revision - so a build of any other revision has nowhere to go and is refused instead |
+| A file goes in only when its length equals the length the revision's own file list gives for it | the right name at the wrong length is a different build's file, and a wrong file cannot be repaired later: the patch server only ever fetches what is missing, so it would serve that file forever |
+| Nothing is overwritten, and every file is written as `<name>.preloadpart` and then moved into place | what a patch server already has is what it is prepared to serve, and Aurorium skips by name alone - so a copy interrupted halfway must not leave something that looks downloaded. The suffix is deliberately not `.part`, which is Aurorium's own name for a download in flight |
+
+**The plan comes from the patch server's own file list**, `LatestFileList.xml` in the revision folder,
+written by Aurorium on a first pass before any download - not from a list the launcher fetches itself. That
+keeps the two views of the revision identical by construction, and it is why the copy is offered from Play
+*after* the patch server is up rather than before: an unstarted patch server has no revision folder and
+nothing to plan against. The endpoint binds before the file list is written, so Play waits a bounded twenty
+seconds for it - without that wait, the first Play after installing a patch server would never be offered
+the copy at all.
+
+| Piece | What it does |
+| --- | --- |
+| `PatchServerManifest` | reads a revision's `LatestFileList.xml` for paths and sizes (`TryRead` returns nothing rather than throwing, since a folder being written to is read as half an XML document) |
+| `PatchServerPreload.Plan` | what would be copied and what would not, counted out of that file list: already held, held at another size, not in the build, in the build at another size. Nothing here writes |
+| `PatchServerPreload.RunAsync` | the copy itself: off the UI thread, cancellable, resumable by being re-planned, never throwing - a failure is a line in the report |
+| `MainWindowViewModel.DescribePreload` | the sentence under the folder box: how many files of the revision it holds, how many of the rest are here, and how much they weigh |
+| `ShouldOfferPreload` | asked once per revision, and only when there is something to copy |
+| `ShouldPreloadWithoutAsking` | the setting above, and the same "is there anything to do" test - a silent copy of nothing is still nothing |
+
+**Play asks, and the answer is remembered per revision - or the asking is turned off.** The offer is a
+dialog before the server starts, because that is the moment it is worth having: Imlight reads `Root.wad`
+from the patch server during its own boot, so a copy that arrives later serves the next session rather than
+this one. `PatchServerPreloadAutomatically` is the other way round and is off by default: on, Play stops
+asking and just makes the copy for a patch server that holds nothing of the session's revision, saying in
+the Log that it was a setting rather than an answer. The three conditions below are still what decides
+whether there is anything to do - the setting only decides whether it is asked about. While it copies, Home says
+so under a phase of its own (`LauncherPhase.CopyingGameFiles`) rather than sitting on *Getting ready…* for
+ten minutes with nothing to explain it. Turning the offer down with *don't ask again* stores the revision it
+was about, so the question comes back for the next revision rather than never - the files that cannot be
+downloaded are per-revision, and somebody who said no to one has said nothing about the next. The same copy
+is a button in Settings, for doing it on purpose, and it is safe to press while the patch server is fetching:
+both are writing the same files, and whichever arrives first is the one that stays.
+
+**The first version of this asked exactly that, and it is gone.** `PatchServerAvailabilityProbe` asked for
+`LatestFileList.xml`, `LatestFileList.bin` and `Data/GameData/Root.wad` under the revision a session
+wanted - three requests whose bodies were never read, so asking about a 281 MB archive cost one response
+header - and then acted on the answer: the row on Home grew a second state (*Running — fetching files*),
+Settings grew a line saying what was missing and a *Check again* button, a half-minute watch asked again
+by itself, Imlight was repointed at the public patch server whenever the answer was no, and a further rule
+existed to put the launcher's own address back afterwards. Every one of those is a second-order
+consequence of a question whose answer changes under it, and none of them are the launcher's to decide.
+
+What is left is what the launcher actually knows: **the address and the port, which it was given.** While
+its own patch server is up, Imlight is told to use it, and the patch server serves what it has. Nothing
+asks whether a revision's files have arrived, so a patch server still fetching its first revision is a
+session that fails the way any patch server serving nothing fails - Imlight reports the 404 and stops -
+rather than one the launcher quietly sends somewhere else. The one request still made to a patch server is
+`GET /revisions` (`PatchServerRevisions`), and it is made for one reason: the revision mirror below needs
+to know which revision it holds.
+
+**The fetch is reported and kept alive, and Play still neither waits nor is refused.** Three things,
+and no fourth:
+
+| Rule | Where |
+| --- | --- |
+| Ask once, before the server starts, whether the patch server can serve the session's revision - `GET {address}/V_{GameRevision}/Data/GameData/Root.wad`, headers only, the same request Imlight makes first | `PatchServerServing` |
+| Say so in the Log when it cannot, naming the file, and saying the fetch keeps running while ViewLight is open | `WarnIfPatchServerIsStillFetchingAsync` |
+| Leave the patch server running when the server stops **if** that is the answer, because stopping it is stopping the download | `PatchServerStopsWithTheServer` |
+
+The answer is remembered only so the third rule can be stated, and the Stop button says *Stop the server*
+rather than *Stop the servers* while it applies - a button that promises to stop something it leaves
+running is worse than one that says which of the two it means. `Stop` in the patch server card stops it
+outright, because that is a person asking. Nothing is repointed on any of this: a session started inside a
+first fetch still loads `Root.wad` from Imlight's own cache, or stops on the 404 - but it now stops next to
+a Log line that says why, and the patch server is still fetching while the user reads it. Blocking Play
+instead would be a spinner on a fifteen-minute job; refusing it would be the launcher deciding the session
+is not worth having.
+
+**Order: patch server, then server, then client.** The patch server is started and waited for *before*
+the Director, because the Director reads it during its own boot - starting it afterwards would only serve
+the next session. That is why the wait lives at the top of `StartServerAsync` instead of in `PlayAsync`:
+Play goes through the same door, and a server started by hand from Settings gets the same order.
+
+**A patch server failing is not a failed session.** Imlight keeps its own cached copy of `Root.wad`, so
+the launcher reports the failure - Log, Home's row, Settings' state - and starts the server anyway. The
+same reasoning is why a patch server that cannot serve *yet* does not hold a session back either: it is
+reported, it is left fetching, and the session goes ahead.
+Refusing to play because an optional convenience did not start would be the worse trade, and the
+alternative (silently continuing) is what the row and the log lines exist to prevent.
+
+**Imlight is pointed at it, or at nothing of the launcher's making.** `MainWindowViewModel.PatchServerAddressFor`
+is the whole rule, stated as a static function so it can be tested without a patch server running: this
+machine's patch server is the one that was chosen, it is installed, it is up - and then Imlight is given
+`PatchServerConfig.EndpointUrl(port)`, built from the address and port the launcher was set to. Anything
+else is **no change at all**:
+
+| Situation | What Imlight is given |
+| --- | --- |
+| This machine's patch server chosen, installed, and up | This machine's patch server, on the configured port |
+| A remote patch server chosen, or nothing installed here, or it is not up | Nothing - the config is left exactly as it is |
+
+**One question, and the rest follows from it.** The first version of this was a checkbox called *manage the
+patch server*, and the address rule read it - so a patch server this machine owned but that the user had
+started themselves was one the address was left alone for, and a user who said "use a remote one" without
+uninstalling anything left the launcher with two contradictory settings and no way to say which won. The
+setting is now the choice itself - `UseLocalPatchServer`, on by default, offered as two radio buttons
+because there is no "off" for a patch server Imlight cannot boot without - and everything hangs off
+`PatchServerIsThisMachines` (that choice *and* something installed): the address, whether Play starts one,
+whether Home shows a row for it, and whether a session's files may be copied into its folder. *Start it with
+the server, and stop it with the server* (`PatchServerManaged`) is left to mean exactly that, the process
+and nothing else.
+
+**The mirror only ever asks this machine's patch server**, because that is the one it has an address for:
+`GET /revisions` goes to `LocalPatchServerUrl`. With a remote patch server in use the switch therefore has
+nothing to read and does nothing - which is a limit rather than a decision, and is recorded in
+[To be added](#to-be-added).
+
+The second row is what makes the public patch server a choice rather than a fallback, and it is a
+deliberate removal rather than an oversight. An earlier version put `ImlightConfig.PublicPatchServerUrl`
+back whenever the local patch server could not serve yet, and needed a second rule
+(`PatchServerConfig.IsOwnAddress`, a loopback address on the launcher's own port) to tell an address it
+had written apart from one the user had chosen. Both are gone: nothing rewrites an address the launcher
+was not asked to write, so there is nothing to undo, and a session pointed at the public patch server or
+at somebody else's Aurorium is a session the launcher has no opinion about. `ServerConfigRepair` still
+replaces the unusable stock address Imlight ships, which is a different thing - that one is repaired
+because nothing can answer on it.
+
+The address is decided on every start, before the Director reads its config, because a reinstall, an
+update or a hand-edit can put the public address back. Nothing is written while the patch server is down,
+and nothing is written when the two already agree - which is the common case on this machine, where
+`PatchServerInternalUrl` is already `http://127.0.0.1:12369`.
+
+**A patch server can only hold what upstream currently offers, so the revision the server asks for can be
+made to follow it.** This is the other half of a local stack, and it is a config value rather than a
+process: Imlight asks a patch server for `{PatchServerInternalUrl}/V_{GameRevision}` and accepts clients
+whose revision matches the same value, while a server build pins the revision it was published with. The
+moment the game has been patched past that build the two disagree - Imlight asks for a revision the patch
+server does not hold, which is the 404 above, and with `EnforceRevision` on the same client is turned away
+at login. Updating Imlight is the fix when a build exists; when none does, *Make the server accept the
+patch server's revision* is the deliberate act of saying the client that is here now is the one to accept.
+
+Three rules, all pure and all tested, carry it:
+
+| Rule | What it says |
+| --- | --- |
+| `PatchServerConfig.GameRevisionFrom` | The game revision a patch server's name stands for, and `null` for a name that is not one of its own |
+| `PatchServerConfig.NewestGameRevision` | Which of several revisions is newest: ordered by the number each name carries, not by the order they were listed in, because a server that was handed a revision out of turn would otherwise have its first entry read as its newest |
+| `MainWindowViewModel.RevisionToMirror` | The value to write into `GameRevision`, or `null` when there is nothing to write because the config already asks for it |
+
+The mirror has no timer and no button of its own: it rides on `GET /revisions`
+(`Services/PatchServerRevisions.cs`), which is the only request the launcher makes to a patch server and
+is made for the mirror's sake alone. So it is applied whenever the launcher starts a patch server - Play's
+own start, or the Start button in Settings - and the moment the toggle is turned on while one is already
+running, which is what fills its box in without waiting for Play. A patch server that is not up is not
+asked and nothing is remembered about it: the revision a session asks for is the config's until a patch
+server answers.
+
+Turning it off puts back the value the config had when it was turned on, **and only that value**
+(`RevisionToRestore`): if the config no longer holds what the launcher wrote - a newer server build, an
+edit by hand - the value in it belongs to whoever put it there, and the rule that keeps a patch address the
+launcher did not write from being rewritten keeps this one too. The `GameRevision` box is greyed out
+while the mirror is on rather than taking edits it is about to overwrite, and the line under it says which
+of the three states it is in: set from the patch server, waiting for one, or moved on since.
 
 ## Warming up the server
 
@@ -481,10 +911,39 @@ happens to be lying around.
   from `Imlight.ini`. Accounts come back as `AccountId` + `Username`, session keys as
   `AccountId`, `MachineId`, `ClientKey2`, and the expiry metadata.
 - **Guards the shape before believing any of it**, anchored on the admin account Imlight creates on boot:
-  that account must be there, and its `PasswordHash` must be the password in `Imlight.ini` hashed the way
-  Imlight hashes it. Any document that does not look the way it should switches automatic sign-in off and
-  says why, rather than acting on a guess. Writes are behind the same guard, and only ever write a
-  session-key document this launcher built in full.
+  that account must be there, and its `PasswordHash` must be shaped the way Imlight shapes one -
+  `base64(SHA512(…))`, 88 characters decoding to 64 bytes. Any document that does not look the way it
+  should switches automatic sign-in off and says why, rather than acting on a guess. Writes are behind the
+  same guard, and only ever write a session-key document this launcher built in full - or, since the
+  password repair below, that one field on the admin account.
+- **Puts the config's password on the admin account** (`AdminPasswordDrift`, `AlignAdminPasswordAsync`),
+  because Imlight will not: its boot calls `DatabaseUtilities.CreateEmbeddedDatabaseAccount` with the
+  password from `Config/Imlight.ini` on *every* start, but `AccountCollection.CreateAccount` refuses a
+  username it already holds - so an account keeps the password it was created with, and the game refuses
+  the sign-in the launcher's own Settings screen advertises.
+
+  **This was found by measuring, and the first two versions of it were wrong.** The real install had an
+  admin account created at the first boot holding `base64(SHA512("compsci"))` - the password Imlight ships
+  - minutes after the config had been changed to a generated one, with the account otherwise entirely
+  Imlight's own (`accounts/1-A`, a `Raven/Hilo/accounts` document beside it, `Raven-Clr-Type` naming its
+  `Account` model, `AuthLevel` `"Administrator"`). Requiring the config's password and the stored hash to
+  agree made that database unreadable and account creation impossible - "*"admin" in the database does not
+  hash the password set in Imlight.ini*", with the same sentence blocking the Settings button - which is
+  why the password's *value* is no longer part of what makes a database recognisable, and why the
+  divergence is a fact the launcher acts on instead.
+
+  The consequence to be aware of: `Imlight.ini` is the authority on that one password, so a change made in
+  the game - `.account password`, which only an administrator can issue - is put back on the next read.
+  That is the trade the launcher makes for the password on its own screen being one that works.
+
+  The write itself is a whole-document `PUT` with that one field changed and the server-owned metadata
+  dropped, and it carries the account's document along with the drift rather than fetching it again. That
+  is the second correction: the database's single-document read does not answer on the route this Raven
+  build serves - `GET /databases/{db}/docs?id=…` returns the **paged listing** whatever the id - so the
+  first version sent a listing where a document was expected and was refused with
+  `DocumentCollectionMismatchException: Changing 'accounts/1-A' from 'Accounts' to '@empty' via update is
+  not supported`. Both errors were invisible to the unit tests (which drive a fake handler) and to the
+  build; they were found by pointing the launcher at the real database and reading what came back.
 - **Picks the account**, on the **Profile** tab: an account the player chooses, remembered by id,
   defaulting to the only one there is. The names are remembered as well, so the picker is filled in the moment the launcher
   opens rather than only after the server has been started once - see
@@ -532,28 +991,30 @@ and the client would show an error where it would otherwise have shown a login s
 one HTTP call to a database on this machine, it always has the current answer, and it has to happen
 anyway - Play waits for the server to be ready, and the database is only readable then.
 
-**Creating an account** is done in Settings, in the same place the admin account is set up, and writes
-straight into the server's player database in the shape Imlight writes its own - so it works in the game
-with no restart, and needs nothing from the server but its files. It is the same thing Imlight does with
-its in-game `.account create $username $password` chat command, typed after signing in as the server's
-admin account, which is what the Profile tab still points a user at as the alternative. `-C [GID]` -
-loading straight into a character - stays out of scope on purpose.
+**Creating an account is the server's job, and it stayed that way.** It used to be done from Settings: the
+launcher wrote the account document into the player database itself, in the shape Imlight writes, fenced by
+a guard (`PlayerDatabaseContents.IsTrustworthy`) whose whole purpose was to refuse unless the database read
+back as the layout the launcher expected. It worked, and it was the launcher authoring the server's own
+storage - a second author of a format only Imlight should be defining. The server has no need of it, because
+it makes accounts its own way: `.account create $username $password`, typed by the admin account inside the
+graphical client. So the card is gone from Settings, the code behind it is reachable from no view, and the
+launcher's reads are the whole of its interest in that database. `-C [GID]` - loading straight into a
+character - stays out of scope on purpose.
 
 ## Profiles, playtime and achievements
 
 **A profile is what a Wizard101 account is to *this machine*.** The account itself is the server's and lives
 in its player database; the launcher only ever reads it. Everything on the **Profile** tab beyond the
 account - the name and picture it is shown under, the time played, the wizards, the achievements - is the
-launcher's own, kept in `profiles.json` (and in `profiles/<account id>/` for its two images) and sent
-nowhere. That is the design rather than an omission: achievements are earned against your own server, with
+launcher's own, kept in the launcher's own database - one document per profile, its pictures as attachments on
+it, and one document for the learned worlds - and sent nowhere. That is the design rather than an omission: achievements are earned against your own server, with
 one launcher never talking to another, so joining somebody else's server earns nothing here and this one
 earns nothing there.
 
 **The one account a server starts with** is the admin account in `Config/Imlight.ini`. It is the only
 account that exists before anybody has signed in, so while there is no profile to show, the Profile tab
-names it, says it is the account the server starts with, and says how to make another - **Create an
-account** in Settings, or Imlight's own `.account create $username $password` in the game at Hall Monitor
-level. It becomes an ordinary profile by itself the first time the server runs and its database can be
+names it, says it is the account the server starts with, and says how to make another - Imlight's own
+`.account create $username $password` in the game at Hall Monitor level. It becomes an ordinary profile by itself the first time the server runs and its database can be
 read, because a profile is keyed by the account's own id and the id is only learned there. With no server, or with one whose config names no admin account, there is no
 account and the screen says **No profile** - which is also why a remembered name from another server is
 never offered as one.
@@ -622,8 +1083,8 @@ the server has never loaded a zone of is a world the launcher does not know, whi
 are generated from what has been learned rather than from a list. A zone entered before the pairing was
 learned is credited when it arrives, exactly as a boss beaten before the creature list was read is; a zone
 the server only numbers (an instance, a house, `WizardZone_00000878`) is recorded as visited and never
-attributed to a world, because there is no world to learn from an id. What is learned lives in
-`profiles.json` beside the profiles, so a world discovered last week is still known after a restart.
+attributed to a world, because there is no world to learn from an id. What is learned is one document in
+that same database, so a world discovered last week is still known after a restart.
 
 The group is sub-divided by world for the same reason the rest of the screen is grouped at all: a world is
 the thing a zone is part of, and "which of Wizard City have I actually seen" is the question a list of zone
@@ -643,7 +1104,8 @@ names cannot answer.
   its id rather than under someone else's. Which of the game's two first-name tables a key is read from is
   the launcher's reading of the client's own gender flag, and a value it does not recognise resolves to no
   name at all rather than to a guess;
-- deleting `profiles.json` resets playtime and achievements. It touches neither the server nor the game.
+- deleting the launcher's own data - `database` under the launcher's root - resets playtime and
+  achievements. It touches neither the server nor the game.
 
 ## root.wad and items
 
@@ -675,7 +1137,8 @@ dump for the target revision), then implement `RootWadItemService.LoadCatalogAsy
 src/ViewLight/
   Models/      launcher settings, release and item models
   Services/    IniFile, KiWadArchive, ImlightConfig, GameFolderLocator, PortAllocator,
-               release lookup, installer, runner, server process guard, job object, client launcher
+               release lookup, installer, runner, server process guard, job object, client launcher,
+               and the patch server's own release lookup, installer, config and runner
   ViewModels/  MainWindowViewModel - one view model owning all launcher state
   Views/       MainWindow shell, SetupView, and one view per tab
   Styles/      dark theme colours and control styles
@@ -688,10 +1151,10 @@ of cross-notification for a proof of concept.
 
 Launcher state (chosen folders, installed build, the remembered accounts) is stored in
 `%LOCALAPPDATA%\ViewLight\launcher.json`. The launcher's own profiles and everything they have earned are
-in `profiles.json` beside it, with each profile's picture and banner under `profiles/<account id>/` - kept
-apart because a corrupt badge file must not cost the user their folders. Downloaded archives and extraction
-scratch space live alongside both. In portable mode all of it sits in the launcher's own folder instead -
-see below.
+documents in the launcher's own RavenDB, under `database\` beside that file, with each profile's picture and
+banner as attachments on its own document - so one directory is the whole of the notes, and nothing in them
+is a file that can be lost on its own. Downloaded archives and extraction scratch space live alongside both.
+In portable mode all of it sits in the launcher's own folder instead - see below.
 
 ## Portable mode
 
@@ -703,9 +1166,10 @@ to be settled before anything asks for one.
 
 | | Normal | Portable |
 | --- | --- | --- |
-| Launcher data (settings, cached art) | `%LOCALAPPDATA%\ViewLight` | `<launcher folder>` |
+| Launcher data (settings, cached art, and the database the profiles live in) | `%LOCALAPPDATA%\ViewLight` | `<launcher folder>` |
 | Default game folder | whatever *Detect* finds | `<launcher folder>\game` |
 | Default server folder | `%LOCALAPPDATA%\ViewLight\server` | `<launcher folder>\server` |
+| Default patch server folder | `%LOCALAPPDATA%\ViewLight\patchserver` | `<launcher folder>\patchserver` |
 
 Because `LauncherPaths` is the single source of those paths, making the launcher portable was a change
 to one class rather than a change to every caller. The marker is a file rather than a build flag so the
@@ -751,7 +1215,7 @@ honest recommendation is to copy a standalone install and to leave a Steam copy 
 dotnet test ViewLight.slnx
 ```
 
-488 tests covering the parts most likely to break quietly: INI round-tripping and merging (including
+669 tests covering the parts most likely to break quietly: INI round-tripping and merging (including
 unknown sections such as `[CrownShop]` surviving an update), the KIWAD
 reader, game folder detection and the too-deep-path migration, free port selection, release selection,
 item list parsing, the starter kit limits, the config repairs and the live loopback probe that decides
@@ -775,9 +1239,36 @@ including that another machine's key is never handed over - the portable marker 
 round trip (a portable launcher writes `game` into its settings file and reads a real path back out),
 the copy service refusing a folder that is not a Wizard101 install and refusing to copy a folder into
 itself, the Steam-install detection the Steam caveat hangs off, and the build ordering that decides
-whether the user is told to update the game or the server - and a full install-then-update cycle that
+whether the user is told to update the game or the server, and a full install-then-update cycle that
 asserts user settings, runtime data, a deliberately chosen database port and a chosen patch server all
-survive.
+survive. The Log is covered both as the document the view draws and as the page that draws it: what folds
+and what does not, a folded run opening and folding back with every line's own time, a fold staying open
+across a filter change, the three sources' boxes and what they leave held back, the 200-line block and the
+5,000-line Log, and the columns every kind of line is written in - with the layout itself checked against a
+real window outside the suite, there being no view test in it to do that.
+
+The patch server is covered the same way and for the same reason: the port it is written for being the
+one Imlight already points at, the config being written when it is missing or names another port and
+**left alone when it already agrees** (asserted by appending a hand-written line and checking it is still
+there), the endpoint read back out of a config that was hand-edited (unquoted values, comments, other
+sections, nonsense ports), the release lookup preferring the newest build that actually ships
+`aurorium.exe`, the installer writing the executable and its config and **not** re-downloading a cached
+one, the single request the launcher makes to a patch server driven through a fake one (the names come back
+in the order the server listed them; a trailing slash on the address is not a second request; an answer
+that is not a JSON list of names - an object, a list of numbers, an HTML error page - is no revision at
+all; a name that is empty or null is dropped rather than passed on; a refused, unreachable or mistyped
+address answers with nothing rather than an error, and is not asked at all when it is not a URL), the
+runner driven against real child processes and real sockets - waiting for a real port to open, refusing to
+call itself ready while nothing is listening, reporting an exit as a fault, being stopped by the launcher's
+job, stopping a leftover patch server from this install before starting a new one - and the rule that
+decides which patch server a session gets: this machine's address and port while the launcher is running
+one and it is up, and no change at all otherwise, so nothing is written back to the public patch server and
+nothing a user chose is ever rewritten. The revision mirror is covered
+the same way and from both ends: what a patch server's revision name is worth as a `GameRevision` (and
+that a name which is not one is worth `null`), which of several revisions is newest when the list is not
+in order, that nothing is written when the config already asks for it, that turning the mirror off puts
+back only a value the launcher itself wrote, and - through the launcher's own settings and config files -
+that the toggle remembers the value it replaced and restores it on disk.
 
 The profile system is covered the same way: the log parser driven by the exact lines Imlight writes,
 playtime and session counting across polls (including a gap between two of them not being credited), duel
@@ -785,6 +1276,29 @@ attribution refusing to hand a win to nobody in particular, badges never granted
 by a later read that has not caught up, wizards, quests and the command log read from the database, which
 remembered accounts may be shown and which may not, and the words the screen uses when there is no profile
 to show.
+
+**Where those notes are kept is covered as a pair rather than as a database.** `IProfilePersistence` has two
+implementations - the database the launcher uses, and the file the suite builds stores over and an older
+launcher's notes are read through - and both are driven by one contract, so attaching, refusing to save
+while detached, the pictures as attachments, and the promise that a store with nowhere to write says so
+instead of quietly writing a file are asserted twice from one set of expectations. The client is covered on
+its own: the URLs it builds, the statuses it accepts, a paged read, and the answers it refuses - a document
+with no id, a listing that is not the wrapped shape, a page claiming more than it sent. The import has its
+own five rules - a file with profiles in it, a file with nothing in it, a file that will not parse, a run
+that has already happened, and a file that turns up after one has - and the last two are checked against a
+real database rather than only against a fake one.
+
+The Imlight requirement - the launcher's first screen, and the rule behind it - is covered by sixteen tests
+of its own: which piece each gap reports, that a database carrying its own runtime asks a machine for
+nothing at all, that a framework-dependent one asks for exactly what its own file names, the roll-forward
+rule that decides whether a machine can run it, the shape of a `--list-runtimes` listing, that the .NET
+gaps carry the steps to install it while the gaps this screen fixes itself carry none, and the launcher
+standing down the moment an install appears - no restart, no stale answer. The screen itself was checked in
+a real window, there being no view test in the suite to do it: it covers the whole window, no navigation
+behind it is reachable, the two buttons are the commands they should be - Check again, and an install
+rather than Play - a missing runtime turns it back on with the link the database's own file asked for, the
+steps are on screen inside the window rather than scrolled out of it, and pressing the button with the
+runtime now present stands the launcher up and opens the database behind it.
 
 ## Verified against a real install
 
@@ -826,14 +1340,76 @@ The launch edge cases were checked the same way, on that install:
   the server, released the ports, left the runner in the stopped state and logged no unexpected-stop
   error on the way out.
 
+**The patch server was run for real, from the release the launcher downloads.** Aurorium `v4.0.2`
+(8.3 MB, `aurorium.exe`) was installed through `PatchServerInstallService`, `PatchServerConfig` wrote a
+config for a free port, and `PatchServerRunner` started it. It accepted the file - which is the part
+tests cannot prove, since the launcher is writing another project's config format - and lined up exactly
+with what the launcher expects:
+
+```
+[Server] INFO aurorium::db: Database aurorium.db initialized!
+[Server] INFO aurorium: File server listening on 127.0.0.1:24575
+[Server] INFO aurorium: Checking for a new revision @ patch.us.wizard101.com:12500
+[Info]   Port 24575 on 127.0.0.1 is open. Waiting 2 seconds for the patch server to be able to answer…
+[Success] Patch server is ready — its endpoint on 127.0.0.1:24575 is answering.
+```
+
+Two things that run is the evidence for: the config the launcher writes is accepted verbatim (the endpoint
+in the log is the one written, not Aurorium's default), and the `tracing` output really does not carry a
+line worth keying readiness on - hence the endpoint probe, which is as far as the launcher's judgement of
+a patch server goes.
+
+**What a patch server does before it can serve was measured on that same machine, and it is why nothing
+asks.** A fresh Aurorium was watched from the moment it answered: the endpoint was open and accepting
+connections while the process spent a little over five minutes fetching `V_r806919.Wizard_1_610` - the
+revision `patch.us.wizard101.com` currently offers - into its own folder. Two things follow from that. A
+session pointed at it inside that window gets `404` for `Data/GameData/Root.wad` and stops, which is the
+failure the launcher reports rather than works around. And the revision it fetches is upstream's rather
+than the server build's, so a server pinned by `GameRevision` to an older build needs the mirror below to
+be served by it at all.
+
+**The one request the launcher makes was then re-checked against the real thing.** This machine's own
+install - Aurorium `v4.0.2`, started from its folder with the config `PatchServerConfig` wrote, on
+`127.0.0.1:12369` - answered:
+
+```
+GET /revisions -> 200 OK
+content-type: application/json; charset=utf-8
+content-length: 26
+
+["V_r806919.Wizard_1_610"]
+```
+
+`PatchServerRevisions` reads that as one revision, `PatchServerConfig.NewestGameRevision` turns it into
+`r806919.Wizard_1_610`, and against this machine's `Imlight.ini` - pinned to `r803238.Wizard_1_610` - that
+is exactly what the mirror writes, with nothing written when the config already asks for it. Which is what
+this machine's `Imlight.ini` now holds: `GameRevision = r806919.Wizard_1_610` and
+`PatchServerInternalUrl = http://127.0.0.1:12369`, the launcher's own address, so the rule above has
+nothing to change. `EnforceRevision` is the switch a refused login turns on, and it is off on this install.
+
+**Filling a patch server in from a copy of the game was then run against this machine's real folders.**
+The plan was built from the live `V_r806919.Wizard_1_610` file list and the portable launcher's own game
+folder (a copy of a Steam install): 3825 files, 2703 held, 1025 to copy (13.76 GB), 97 in neither - the same
+picture the file-by-file comparison above draws, arrived at from the other end. One of those files was then
+copied for real - `Data/GameData/GUI-WorldData.wad`, 181 MB, one of the files Aurorium's two-minute limit
+means it can never fetch - into a throwaway revision folder built from the real file list. SHA-256 identical
+to the original, under its own name, no `.preloadpart` left behind, and a re-plan afterwards counting it as
+held.
+
 The full workflow has been played through by hand on this machine with this launcher: server install,
 **Play**, the client logging in against the warmed-up server, and character creation. The client has
-therefore been launched against a live server end to end.
+therefore been launched against a live server end to end. What has *not* been done by hand since is a full
+session served from the local patch server - the patch server was proven ready to serve (above), but the
+client has not been played through against it.
 
 What that still does **not** cover: the crash-reporting path was not forced on a real failure, because
-forcing one means deleting the cached `Root.wad`; and the close prompt was not clicked through in the
-GUI. The dialog was verified to parse and build under the real Avalonia platform, and the rule and its
-stored preference are covered by tests, but nobody has been shown that prompt by a real close.
+forcing one means deleting the cached `Root.wad`; the close prompt was not clicked through in the GUI; and
+neither copy entry point has been clicked through - Play's offer and the button in Settings share one plan
+and one method, and both are covered by tests, but no one has driven the dialog or watched a real 13.76 GB
+copy from the card. The close prompt's dialog was verified to parse and build under the real Avalonia
+platform; the offer dialog is written the same way and its XAML compiles with every binding checked, but
+nobody has seen it render. Both prompts' rules and stored preferences are covered by tests, and neither has
+been shown by a real action.
 
 ## A Linux build
 
@@ -867,6 +1443,10 @@ settle it.
 
 ## Not done yet
 
+**The next round of work is [To be added](#to-be-added), at the end of this file** - five changes that came
+out of using the launcher, each with the reason it exists, in the order they will be done. Anything picked
+up later starts there.
+
 - A Linux build (above) - nothing started, the seams recorded so it stays cheap
 - Real `root.wad` item decoding (above)
 - Selecting a specific older release instead of always taking the newest
@@ -878,12 +1458,28 @@ settle it.
 - **Explaining the server's own first-boot crash.** It is reported and press-Play-again works, but the
   cause is in Imlight's asset prefetch rather than in anything the launcher controls - see
   [rough edges](#rough-edges-in-imlight-itself).
+- **A local patch server still fetches its first revision from upstream.** It has to - that is where the
+  game's files live. The launcher watches for it to arrive and says so (see
+  [running one instead of visiting one](#running-one-instead-of-visiting-one)), and makes the server ask
+  for that revision once it is there. What it can also do is hand it the files a copy of the game already
+  has - most of the revision, and all of the files too large for the server's own download limit (see
+  [filling it in from a copy of the game](#filling-it-in-from-a-copy-of-the-game)) - and what is left after
+  that is fetched as before. That fetch is still not shown while it happens: there is no per-file progress
+  to show, only Aurorium's own two lines in the Log, so the card says what is missing rather than how far
+  along the fetch is.
+- **Switching a session over mid-flight.** Once the patch server can serve, the *next* Play uses it; the
+  running Imlight read its config at boot and is not repointed. Doing so would mean restarting the server
+  under the player.
+- **Updating Aurorium while it runs.** The install stops it first, because Windows will not replace a
+  running executable.
 
 Three entries that used to sit here have been done and are recorded above rather than deleted: the
-**game-first Home screen** (banner, hero Play button, status demoted to one strip), **creating an account
-from the launcher** (`PlayerDatabaseProfiles` writes the same document Imlight does, from Settings), and a
-**wizard's name and school** (the log first, then the game's own name tables out of `Root.wad` via
-`WizardNameTable`, and the id only when neither source can name the character).
+**game-first Home screen** (banner, hero Play button, status demoted to one strip), a **wizard's name and
+school** (the log first, then the game's own name tables out of `Root.wad` via `WizardNameTable`, and the id
+only when neither source can name the character), and **creating an account from the launcher**
+(`PlayerDatabaseProfiles` writes the same document Imlight does) - which was then deliberately undone. The
+card is gone and the launcher does not write that database any more, for the reason recorded in
+[To be added](#to-be-added).
 
 ## The account card, and the achievements screen
 
@@ -926,9 +1522,12 @@ users hit them on a first run and would otherwise read them as the launcher's fa
 
 | What happens | What it actually is |
 | --- | --- |
-| An account made in Settings before the server has ever run does nothing | There is no player database yet, so there is no collection to write into. The admin account in `Imlight.ini` is what creates it on first boot - so a server has to be started once before any account exists to be listed or written |
+| A server that has never booted has no accounts at all | There is no player database yet, so there is nothing to list, nothing to sign in as, and nothing to type `.account create` as. The admin account in `Imlight.ini` is what creates that database on the first boot, so a server has to be started once before any account exists |
+| The administrator password in `Imlight.ini` is not the one the account has | Imlight creates that account once and never applies a later password change to it, so the account keeps the password it was made with. The launcher puts the configured one on it whenever it reads the database, and says so under **Settings → Administrator account** - without that, the password on the screen was not one anything would accept. That write is the one instance left of the overstep the account card was removed for: it is waiting on a decision rather than on code, and is recorded in [To be added](#to-be-added) |
 | The first boot downloads its assets and can then stop by itself | Nothing in the launcher's own startup path: the Director fetches `Root.wad` (about 281 MB) and dies after the fetch, unreproduced. Pressing **Play** again boots it normally, and it has not been seen to recur after a successful first boot |
-| A new zone is slow to load | The zone's assets come from the patch server, and the public one is a community machine rather than KingsIsle's infrastructure. The server is local; the assets are not |
+| A new zone is slow to load | The zone's assets come from the patch server, and the public one is a community machine rather than KingsIsle's infrastructure. The server is local; the assets are not - running the launcher's own patch server is what fixes this, once it has finished its first fetch |
+| `404 (Not Found)` downloading `Root.wad` from a `127.0.0.1` patch server | One of two things. Either the local patch server has not finished fetching that revision yet - its first minutes, and the honest answer is to leave it running - or it holds the revision Wizard101 currently offers while `GameRevision` pins the server to an older build, which has a fix rather than a wait: **Make the server accept the patch server's revision** - see [running one instead of visiting one](#running-one-instead-of-visiting-one). The launcher does not redirect the session for either of them: the address it was given is the address Imlight keeps |
+| `TcpListener for Imlight.Patch on port 12500 failed` | Imlight's **own** patch listener (`PatchServerPort`, the one the *client* talks to) could not bind, which means something else already holds that port: a previous Imlight still running, or the launcher's patch server configured to the same port. The launcher's card warns about the second; the first is a leftover the leftover-server guard normally clears |
 
 A launcher-side difference worth keeping in view: the third one is *reported* rather than detected - the
 launcher cannot tell a congested patch server from a slow disk, so it says nothing about the cause and the
@@ -939,6 +1538,14 @@ readme explains it instead.
 Source and builds both live at <https://github.com/Smealm/ViewLight>. Every build is published as a
 GitHub **prerelease**, which matches what Imlight itself does and, more to the point, matches what this
 launcher is: a proof of concept that is played with rather than depended on.
+
+**The version is written down once, in the project file.** `<Version>` in `src/ViewLight/ViewLight.csproj`
+is the only copy of it: About reads the number off the assembly, and a build with no `Version` property
+reports `1.0.0` by the SDK's own default - which is what the first build did. It is bumped by hand when a
+build is published, and the tag and the release are named after it, so the number in the window, the number
+on the release and the commit that produced both agree. `v1.0.0` was the first build; `v1.1.0` is the one
+that adds the patch server, the launcher's own database, and the screen that stands down when Imlight or
+the runtime it needs is missing.
 
 The build shipped in a release is produced by exactly two commands:
 
@@ -966,3 +1573,259 @@ show rather than after the file names they arrived with.
 
 - The admin password is intentionally not stored anywhere except `Imlight.ini`: it is read from there on
   load and written back when you save
+
+## To be added
+
+Five changes that came out of *using* the launcher rather than out of reading its code, written down here
+in the order they will be done. Each one records the reason as much as the job - they came out of a
+conversation, and a later reader should be able to finish any of them without having it again. The finished
+ones stay in the list and point at the section above that now describes the rule properly, which is the same
+habit [Not done yet](#not-done-yet) keeps.
+
+### 1. The patch server is part of the stack, and Settings asks one question about it - *done*
+
+**What was asked for.** The patch server was presented as an optional extra with a checkbox to turn it off.
+It is not optional - Imlight has one or it does not boot - so what is actually being chosen is *whose*: this
+machine's, or somebody else's. Settings asks that one question, and everything that follows from the answer
+sits underneath it: the remote address (the public instance, or an address of your own) in one branch, and
+the folder, the port, *start it with the server, stop it with the server*, *fill it in from the game folder
+if it has nothing yet*, and the revision mirror in the other. The patch server address moved out of the
+**Network** card, because it is a patch server setting.
+
+**What came out of it.** Two new launcher settings and one rule change. `UseLocalPatchServer` (on by
+default) says which branch is in play, and `PatchServerPreloadAutomatically` (off by default) turns Play's
+offer into something that just happens. The rule for pointing Imlight at this machine's patch server used to
+be *the launcher is running it* - `PatchServerManaged`, which is really "start it with the server" - and is
+now *this machine's patch server is the one that was chosen*. A patch server started by hand from Settings
+is therefore used by the next Play instead of the address being left as it was, and Home's row, the fetch
+report, the copy offer and the mirror all hang off the one answer rather than off three separate switches.
+Written up under [the patch server](#the-patch-server) and
+[filling it in from a copy of the game](#filling-it-in-from-a-copy-of-the-game).
+
+**One limit carried forward from this.** The revision mirror asks *this machine's* patch server and only
+that one (`GET /revisions` goes to `LocalPatchServerUrl`), so with a remote patch server in use the switch
+has nothing to read and does nothing - the case where the game has been patched past the server build being
+much more likely against the public instance than against a local one. It should either be hidden in the
+remote branch or be taught to ask the configured address; it is written here rather than left in the code
+because neither is obviously right.
+
+### 2. The launcher does not write the server's database - *done*
+
+**What was asked for.** Making an account from Settings means the launcher writing documents into Imlight's
+own player database. That is an overstep: the launcher's job is to install, configure and run the server,
+not to be a second author of its storage. The server already has a way to make accounts - `.account create
+$username $password`, typed by the admin account inside the graphical client - and that should be the only
+way.
+
+**What came out of it.** The **Create an account** card is gone from Settings, replaced by the two steps
+that do work: sign in as the admin account in the game, run the command, close the client, then pick the
+account the server made here. Nothing else about accounts changed - the account list, the picker and the
+profile are reads. The code that wrote the document is left where it is and reachable from no view, so the
+decision can be reversed in one edit if the server ever grows a command channel a launcher may use; what
+must not come back quietly is a button. One more write the launcher still makes is the same overstep - the
+admin password it puts onto the account so the one in `Imlight.ini` is the one that works
+(`PlayerDatabase.AlignAdminPasswordAsync`) - and that one is waiting on a decision rather than on code.
+Written up under [signing in without the login screen](#signing-in-without-the-login-screen).
+
+### 3. Skipping the tutorial has consequences, and the setting says which - *done*
+
+**What was asked for.** Skipping the tutorial is one checkbox and three separate consequences that the game
+never mentions: the school-specific spells the tutorial hands out are never granted, the starter items are
+not equipped on the new character, and the tutorial's own items can arrive twice. All three are fixable by
+hand - walk to Ravenwood, learn your school's spell, then equip the starting gear out of the inventory - and
+the setting should say so *before* it is turned on rather than leaving it to be discovered.
+
+**What came out of it.** A description under the checkbox, and a warning that appears while the tutorial is
+disabled. Written up under [starter settings](#starter-settings).
+
+### 4. The launcher's own data moves into a launcher database - *done*
+
+**What was asked for.** The launcher keeps its own state in two JSON files in its data root: `launcher.json`
+(settings, folders, and the last known account list) and `profiles.json` (profiles, playtime, sessions,
+badges, and which world each zone belongs to). Both are read whole, changed in memory and written whole, and
+both only ever grow. After years of use - every badge, every session, every zone ever entered - `profiles.json`
+is a file the launcher rewrites on any change, sifts through on every read, and cannot answer a question
+about without holding all of it. A database answers the same questions live and reads only what is wanted.
+
+**The decision.** RavenDB, and specifically *the RavenDB the server already ships*. `EmbeddedRaven` already
+starts `Raven.Server.dll` out of the Imlight install against the server's data directory so the launcher can
+read the player database while Imlight is not running; giving the launcher a database of its own is that same
+code path with a different data directory, port and settings file - and `EmbeddedRavenSetup.SettingsPathFor`
+already puts that settings file in the launcher's own folder. Same binaries, same storage format, same
+codebase as Imlight. One process at a time is already the rule for the
+server's database (RavenDB locks the data directory) and applies here too, with the difference that nothing
+else ever opens this one - so the launcher can hold it open for as long as it runs.
+
+**The one premise of that decision that did not hold, and what came of it.** "No new dependency to ship"
+is true of *binaries* and false of *runtime*: the database is a framework-dependent application, and the
+install it comes out of is self-contained, so what the launcher actually depends on is a machine-wide .NET
+runtime with the frameworks the database names. That was measured against a real install and written up
+under [Imlight is a requirement](#imlight-is-a-requirement-and-the-launcher-stops-and-says-so). The user
+chose to keep the engine and make the runtime part of the requirement, which is why that screen exists and
+why it checks the runtime rather than discovering it later at a database that will not start.
+
+**Decided while starting it.** The profile images - `profiles/<account id>/avatar.png` and its banner -
+become **attachments on the profile document** rather than files beside the database. A file is what a
+`Bitmap` wants and an attachment is what a backup wants, and the backup is the case that cannot be
+improvised later: task 5 is specified as "a set of database directories plus a manifest, and nothing else",
+which is only true if the pictures are in the database. The UI reads them back as a stream.
+
+**What was built, in the order it had to be.** First the requirement and its screen: `ImlightRequirements`,
+`DotnetHost`, the fourth layer in `MainWindow`, and 14 tests. Then the launcher's own instance
+(`LauncherDatabase`, held open for the run by `MainWindowViewModel.LauncherDatabase`) and the document shapes
+(`LauncherDocuments`). Then the move itself: the client (`LauncherDatabaseClient`), the persistence contract
+and its two implementations (`ProfilePersistence`), `ProfileStore` on top of them, the pictures as
+attachments, and the one-time import (`ProfilesImport`) - 50 tests between them, and 58 checks against a
+real RavenDB across three throwaway harnesses: a database started, written to and restarted; the notes used
+through the store across that restart; and an old launcher's file migrated, with a restored copy of it
+refused. The last of those was then run through the launcher's own wiring rather than through the store
+alone: a view model over the real install, with every launcher file redirected into a scratch folder so the
+real notes were never touched. It starts the launcher's instance under the launcher's own root, makes its
+database, and shows the migration running - `profiles.json` renamed to `profiles.json.imported`, with its
+profiles and picture in the database - and nothing writes a `profiles.json` at any point.
+
+**Where that database lives, in both modes.** This was the point of doing the instance first: it is the
+launcher's own folder, not the server's data directory and not a second copy of anything.
+
+| | Standard | Portable |
+| --- | --- | --- |
+| Documents | `%LOCALAPPDATA%\ViewLight\database` | `<launcher folder>\database` |
+| The instance's settings | `...\ViewLight\raven\launcher-settings.json` | `<launcher folder>\raven\launcher-settings.json` |
+| The instance's log | `...\ViewLight\raven\launcher-logs` | `<launcher folder>\raven\launcher-logs` |
+
+`database\` is one directory holding the whole of the launcher's own data, which is what task 5's backup
+needs it to be. The server's data directory is where Imlight keeps *its* documents, and the two are never the
+same folder - a database pointed at the other's directory is one of them holding the lock the other needs.
+
+**Two decisions made while building it.** The port is a free port picked per run and written down nowhere:
+the server's database uses the port Imlight's config names because the server has to reach it on that
+address, while nothing outside the launcher ever reaches this one - and a port left occupied by something
+else cannot then leave the launcher with a database it cannot start. And the instance is started *when the
+requirement screen is satisfied* rather than on first use, so a profile is never read from a database that has
+to be started first - which is also why it is held for the whole run rather than handed over like the
+server's: nothing else opens it, including Imlight.
+
+The cost of that is honest and visible: while Imlight is idle the launcher now runs **two** Raven instances,
+the server's (borrowed, so accounts can be read) and its own. Both are wanted once the next step lands, and
+the second one is empty until then.
+
+**What the engine actually does, checked against the real one rather than assumed.** The instance was started
+from this machine's real install against a scratch root: it comes up on its own port, creates `System`
+first and `Databases` when the launcher's database is made, and reports its own data directory in its own
+settings file. Documents are written with `PUT /databases/LauncherData/docs?id=...` (201) and read back
+through `/docs?start=0&pageSize=512`, which answers `{"Results":[...]}` - the same wrapped listing Imlight's
+own player-database read already unwraps - with `@metadata.@collection` telling a profile from the map. A
+picture is an attachment: `PUT`/`GET`/`DELETE /databases/LauncherData/attachments?id=...&name=avatar.png`
+answered 201, the same bytes back, 204, and 404 after. Those are the shapes the store will be built on, so
+they were worth knowing before it is.
+
+**And then the notes themselves.** `ProfileStore` keeps the same surface it always had - the profiles, their
+zone map, `GetOrCreate`, `Save`, the pictures - and underneath it is `IProfilePersistence`: the database for
+the launcher (`DatabaseProfilePersistence`), and the file for the suite and for reading an old launcher's
+notes (`JsonProfilePersistence`). The store is built before the database is up, so it starts with nowhere to
+keep anything and says so rather than quietly writing a file: a launcher that wrote its notes to a file *and*
+to a database would have two answers to every question and no way to know which was newer. It is attached
+when the database answers, which is also when the ledger re-reads the learned worlds it took a copy of while
+the store was still empty.
+
+**The pictures are attachments on the profile document.** `ProfileStore.ReadImageAsync` hands back bytes for
+the screen to decode, replacing the path it used to resolve and the profile screen used to read off disk; a
+picture now exists for exactly one profile, travels with it, and is part of a backup of the directory. The
+file implementation keeps its pictures as files and leaves a forgotten one where it is, which is the one
+place the two differ and is written down in `DeleteImageAsync`.
+
+**Reads and writes are synchronous and pictures are not**, which is deliberate: a save happens inside the
+pass that read the server's log, and making all of it asynchronous would ripple through the profile system to
+buy nothing against a local database - while a picture is picked by somebody pressing a button, which is
+asynchronous already. The client never resumes on a captured context, so the synchronous two cannot deadlock
+the UI thread.
+
+**The migration, which is 4a.** `ProfilesImport` runs once, when the database is first attached: the profiles,
+the zone map and every picture the profiles name become documents and attachments, and the file is renamed to
+`profiles.json.imported`. The marker that says it was done is **a document in the database**, not a flag in a
+file - the settings file is the one thing a backup does not carry, so a marker there would let a restored
+backup pour an old file over newer notes. A file that will not parse changes nothing at all and says so: half
+a file acted on is worse than a file left alone.
+
+**What has to move, and what must not.** Profiles, playtime, sessions, badges and zone worlds: all the
+launcher's own notes about a server, none of it the server's. **Settings stay a file.** They are read before
+anything else can be, and a database whose location comes from the settings cannot be read before the
+settings have been read - which is also why `portable.txt` is a file rather than a setting. That is worth
+writing down because "move everything into the database" is the obvious next thought and it does not work.
+
+**The last known account list stays a file too.** `launcher.json` keeps the folders and the accounts the
+launcher last read, and that list is a *cache* of what the server said rather than a record of the launcher's
+own: the profiles are the record, and they are what moves.
+
+**Sizing.** Not a rewrite. `ProfileStore` is the only reader and writer of `profiles.json`, behind
+`Profiles`, `GetOrCreate`, `Save` and `AdoptImage`, so the work is one class plus whatever query shapes the
+profile and achievements screens turn out to want.
+
+**Sizing, with one caveat.** `ProfileStore` is still the only reader and writer of `profiles.json`, so the
+work is one class plus whatever query shapes the profile and achievements screens want. The caveat is the
+suite: eight test files build a `ProfileStore` over a temp file, and a real RavenDB per test is not
+viable. So the persistence goes behind a narrow interface, with the files-and-memory implementation the
+suite runs against and the database implementation for the launcher - and one check of the database path
+against a real one.
+
+### 4a. Importing `profiles.json` - *done, with task 4*
+
+**What was asked for.** An existing launcher's data has to arrive in the database without being retyped.
+
+**How it works.** `ProfilesImport.RunAsync` reads the file once, writes a document per profile, the
+zone-to-world map, and an attachment for every picture the profiles name, then renames the file to
+`profiles.json.imported`. The marker that says it was done is a document in the database rather than a flag
+in a file, so restoring a backup cannot re-import old data over newer - and the rename is cleanup that a
+downgrade to the previous build can still read. A file that will not parse changes nothing and says so,
+which is the same shape every other read of strange data in this project has.
+
+**One rule the tests are built around.** It runs exactly once, including when there was nothing to move: a
+file that turns up later, out of an old backup, is not notes this launcher has never seen - it is an older
+copy of notes the database already has, and it is left alone. That is checked against a real database, not
+only against a fake one.
+
+### 5. A cloud backup of the few databases that matter - *not started*
+
+**What was asked for.** A safety net for the data that cannot be re-downloaded. A new machine, a new
+launcher install and a fresh server install should end with the accounts, the wizards, the profiles, the
+playtime and the badges back - not with a re-run of everything that produced them. Sign in to a cloud
+drive from Settings, and everything that matters is restored by itself.
+
+**What is backed up, and what is not.** The launcher's database (task 4) and the server's own RavenDB data
+directory, which is where accounts, wizards and everything they own live. Deliberately **not** the game's
+files (18.39 GB of patch server data), the client, the server binaries, the cached art and downloads (all
+re-downloadable), or `Imlight.ini` (machine-specific paths that would be wrong on the machine doing the
+restoring). A backup is a set of database directories plus a manifest, and nothing else.
+
+**The manifest is what makes it automatic.** Every backup carries, per database, a content hash and the
+time it was taken. That is enough to answer the ordinary question without asking anybody: remote newer than
+the last thing this machine uploaded, and local unchanged, means restore; local newer means upload. Like
+Steam Cloud, the ordinary case is guessed right and says nothing, and only a real conflict - both sides
+changed since the common ancestor they were last seen equal at - stops and asks. A sync that announced every
+upload and every download would be a stream of notifications about the machine doing exactly what it was
+told to do.
+
+**The constraint.** RavenDB holds its data directory under an exclusive lock, so nothing is copied *or*
+restored while anything has it open. The sync therefore runs while the launcher is idle and nothing is
+running - which is exactly the window `EmbeddedRaven` already manages, so the taking-turns code is there and
+this rides on it. A restore is applied before the next server start, never under a running server.
+
+**The decision: Google Drive, in the app's own hidden folder.** Two access modes were described. The one to
+build is the app-sandboxed one: the `drive.appdata` scope gives the launcher a folder of its own inside the
+user's Drive that it can create, read, write and delete in, that the user cannot see in the Drive UI, and
+that cannot touch a single file outside it. The broader modes are the ones to avoid - `drive.file` needs a
+file picker and gives per-file access, and full `drive` is the user's whole Drive.
+
+**One correction to write down before it is built.** "No refresh token needed" is not achievable: an
+offline sync has to upload while nobody is watching, and that is what a refresh token is for. What the
+`drive.appdata` scope buys is not the absence of a token but its limits - a token that can only ever reach
+the app's own folder in the user's Drive. So: browser sign-in (Google's installed-app flow with a loopback
+redirect, so the launcher never sees the password), `access_type=offline`, and the refresh token kept in the
+launcher's own database rather than in a file.
+
+**Left open.** Where the OAuth client id comes from - a client id shipped for the app, or one the user
+registers - and whether the sign-in is per machine or per Drive account. Neither changes the shape above.
+And Drive is the choice because it is what the user already has: the manifest, the hashes and the merge rule
+are the same against any of the file-sync services, and only the sign-in and the API calls would change.
+Look up current install guidance for the chosen provider when this is built rather than working from these
+notes alone.

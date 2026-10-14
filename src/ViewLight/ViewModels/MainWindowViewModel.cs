@@ -71,6 +71,12 @@ public enum LauncherPhase {
     /// <summary>The game is running against the server this launcher started.</summary>
     Playing,
 
+    /// <summary>
+    /// The patch server is being filled in from a copy of the game on this machine, before the server
+    /// this session needs is started.
+    /// </summary>
+    CopyingGameFiles,
+
     /// <summary>Something went wrong, and the user has to know about it.</summary>
     Failed,
 }
@@ -84,8 +90,6 @@ public enum LauncherPhase {
 /// other, and splitting them up would mean a lot of cross-notification for a proof of concept.
 /// </remarks>
 public sealed partial class MainWindowViewModel : ObservableObject {
-
-    private const int MaxLogLines = 5000;
 
     /// <summary>The comment block Imlight's stock config carries above <c>DefaultItems</c>.</summary>
     private static readonly string[] StarterKitComments = [
@@ -168,11 +172,25 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         _server.Exited += (_, code) => Post(() => OnServerExited(code));
         _client.StateChanged += (_, state) => Post(() => OnClientStateChanged(state));
 
+        // The patch server is the third process the launcher runs, and it goes through exactly the same
+        // three channels: its output to the Log, its state to the rows on Home, and its exit to a report.
+        _patch.Output += (_, entry) => AppendLog(entry);
+        _patch.StateChanged += (_, state) => Post(() => {
+            PatchServerState = state;
+            RefreshDerived();
+        });
+        _patch.Ready += (_, reason) => Post(() => {
+            AppendLog(LogLevel.Success, $"The patch server is ready — {reason}");
+            RefreshDerived();
+        });
+        _patch.Exited += (_, code) => Post(() => OnPatchServerExited(code));
+
         // The window keeps no variant of its own, so this is the one place the saved theme takes hold.
         ApplyTheme();
 
         ClientPath = _store.Settings.ClientPath;
         ServerPath = _store.Settings.ServerPath;
+        PatchServerPath = _store.Settings.PatchServerPath;
         ShowMilestoneToasts = _store.Settings.ShowMilestoneToasts;
         // Where to land is a setting rather than a memory: a launcher left on Settings should still open
         // ready to play, so only an explicit "default page" moves it off Home.
@@ -180,6 +198,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
         LoadServerConfig();
         SeedAccountsFromCache();
+        RefreshPatchFolderStatus();
+        RefreshPatchInstalledText();
+
+        // The install the patch server's files would be copied from, and what it is missing - asked in the
+        // background, because answering it reads the revision's own file list. Written to the field rather
+        // than the property: nothing has changed yet, so there is nothing to save or to ask again.
+        _preloadSourcePath = _store.Settings.PatchServerPreloadSource;
+        _ = RefreshPreloadPlanAsync();
 
         // Profiles come from the accounts this launcher already knows; what each of them has done is
         // collected while its server runs. Only this server's accounts count: a name remembered from
@@ -211,8 +237,21 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         }
         else {
             AppendLog(LogLevel.Info, "ViewLight ready.");
+
+            // Said into the Log as well as onto the screen: what the launcher is waiting for is the thing
+            // somebody will come to the Log to find out, even though the Log is behind this screen.
+            if (RequiresImlight) {
+                AppendLog(LogLevel.Warning, _imlightRequirement.Missing);
+            }
+
             if (_store.Settings.CheckForUpdatesOnStartup) {
                 _ = CheckForUpdatesAsync();
+
+                // The patch server is checked too, so its card can say whether there is a newer build -
+                // and so Play does not have to reach GitHub while the user is waiting to play.
+                if (PatchServerInstalled) {
+                    _ = CheckForPatchServerUpdatesAsync();
+                }
             }
         }
 
@@ -224,6 +263,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         // And so is the player database: the server's own RavenDB is started while the launcher is idle, so
         // the accounts and profiles are already there instead of arriving after a warm-up.
         _ = EnsureIdleDatabaseAsync();
+
+        // And the launcher's own database, which is the other way round: not borrowed while Imlight is
+        // idle, but the launcher's for the whole run. It is started here rather than on first use so a
+        // profile is never read from a database that has to be started first.
+        _ = EnsureLauncherDatabaseAsync();
     }
 
     /// <summary>Set by the window so the view model can open a folder picker without knowing about views.</summary>
@@ -238,7 +282,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     public bool RequiresSetup
         => string.IsNullOrWhiteSpace(ClientPath) || string.IsNullOrWhiteSpace(ServerPath);
 
-    public bool ShowMainInterface => !RequiresSetup;
+    /// <summary>
+    /// The launcher itself, which nothing gets to see until both first screens are satisfied: where the
+    /// folders are, and that there is an Imlight in the server folder to work with.
+    /// </summary>
+    public bool ShowMainInterface => !RequiresSetup && !RequiresImlight;
 
     public bool CanContinueSetup => !RequiresSetup;
 
@@ -250,6 +298,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
         if (_store.Settings.CheckForUpdatesOnStartup) {
             _ = CheckForUpdatesAsync();
+
+            if (PatchServerInstalled) {
+                _ = CheckForPatchServerUpdatesAsync();
+            }
         }
     }
 
@@ -304,7 +356,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             ? "Everything this account has earned on this server, and what the rest of it would take."
             : "Who you are on this server: how long you have played, and what you have done.",
         LauncherSection.Settings => "Your folders, your server, and every value ViewLight writes into Config/Imlight.ini.",
-        LauncherSection.Logs => "Everything the launcher and the server have reported this session.",
+        LauncherSection.Logs => "Everything the launcher, the server and the patch server have reported this session.",
         LauncherSection.About => "What ViewLight is, and where it is up to.",
         _ => string.Empty,
     };
@@ -356,9 +408,39 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     // ---------------------------------------------------------------- log
 
-    public ObservableCollection<LogEntry> Logs { get; } = [];
+    /// <summary>
+    /// The Log itself: the lines it is holding, which of the three sources are being shown, and which runs
+    /// of the same line arriving again are folded up. The view draws <see cref="LogDocument.Blocks"/>.
+    /// </summary>
+    public LogDocument Log { get; } = new();
 
     [ObservableProperty] private bool _autoScrollLogs = true;
+
+    /// <summary>What the line under the Log says: how much is here, folded, and filtered out.</summary>
+    [ObservableProperty] private string _logSummary = string.Empty;
+
+    // The three shown-or-not boxes. All three are on to begin with: the point of the Log is that everything
+    // is in one place, and the boxes are for quietening one of the three down rather than for hiding two.
+    [ObservableProperty] private bool _showLauncherLog = true;
+    [ObservableProperty] private bool _showServerLog = true;
+    [ObservableProperty] private bool _showPatchServerLog = true;
+
+    partial void OnShowLauncherLogChanged(bool value) => ApplyLogFilters();
+    partial void OnShowServerLogChanged(bool value) => ApplyLogFilters();
+    partial void OnShowPatchServerLogChanged(bool value) => ApplyLogFilters();
+
+    private void ApplyLogFilters() {
+        Log.SetVisible(LogSource.Launcher, ShowLauncherLog);
+        Log.SetVisible(LogSource.Server, ShowServerLog);
+        Log.SetVisible(LogSource.Patcher, ShowPatchServerLog);
+        RefreshLogSummary();
+    }
+
+    /// <summary>Opens a folded run of the same line so it can be read and copied, or folds it back up.</summary>
+    public void ToggleLogRepeat(LogBlock block) {
+        Log.Toggle(block);
+        RefreshLogSummary();
+    }
 
     public void AppendLog(LogLevel level, string message)
         => AppendLog(new LogEntry(DateTimeOffset.Now, level, message));
@@ -373,14 +455,17 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     private void AddLogEntry(LogEntry entry) {
-        Logs.Add(entry);
-        while (Logs.Count > MaxLogLines) {
-            Logs.RemoveAt(0);
-        }
+        Log.Append(entry);
+        RefreshLogSummary();
     }
 
+    private void RefreshLogSummary() => LogSummary = Log.Summary;
+
     [RelayCommand]
-    private void ClearLogs() => Logs.Clear();
+    private void ClearLogs() {
+        Log.Clear();
+        RefreshLogSummary();
+    }
 
     private static void Post(Action action) {
         if (Dispatcher.UIThread.CheckAccess()) {
@@ -671,6 +756,18 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     [ObservableProperty] private string _adminUsername = string.Empty;
     [ObservableProperty] private string _adminPassword = string.Empty;
+
+    /// <summary>
+    /// Told once when the launcher finds the admin account on another password and puts the config's on it,
+    /// so a password that has been changed under a running server is a thing the user is told rather than
+    /// something they discover at the game's login screen.
+    /// </summary>
+    [ObservableProperty] private string _adminPasswordNotice = string.Empty;
+
+    public bool HasAdminPasswordNotice => AdminPasswordNotice.Length > 0;
+
+    partial void OnAdminPasswordNoticeChanged(string value)
+        => OnPropertyChanged(nameof(HasAdminPasswordNotice));
     [ObservableProperty] private bool _tutorialDisabled;
     [ObservableProperty] private string _defaultItemsText = string.Empty;
     [ObservableProperty] private int _startingLevel = 1;
@@ -793,6 +890,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         _config = ImlightConfig.TryLoad(ServerPath);
         ServerInstalled = _config is not null;
 
+        // Whether the launcher can work at all is a question about the folder and this machine rather than
+        // about the config, so it is asked here - on every path, including the one with no config at all.
+        RefreshImlightRequirement();
+
         if (_config is null) {
             ServerFolderStatus = Directory.Exists(ServerPath)
                 ? $"No server installed here yet ({ImlightConfig.RelativeConfigPath} not found)."
@@ -820,6 +921,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         GameRevision = _config.GameRevision;
         EnforceRevision = _config.EnforceRevision;
         EmbeddedDatabasePort = _config.EmbeddedDatabasePort;
+
+        // Imlight's own patch listener, which is a different thing from the patch server it downloads
+        // from - and the port the launcher's patch server must not take.
+        ImlightPatchServerPort = _config.PatchServerPort;
 
         ServerFolderStatus = File.Exists(ImlightConfig.ExecutablePathFor(ServerPath))
             ? $"Server installed — {ImlightConfig.RelativeConfigPath} found."
@@ -875,6 +980,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             _config.PatchServerUrl = PatchServerUrl;
             _config.SpiralDbAutoFetch = SpiralDbAutoFetch;
             _config.LogLevel = SelectedLogLevel;
+
+            // The revision box is only editable while the launcher is not setting it from the patch
+            // server, and while it is greyed out the value it shows is the patch server's own.
+            _config.GameRevision = GameRevision.Trim();
             _config.EnforceRevision = EnforceRevision;
             _config.EmbeddedDatabasePort = EmbeddedDatabasePort;
 
@@ -1223,14 +1332,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     [RelayCommand(CanExecute = nameof(CanPrimaryAction))]
     private async Task PrimaryActionAsync() {
         if (!ServerInstalled) {
-            if (_latestRelease is null) {
-                await CheckForUpdatesAsync();
-            }
-
-            if (_latestRelease is not null) {
-                await InstallOrUpdateAsync();
-            }
-
+            await InstallImlightAsync();
             return;
         }
 
@@ -1306,7 +1408,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
                 LogRepair(new ConfigRepair(result.EmbeddedDatabasePort, result.PatchServerUrl));
 
+                // A fresh install is what the launcher may have been waiting for, so the database is taken
+                // up now rather than at the next start. Nothing is held while there is no install.
                 LoadServerConfig();
+                _ = EnsureIdleDatabaseAsync();
             }
             else {
                 AppendLog(LogLevel.Error, result.Message);
@@ -1694,14 +1799,20 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     partial void OnServerStateChanged(ServerState value) => RefreshDerived();
 
     /// <summary>The server in one word, for the row beside its status dot.</summary>
-    public string ServerStateText => ServerState switch {
+    public string ServerStateText => DescribeServerState(ServerState);
+
+    /// <summary>
+    /// A server's state in one word. Shared with the patch server, which moves through the same five
+    /// states and is read on screen the same way.
+    /// </summary>
+    public static string DescribeServerState(ServerState state) => state switch {
         ServerState.Stopped => "Stopped",
         ServerState.Starting => "Starting",
         ServerState.WarmingUp => "Warming up",
         ServerState.Ready => "Running",
         ServerState.Stopping => "Stopping",
         ServerState.Faulted => "Stopped unexpectedly",
-        _ => ServerState.ToString(),
+        _ => state.ToString(),
     };
 
     /// <summary>True while a server process the launcher started is still alive.</summary>
@@ -1738,7 +1849,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     /// <summary>A step is in progress, so the status animates.</summary>
     public static bool IsPhaseWorking(LauncherPhase phase)
-        => phase is LauncherPhase.StartingServer or LauncherPhase.WarmingServer or LauncherPhase.StartingClient;
+        => phase is LauncherPhase.StartingServer or LauncherPhase.WarmingServer or LauncherPhase.StartingClient
+            or LauncherPhase.CopyingGameFiles;
 
     /// <summary>A step finished well, so the status reads as success.</summary>
     public static bool IsPhaseGood(LauncherPhase phase)
@@ -1848,6 +1960,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         => phase switch {
             LauncherPhase.StartingServer => "Getting ready…",
             LauncherPhase.WarmingServer => "Warming up…",
+            LauncherPhase.CopyingGameFiles => "Copying the game's files…",
             LauncherPhase.ServerReady => client == ClientState.Closed
                 ? "Wizard101 was closed"
                 : "Ready to play",
@@ -1865,6 +1978,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     public static string DetailFor(LauncherPhase phase, ClientState client, string failureDetail)
         => phase switch {
             LauncherPhase.StartingServer => "Starting the Imlight server. Nothing to do yet.",
+            LauncherPhase.CopyingGameFiles => "Filling the patch server from the copy of Wizard101 on this "
+                                               + "machine. It is a local copy, so minutes rather than hours.",
             LauncherPhase.WarmingServer => "The server is loading world data and opening the game ports. "
                                            + "A first run takes a few minutes.",
             LauncherPhase.ServerReady => client == ClientState.Closed
@@ -1972,7 +2087,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     /// a confirmation - and a stopped one never is.
     /// </summary>
     public bool ShouldWarnBeforeClosing
-        => WarnBeforeClosing(ConfirmCloseWhenServerRunning, ServerIsRunning);
+        => WarnBeforeClosing(ConfirmCloseWhenServerRunning, ServerIsRunning || PatchServerIsRunning);
 
     /// <summary>
     /// The rule behind <see cref="ShouldWarnBeforeClosing"/>, stated once so it can be tested without a
@@ -1981,10 +2096,25 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     public static bool WarnBeforeClosing(bool askBeforeClosing, bool serverIsRunning)
         => askBeforeClosing && serverIsRunning;
 
-    /// <summary>What the close prompt says about the server, so it describes the real state.</summary>
-    public string CloseWarningDetail => ServerIsRunning
-        ? $"It is currently {ServerStateText.ToLowerInvariant()}."
-        : string.Empty;
+    /// <summary>
+    /// What the close prompt says about what is running, so it describes the real state rather than
+    /// asking about a server that happens to be idle behind a patch server that is not.
+    /// </summary>
+    public string CloseWarningDetail {
+        get {
+            var parts = new List<string>();
+
+            if (ServerIsRunning) {
+                parts.Add($"The server is currently {ServerStateText.ToLowerInvariant()}.");
+            }
+
+            if (PatchServerIsRunning) {
+                parts.Add($"The patch server is currently {PatchStateText.ToLowerInvariant()}.");
+            }
+
+            return string.Join(" ", parts);
+        }
+    }
 
     /// <summary>
     /// The persisted "ask before closing" preference. The close dialog's "Don't ask me again" turns it
@@ -2164,6 +2294,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     /// <summary>Decodes a cached file off the UI thread; a broken file is simply no art.</summary>
+    /// <summary>Decodes an image file - the cached game art - or gives up quietly.</summary>
     private static async Task<Bitmap?> DecodeAsync(string? path) {
         if (string.IsNullOrWhiteSpace(path)) {
             return null;
@@ -2177,15 +2308,67 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         }
     }
 
+    /// <summary>
+    /// Decodes a picture the launcher's own database handed back, or gives up quietly.
+    /// </summary>
+    /// <remarks>
+    /// Bytes rather than a path, because that is what a profile's picture is now: an attachment on the
+    /// profile's own document, which is what makes it part of a backup. A picture that will not decode is a
+    /// profile showing the initial-letter circle instead, not a screen that fails.
+    /// </remarks>
+    private static async Task<Bitmap?> DecodeAsync(byte[]? content) {
+        if (content is null || content.Length == 0) {
+            return null;
+        }
+
+        try {
+            return await Task.Run(() => new Bitmap(new MemoryStream(content))).ConfigureAwait(true);
+        }
+        catch (Exception) {
+            return null;
+        }
+    }
+
     private bool CanStartServer()
         => !IsBusy
            && ServerState is ServerState.Stopped or ServerState.Faulted
            && File.Exists(ImlightConfig.ExecutablePathFor(ServerPath));
 
-    private bool CanStopServer() => ServerState is not (ServerState.Stopped or ServerState.Stopping);
+    private bool CanStopServer() => CanStopSomething(ServerState, PatchServerIsRunning);
+
+    /// <summary>
+    /// The rule behind the Stop button, which now covers both processes the launcher runs.
+    /// </summary>
+    /// <remarks>
+    /// Either can be the only one up: a patch server started on its own from Settings has no server
+    /// behind it, and stopping it is still the thing the button is for. Stated as a rule so it can be
+    /// tested without either process.
+    /// </remarks>
+    public static bool CanStopSomething(ServerState server, bool patchServerIsRunning)
+        => server is not (ServerState.Stopped or ServerState.Stopping) || patchServerIsRunning;
 
     [RelayCommand(CanExecute = nameof(CanStartServer))]
     private async Task StartServerAsync() {
+        // The patch server goes first, because Imlight reads it during its own boot: starting it
+        // afterwards would only serve the next session. Play comes through here too, so Play inherits the
+        // order - patch server, then server, then client.
+        await EnsurePatchServerStartedAsync().ConfigureAwait(true);
+
+        // The one moment filling the patch server in is worth offering. Before the server starts, because
+        // Imlight loads Root.wad from the patch server during its own boot - and this is the only chance to
+        // have it there. Nothing is started differently on the answer, so a "no" simply carries on.
+        await OfferPreloadAsync().ConfigureAwait(true);
+
+        // Imlight is pointed at this machine's patch server when the launcher is running one and it is
+        // up, because its config is read during its boot. Anything else - the public patch server, or one
+        // somebody runs elsewhere - is left exactly as the config has it.
+        ApplyPatchServerToConfig();
+
+        // ...and the one thing worth saying about it before the server starts: a patch server that is
+        // still on its first fetch does not have Root.wad to serve, which is what the session's first
+        // request asks for. Reported rather than acted on - see the method.
+        await WarnIfPatchServerIsStillFetchingAsync().ConfigureAwait(true);
+
         // Before anything is started: the database the launcher has been holding open is the one the server
         // is about to open, and only one process may have it.
         await ReleaseIdleDatabaseAsync().ConfigureAwait(true);
@@ -2238,6 +2421,21 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
         StopProfileWatch();
         await _server.StopAsync().ConfigureAwait(true);
+
+        // The patch server is part of what the launcher started, so it goes down with the server rather
+        // than being left holding its port until the launcher is closed - unless it still cannot serve
+        // this session's revision, which means a first fetch is in progress and stopping it would stop the
+        // download that is the only thing that will ever make it useful. Stop in Settings stops it outright.
+        var patchServerCanServe = !PatchServerIsRunning || await PatchServerServingAsync().ConfigureAwait(true);
+
+        if (PatchServerStopsWithTheServer(PatchServerIsRunning, patchServerCanServe)) {
+            await _patch.StopAsync().ConfigureAwait(true);
+        }
+        else if (PatchServerIsRunning) {
+            AppendLog(LogLevel.Info,
+                "The patch server is still fetching the game's files, so it is left running: the fetch only "
+                + "advances while it does, and it stops with ViewLight. Stop it in Settings to stop it now.");
+        }
 
         // Stopping on purpose is not a failure, and a server that is not running is not reported at all.
         Phase = LauncherPhase.Idle;
@@ -2513,6 +2711,39 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             .ReadAsync(_config.EmbeddedDatabasePort, AdminUsername, AdminPassword, deadline?.Token ?? default)
             .ConfigureAwait(true);
 
+        // Imlight creates the admin account once and never applies a later password change to it, so the
+        // password the config names is put on the account here - from a recognised database, which is the
+        // only place any write into it may start from. This is what makes changing the password in Settings
+        // mean anything at all: without it the account keeps the one it was created with, and the game
+        // refuses the sign-in the screen shows.
+        if (contents.AdminPassword is { } drift) {
+            var refused = await _playerDatabase
+                .AlignAdminPasswordAsync(_config.EmbeddedDatabasePort, contents, AdminPassword,
+                    deadline?.Token ?? default)
+                .ConfigureAwait(true);
+
+            if (refused is null) {
+                AdminPasswordNotice =
+                    $"The admin account “{drift.Username}” in the database was created with another password "
+                    + "(Imlight only ever creates it), so ViewLight has put the one above on it.";
+
+                AppendLog(LogLevel.Success,
+                    $"The admin account “{drift.Username}” was created with a different password; the password "
+                    + "set in Imlight.ini has been put on it, so signing in as it in the game now uses that one.");
+
+                // Read again, so accounts and profiles below are the database as it is now rather than as
+                // it was a moment ago.
+                contents = await _playerDatabase
+                    .ReadAsync(_config.EmbeddedDatabasePort, AdminUsername, AdminPassword, deadline?.Token ?? default)
+                    .ConfigureAwait(true);
+            }
+            else {
+                AppendLog(LogLevel.Warning,
+                    $"The password set in Imlight.ini could not be put on the admin account “{drift.Username}”: "
+                    + $"{refused}. The account keeps the password it was created with.");
+            }
+        }
+
         _database = contents;
 
         // Written down as it is read, so the next launcher start has it. An unreadable read is not
@@ -2718,6 +2949,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(IsLogsSelected));
         OnPropertyChanged(nameof(IsAboutSelected));
         OnPropertyChanged(nameof(RequiresSetup));
+        OnPropertyChanged(nameof(RequiresImlight));
         OnPropertyChanged(nameof(ShowMainInterface));
         OnPropertyChanged(nameof(CanContinueSetup));
         OnPropertyChanged(nameof(ServerStateText));
@@ -2804,6 +3036,9 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         // the same place as the rest.
         RefreshProfileDerived();
 
+        // And so is everything the patch server's rows, state and buttons show.
+        RefreshPatchDerived();
+
         StartServerCommand.NotifyCanExecuteChanged();
         CopyGameIntoPortableCommand.NotifyCanExecuteChanged();
         StopServerCommand.NotifyCanExecuteChanged();
@@ -2811,6 +3046,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         InstallOrUpdateCommand.NotifyCanExecuteChanged();
         CheckForUpdatesCommand.NotifyCanExecuteChanged();
         PrimaryActionCommand.NotifyCanExecuteChanged();
+        InstallImlightCommand.NotifyCanExecuteChanged();
+        CheckImlightAgainCommand.NotifyCanExecuteChanged();
         CompleteSetupCommand.NotifyCanExecuteChanged();
         RemoveSelectedItemFromKitCommand.NotifyCanExecuteChanged();
     }
@@ -2818,9 +3055,21 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     public void Shutdown() {
         StopProfileWatch();
 
+        // Closing the launcher stops the whole stack it started: the patch server and the private server
+        // both go with it, rather than being left behind to hold their ports.
+        _patch.Dispose();
+        _patchInstallCancellation?.Cancel();
+        _patchInstallCancellation?.Dispose();
+
         // The database is let go before the launcher goes: it is the server's, and a held lock would stop
         // Imlight starting next time.
         _raven.Dispose();
+
+        // And the launcher's own database with it - its client first, so nothing is midway through a read
+        // when the database it is reading goes. Nothing is waiting on this one, but a database left running
+        // would hold its data directory against the next launcher - and against a backup.
+        CloseLauncherDatabaseClient();
+        _launcherDatabase.Dispose();
         _machineIdWatch?.Cancel();
         _machineIdWatch?.Dispose();
         _scanCancellation?.Cancel();

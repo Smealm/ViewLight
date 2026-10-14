@@ -11,7 +11,7 @@
         <StackPanel Spacing="8">
           <TextBlock Classes="cardTitle" Text="ViewLight" />
           <TextBlock Classes="muted"
-                     Text="A launcher for Imlight, the Revive101 private Wizard101 server. Point it at your game folder, press Play, and it downloads and runs the server, sets up Config/Imlight.ini for you, and starts Wizard101 connected to it." />
+                     Text="A launcher for Imlight, the Revive101 private Wizard101 server. Point it at your game folder, press Play, and it downloads and runs the server, sets up Config/Imlight.ini for you, and starts Wizard101 connected to it. It can run a patch server of its own the same way - Aurorium - so the game's files come from this machine too." />
           <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
             <TextBlock Classes="label" Text="Version" />
             <TextBlock Grid.Column="1" Classes="value" Text="{Binding AppVersion}" />
@@ -43,6 +43,9 @@
             <Button Content="Imlight documentation"
                     Command="{Binding OpenLinkCommand}"
                     CommandParameter="https://revive101.github.io/Imlight/imlight/" />
+            <Button Content="Aurorium (patch server)"
+                    Command="{Binding OpenLinkCommand}"
+                    CommandParameter="https://github.com/Revive101/Aurorium" />
             <Button Content="Revive101"
                     Command="{Binding OpenLinkCommand}"
                     CommandParameter="https://revive101.de/" />
@@ -58,7 +61,7 @@
           <TextBlock Classes="muted"
                      Text="Updating the server replaces its program files and keeps your Imlight.ini values, merging them back over the new defaults. The config from before the update is kept beside it as Imlight.ini.bak." />
           <TextBlock Classes="muted"
-                     Text="Closing ViewLight stops the server it started, and asks first while that server is running. It stops even if the launcher is killed outright, so no server is ever left holding the ports." />
+                     Text="Closing ViewLight stops everything it started - the server and the patch server - and asks first while either is running. They stop even if the launcher is killed outright, so nothing is ever left holding a port." />
         </StackPanel>
       </Border>
 

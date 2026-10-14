@@ -65,34 +65,37 @@ public class ProfileStoreTests : IDisposable {
     }
 
     [Fact]
-    public void APictureIsCopiedInSoTheProfileKeepsIt() {
+    public async Task APictureIsKeptSoTheProfileKeepsIt() {
         // A picture picked out of a downloads folder has to survive that folder being cleaned out, which is
         // also what keeps a portable launcher's pictures portable.
         var store = NewStore();
         var profile = store.GetOrCreate(42, "exampleuser");
         var source = _workspace.WriteFile("downloads/pick.png", new byte[] { 1, 2, 3 });
 
-        var name = store.AdoptImage(profile, source, banner: false);
+        var name = await store.AdoptImageAsync(profile, source, banner: false);
 
         Assert.Equal("avatar.png", name);
         Assert.Equal("avatar.png", profile.AvatarFile);
 
-        var kept = ProfileStore.ImagePath(profile.AccountId, profile.AvatarFile);
+        var kept = JsonProfilePersistence.ImagePath(profile.AccountId, profile.AvatarFile);
         Assert.NotNull(kept);
         Assert.True(File.Exists(kept));
 
+        // And the bytes are the ones picked, not a name that leads nowhere.
+        Assert.Equal(new byte[] { 1, 2, 3 }, await store.ReadImageAsync(profile.AccountId, profile.AvatarFile));
+
         // The banner is a separate slot: replacing one must not overwrite the other.
-        var banner = store.AdoptImage(profile, _workspace.WriteFile("downloads/wide.jpg", new byte[] { 4, 5 }),
-            banner: true);
+        var banner = await store.AdoptImageAsync(profile,
+            _workspace.WriteFile("downloads/wide.jpg", new byte[] { 4, 5 }), banner: true);
 
         Assert.Equal("banner.jpg", banner);
         Assert.Equal("avatar.png", profile.AvatarFile);
     }
 
     [Fact]
-    public void AProfileWithNoPictureHasNoPathToShow() {
-        Assert.Null(ProfileStore.ImagePath(42, null));
-        Assert.Null(ProfileStore.ImagePath(42, "  "));
+    public void AProfileWithNoPictureHasNothingToShow() {
+        Assert.Null(JsonProfilePersistence.ImagePath(42, null));
+        Assert.Null(JsonProfilePersistence.ImagePath(42, "  "));
     }
 }
 
@@ -522,9 +525,10 @@ public class StarterAccountTests {
         Assert.Contains("admin", text);
         Assert.Contains("first time the server boots", text);
 
-        // Both ways of making another are named: the launcher's own, under Settings, and the server's own
-        // in-game command, which somebody may still prefer to type.
-        Assert.Contains("Make another under Settings", text);
+        // One way of making another is named, and it is the server's own in-game command. The launcher
+        // used to write accounts into the player database from Settings, which is an overstep it no longer
+        // takes, so nothing points at a form that is not there.
         Assert.Contains(".account create $username $password", text);
+        Assert.DoesNotContain("under Settings", text);
     }
 }

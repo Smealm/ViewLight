@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             x:Class="ViewLight.Views.ImlightRequiredView"
+             x:DataType="vm:MainWindowViewModel"
+             Background="{DynamicResource ContentBackgroundBrush}">
+
+  <ScrollViewer>
+    <StackPanel MaxWidth="660" Spacing="16" Margin="40,44"
+                HorizontalAlignment="Center" VerticalAlignment="Center">
+
+      <TextBlock Text="ViewLight needs Imlight" Classes="heroTitle" HorizontalAlignment="Center" />
+
+      <!-- Why, before what: the launcher refusing to start is worth an explanation, and both halves of it
+           are things the user cannot see from the outside. -->
+      <TextBlock Classes="muted" TextAlignment="Center"
+                 Text="ViewLight is a launcher for Imlight — it installs it, configures it, runs it and plays it. It also keeps your profiles, playtime and badges in the RavenDB the server ships, so with no server there is nothing to start and nowhere to keep your progress." />
+
+      <!-- ============================================ what is missing -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="What is missing" />
+          <TextBlock Classes="warning" Text="{Binding ImlightProblem}" />
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Check again" Command="{Binding CheckImlightAgainCommand}" />
+            <Button Content="{Binding ImlightActionLabel}"
+                    IsVisible="{Binding HasImlightAction}"
+                    Command="{Binding OpenLinkCommand}"
+                    CommandParameter="{Binding ImlightActionUrl}" />
+          </StackPanel>
+
+          <!-- The one gap whose fix is not obvious from the link on its own: a version's download page
+               offers several downloads, and only one of them is the one the database wants. -->
+          <TextBlock Classes="muted" Text="{Binding ImlightGuide}"
+                     IsVisible="{Binding HasImlightGuide}" />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================ where Imlight is -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Where Imlight is" />
+          <TextBlock Classes="muted"
+                     Text="The folder holding Imlight.Director.exe and Config\Imlight.ini. Pointing at one that is already there is enough — nothing here writes to it except an install." />
+
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <TextBox Text="{Binding ServerPath, Mode=TwoWay}" />
+            <Button Grid.Column="1" Margin="8,0,0,0" Content="Use recommended"
+                    Command="{Binding UseRecommendedServerFolderCommand}" />
+            <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                    Command="{Binding BrowseServerFolderCommand}" />
+          </Grid>
+
+          <TextBlock Classes="status" Text="{Binding ServerFolderStatus}" />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================ getting one -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Get Imlight" />
+          <TextBlock Classes="muted"
+                     Text="Downloads the newest build from GitHub and unpacks it into the folder above. Anything already configured in that folder is kept." />
+
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <Button Classes="accent" Content="Download Imlight"
+                    Command="{Binding InstallImlightCommand}" />
+            <TextBlock Classes="muted" VerticalAlignment="Center" Text="{Binding LatestReleaseText}" />
+          </StackPanel>
+
+          <TextBlock Classes="error" Text="{Binding ReleaseCheckError}"
+                     IsVisible="{Binding HasReleaseCheckError}" />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================ downloading, while it runs -->
+      <Border Classes="glass" IsVisible="{Binding IsBusy}">
+        <StackPanel Spacing="10">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Text="{Binding InstallStage}" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="Cancel" Command="{Binding CancelInstallCommand}" />
+          </Grid>
+          <ProgressBar Value="{Binding InstallProgress}" Maximum="100" />
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

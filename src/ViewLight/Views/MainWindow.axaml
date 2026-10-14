@@ -178,5 +178,10 @@
       </Panel>
     </Border>
 
+    <!-- ================================================ a launcher with no Imlight cannot work
+         Over everything, the account card included, because nothing behind it is usable: the profiles that
+         card shows are read from the database this screen is asking for. -->
+    <views:ImlightRequiredView IsVisible="{Binding RequiresImlight}" />
+
   </Panel>
 </Window>

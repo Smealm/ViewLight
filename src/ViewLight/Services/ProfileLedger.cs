@@ -132,6 +132,25 @@ public sealed class ProfileLedger {
     public IReadOnlyDictionary<string, string> ZoneWorlds => _zoneWorlds;
 
     /// <summary>
+    /// Re-reads what the store holds, for a store that was given its notes after this was built.
+    /// </summary>
+    /// <remarks>
+    /// The launcher's own database takes tens of seconds to come up, so the store is empty while this is
+    /// being made. Without this, every zone learned in an earlier run would look like one nobody has ever
+    /// been to - and the badges that name worlds would be missing from the catalog until the server happened
+    /// to load one of them again.
+    /// </remarks>
+    public void ReloadFromStore() {
+        _zoneWorlds.Clear();
+
+        foreach (var (zone, world) in _store.ZoneWorlds) {
+            _zoneWorlds[zone] = world;
+        }
+
+        AchievementCatalog.UseWorlds(LearnedWorlds);
+    }
+
+    /// <summary>
     /// The worlds the launcher knows of, in a stable order, for the badges that name them.
     /// </summary>
     /// <remarks>

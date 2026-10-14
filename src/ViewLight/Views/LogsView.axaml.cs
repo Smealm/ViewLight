@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using Avalonia.Controls;
+using ViewLight.Services;
 using ViewLight.ViewModels;
 
 namespace ViewLight.Views;
@@ -20,7 +21,7 @@ public partial class LogsView : UserControl {
         }
 
         if (DataContext is MainWindowViewModel viewModel) {
-            _observed = viewModel.Logs;
+            _observed = viewModel.Log.Blocks;
             _observed.CollectionChanged += OnLogsChanged;
         }
     }
@@ -30,8 +31,24 @@ public partial class LogsView : UserControl {
             return;
         }
 
-        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is { Count: > 0 }) {
-            LogList.ScrollIntoView(e.NewItems[^1]!);
+        // Only the bottom of the Log is worth following: a line arriving changes the last block, and the
+        // line dropping off the top of a full Log changes the first one. Folding a run open somewhere in
+        // the middle changes neither, and dragging the view down to the end for that would be the launcher
+        // moving the page under somebody who is reading it.
+        var atTheEnd = e.Action switch {
+            NotifyCollectionChangedAction.Add => true,
+            NotifyCollectionChangedAction.Replace => e.NewStartingIndex == viewModel.Log.Blocks.Count - 1,
+            _ => false,
+        };
+
+        if (atTheEnd) {
+            LogScroll.ScrollToEnd();
+        }
+    }
+
+    private void OnFoldClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) {
+        if (sender is Button { DataContext: LogBlock block } && DataContext is MainWindowViewModel viewModel) {
+            viewModel.ToggleLogRepeat(block);
         }
     }
 }

@@ -506,4 +506,41 @@
     <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
   </Style>
 
+  <!-- ============================================================ the log
+
+       The log is a terminal: runs of lines are drawn as monospace text that is not wrapped, so a reading or
+       a picture a process printed keeps the shape it was written in and a drag across it copies the whole
+       run. The colour comes from the block's severity, set on the control by the view, because a converter
+       cannot follow the theme the way a DynamicResource can. -->
+  <Style Selector="SelectableTextBlock.terminal">
+    <Setter Property="FontFamily" Value="Consolas, Menlo, monospace" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="TextWrapping" Value="NoWrap" />
+  </Style>
+
+  <!-- The line a folded run of the same log line is drawn as. It is a button, so it has to look like the
+       text around it: no chrome, a pointer cursor, and a highlight on hover to say it can be pressed. -->
+  <Style Selector="Button.logFold">
+    <Setter Property="FontFamily" Value="Consolas, Menlo, monospace" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="CornerRadius" Value="3" />
+    <Setter Property="HorizontalAlignment" Value="Left" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+
+  <Style Selector="Button.logFold /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="Button.logFold:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CardHoverBackgroundBrush}" />
+  </Style>
+
 </Styles>

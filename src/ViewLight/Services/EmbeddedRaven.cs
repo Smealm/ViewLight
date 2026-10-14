@@ -341,31 +341,16 @@ public sealed class EmbeddedRaven : IDisposable {
     }
 
     /// <summary>
-    /// The .NET host used to run the database server, or null when there is none.
+    /// The .NET host used to run the database server, or the name to try when this machine has none.
     /// </summary>
     /// <remarks>
     /// <c>Raven.Server.dll</c> is a framework-dependent assembly - the same shape Imlight's embedded
-    /// package runs it in - so it needs a host. <c>dotnet</c> is looked for on <c>PATH</c> first, because
-    /// that is the one the user's own dotnet install provides, and then in the machine-wide folder it
-    /// normally lives in when it is not on the path at all.
+    /// package runs it in - so it needs a host. The search is <see cref="DotnetHost.Find"/>, which finds one
+    /// put where an installer usually puts it as well as one that is only on <c>PATH</c>, and it is the same
+    /// answer the launcher's own first screen is decided on: a machine with no runtime is answered the same
+    /// way in both places rather than by two searches that could disagree. What is left for here is the last
+    /// resort: the bare name, so a machine with no runtime still gets an attempt and the operating system's
+    /// own "not found" rather than nothing at all.
     /// </remarks>
-    public static string? FindDotnetHost() {
-        var machine = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
-
-        var local = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Microsoft", "dotnet", "dotnet.exe");
-
-        foreach (var installed in new[] { machine, local }) {
-            if (File.Exists(installed)) {
-                return installed;
-            }
-        }
-
-        // Nothing is installed where it usually is, so the one on PATH is asked for by name and the
-        // operating system resolves it when the process starts. If there is none the start fails and
-        // says so, which is the only way to find out without launching something to look.
-        return "dotnet";
-    }
+    public static string? FindDotnetHost() => DotnetHost.Find() ?? "dotnet";
 }

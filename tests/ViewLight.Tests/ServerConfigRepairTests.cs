@@ -111,10 +111,19 @@ public class ServerConfigRepairTests {
     }
 
     [Fact]
-    public void ApplyWritesThePublicPatchServerIntoAStockConfigOnDisk() {
+    public void ApplyWritesThePublicPatchServerIntoAConfigWithNoAddressOnDisk() {
         using var workspace = new TempWorkspace();
+
+        // A config with no patch server in it at all, rather than the stock address, and that is about this
+        // machine rather than the rule: whether the stock address is the broken default or a working
+        // self-hosted patch server depends on what happens to be listening on 12369 *right now*, and the
+        // launcher's own patch server is on that port whenever the stack is up. Both readings of it are
+        // covered - with a stub for the probe - in ReplacesABlankOrStockPatchServerWhenNothingAnswersThere
+        // and KeepsASelfHostedPatchServerRunningOnTheStockAddress; what is left for this test is the write
+        // itself, and a blank address is always the broken default.
         var path = workspace.WriteFile(
-            Path.Combine("server", ImlightConfig.RelativeConfigPath), StockConfig);
+            Path.Combine("server", ImlightConfig.RelativeConfigPath),
+            StockConfig.Replace(ImlightConfig.StockPatchServerUrl, string.Empty));
 
         var repair = ServerConfigRepair.Apply(path);
 

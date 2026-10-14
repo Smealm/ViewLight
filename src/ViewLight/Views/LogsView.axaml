@@ -7,30 +7,48 @@
 
   <DockPanel>
 
+    <!-- ================================================================ what to show
+         Three boxes rather than one list, because the question is which of the three things are worth
+         reading right now - all of them, or the one that is misbehaving. -->
     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
       <Button Content="Clear" Command="{Binding ClearLogsCommand}" />
+      <TextBlock Classes="muted" Text="Show:" VerticalAlignment="Center" />
+      <CheckBox Content="Launcher" IsChecked="{Binding ShowLauncherLog, Mode=TwoWay}" />
+      <CheckBox Content="Server" IsChecked="{Binding ShowServerLog, Mode=TwoWay}" />
+      <CheckBox Content="Patch server" IsChecked="{Binding ShowPatchServerLog, Mode=TwoWay}" />
       <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScrollLogs, Mode=TwoWay}" />
-      <TextBlock Classes="muted" VerticalAlignment="Center"
-                 Text="Server output appears here as it is written, including the line that marks the server ready." />
     </StackPanel>
 
+    <!-- How much is here, how much is folded, and how much the boxes above are keeping out of sight. -->
+    <TextBlock DockPanel.Dock="Bottom" Classes="muted"
+               Text="{Binding LogSummary}" Margin="0,8,0,0" />
+
     <Border Classes="card" Padding="0">
-      <ListBox x:Name="LogList" ItemsSource="{Binding Logs}" Background="Transparent">
-        <ListBox.ItemTemplate>
-          <DataTemplate x:DataType="services:LogEntry">
-            <Grid ColumnDefinitions="66,58,*">
-              <TextBlock Text="{Binding TimeDisplay}" Classes="muted"
-                         FontFamily="Consolas, monospace" VerticalAlignment="Top" />
-              <TextBlock Grid.Column="1" Text="{Binding LevelDisplay}"
-                         FontFamily="Consolas, monospace" FontSize="11" VerticalAlignment="Top"
-                         Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" />
-              <SelectableTextBlock Grid.Column="2" Text="{Binding Message}"
-                                   TextWrapping="Wrap" FontSize="12"
-                                   Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" />
-            </Grid>
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
+      <!-- A document rather than a list: the whole log is one piece of monospace text per run of lines, so
+           a drag across it copies the run, and art a process printed is not re-wrapped into nonsense. -->
+      <ScrollViewer x:Name="LogScroll"
+                    HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Log.Blocks}" Margin="14,10">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="services:LogBlock">
+              <StackPanel Orientation="Vertical">
+                <!-- A run of the same line arriving again, folded to one line. The number is the count, and
+                     pressing it opens the run so the lines can be read and copied, or folds it back up. -->
+                <Button Classes="logFold"
+                        Content="{Binding FoldLine}"
+                        IsVisible="{Binding HasFoldLine}"
+                        Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}"
+                        Click="OnFoldClick" />
+                <SelectableTextBlock Classes="terminal"
+                                     Text="{Binding Body}"
+                                     IsVisible="{Binding HasBody}"
+                                     Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" />
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
     </Border>
 
   </DockPanel>
