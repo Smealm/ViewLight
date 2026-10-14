@@ -1,0 +1,182 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ViewLight.ViewModels"
+        xmlns:views="using:ViewLight.Views"
+        x:Class="ViewLight.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="ViewLight · Revive101 launcher"
+        Width="1180" Height="780"
+        MinWidth="980" MinHeight="660"
+        Background="{DynamicResource ContentBackgroundBrush}">
+
+  <Panel>
+
+    <!-- ================================================ first run: ask for the locations -->
+    <views:SetupView IsVisible="{Binding RequiresSetup}" />
+
+    <!-- ================================================ main shell -->
+    <Grid ColumnDefinitions="236,*" IsVisible="{Binding ShowMainInterface}">
+
+      <Border Grid.Column="0" Background="{DynamicResource SidebarBackgroundBrush}">
+        <DockPanel>
+
+          <StackPanel DockPanel.Dock="Top" Margin="20,22,20,20" Spacing="2">
+            <TextBlock Text="ViewLight" FontSize="22" FontWeight="Bold"
+                       Foreground="{DynamicResource TextPrimaryBrush}" />
+            <TextBlock Text="A Revive101 launcher" FontSize="11"
+                       Foreground="{DynamicResource TextMutedBrush}" />
+          </StackPanel>
+
+          <!-- The sidebar says the same thing Home does, and says nothing at all while there is nothing
+               to report: a launcher with no server running should not look like it needs attention. -->
+          <Border DockPanel.Dock="Bottom" Classes="card" Margin="14,10,14,16" Padding="12"
+                  IsVisible="{Binding IsStatusVisible}">
+            <StackPanel Spacing="4">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                         Fill="{DynamicResource AccentBrush}" />
+                <TextBlock Text="{Binding StatusHeadline}" FontSize="13" FontWeight="SemiBold"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+              <TextBlock Classes="muted" Text="{Binding ClientSentence}" />
+            </StackPanel>
+          </Border>
+
+          <StackPanel Margin="10,0" Spacing="2">
+            <Button Classes="nav" Classes.selected="{Binding IsHomeSelected}"
+                    Content="Home" Command="{Binding NavigateCommand}" CommandParameter="Home" />
+            <Button Classes="nav" Classes.selected="{Binding IsProfileSelected}"
+                    Content="Profile" Command="{Binding NavigateCommand}" CommandParameter="Profile" />
+            <Button Classes="nav" Classes.selected="{Binding IsSettingsSelected}"
+                    Content="Settings" Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+            <Button Classes="nav" Classes.selected="{Binding IsLogsSelected}"
+                    Content="Log" Command="{Binding NavigateCommand}" CommandParameter="Logs" />
+            <Button Classes="nav" Classes.selected="{Binding IsAboutSelected}"
+                    Content="About" Command="{Binding NavigateCommand}" CommandParameter="About" />
+          </StackPanel>
+
+        </DockPanel>
+      </Border>
+
+      <DockPanel Grid.Column="1">
+
+        <Border DockPanel.Dock="Top" Padding="24,16"
+                Background="{DynamicResource SidebarBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="0,0,0,1">
+          <StackPanel Spacing="2" VerticalAlignment="Center">
+            <TextBlock Text="{Binding SectionTitle}" FontSize="19" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding SectionSubtitle}" Classes="muted" />
+          </StackPanel>
+        </Border>
+
+        <Panel Margin="24">
+          <views:HomeView IsVisible="{Binding IsHomeSelected}" />
+          <views:ProfileView IsVisible="{Binding ShowProfilePage}" />
+          <views:AchievementsView IsVisible="{Binding ShowAchievementsPage}" />
+          <views:SettingsView IsVisible="{Binding IsSettingsSelected}" />
+          <views:LogsView IsVisible="{Binding IsLogsSelected}" />
+          <views:AboutView IsVisible="{Binding IsAboutSelected}" />
+        </Panel>
+
+      </DockPanel>
+    </Grid>
+
+    <!-- ================================================ the account the game signs in as
+         In the corner of the window rather than among the rows of Home, because it is a state the launcher
+         is in rather than a step on the way to pressing Play - and because who is signed in is worth
+         knowing from whichever page you are on.
+
+         Closed, it is the picture and the name. Clicked, it opens over the page below into the banner and
+         the score, and clicking that takes the account section. The pointer leaving it folds it back after
+         a moment, which is the shrink animation: the motion is a transition on the size, so the card
+         follows the state the view model is in and cannot get stuck open. -->
+    <Border x:Name="ProfileCard" Classes="profileCard" Classes.open="{Binding IsProfileCardOpen}"
+            HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,22,0"
+            IsVisible="{Binding HasProfile}"
+            PointerEntered="OnProfileCardPointerEntered" PointerExited="OnProfileCardPointerExited">
+      <Panel>
+
+        <Button Classes="chip" Command="{Binding OpenProfileCardCommand}"
+                IsVisible="{Binding !IsProfileCardOpen}">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="8,6">
+            <Panel Width="34" Height="34" VerticalAlignment="Center">
+              <Ellipse Width="34" Height="34" IsVisible="{Binding HasProfileAvatar}">
+                <Ellipse.Fill>
+                  <ImageBrush Source="{Binding ProfileAvatar}" Stretch="UniformToFill" />
+                </Ellipse.Fill>
+              </Ellipse>
+              <Ellipse Width="34" Height="34" Fill="{DynamicResource AccentBrush}"
+                       IsVisible="{Binding !HasProfileAvatar}" />
+              <TextBlock Text="{Binding ProfileInitials}" IsVisible="{Binding !HasProfileAvatar}"
+                         FontSize="12" FontWeight="Bold" Foreground="White"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Panel>
+
+            <TextBlock Grid.Column="1" Text="{Binding ProfileName}" FontSize="13" FontWeight="SemiBold"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+          </Grid>
+        </Button>
+
+        <Button Classes="chip card" Command="{Binding ShowAccountCommand}"
+                IsVisible="{Binding IsProfileCardOpen}">
+          <Panel>
+
+            <!-- The banner, drawn as the fill of a rounded box rather than a picture clipped to one, so
+                 there is no rectangle of picture left showing outside the corners. -->
+            <Border Background="{DynamicResource SidebarBackgroundBrush}" CornerRadius="10">
+              <Border CornerRadius="10">
+                <Border.Background>
+                  <ImageBrush Source="{Binding ProfileBanner}" Stretch="UniformToFill" />
+                </Border.Background>
+              </Border>
+            </Border>
+
+            <!-- The bottom half, brought up from the surface behind the window: the picture fades into it
+                 rather than being cut off by it, and because the gradient is the theme's own surface, the
+                 name and the score are read against the theme's own text rather than white on a scrim. -->
+            <Border CornerRadius="0,0,10,10"
+                    Background="{DynamicResource ProfileCardGradientBrush}" />
+
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Margin="14"
+                  VerticalAlignment="Bottom">
+
+              <Panel Width="40" Height="40" VerticalAlignment="Center">
+                <Ellipse Width="40" Height="40" IsVisible="{Binding HasProfileAvatar}">
+                  <Ellipse.Fill>
+                    <ImageBrush Source="{Binding ProfileAvatar}" Stretch="UniformToFill" />
+                  </Ellipse.Fill>
+                </Ellipse>
+                <Ellipse Width="40" Height="40" Fill="{DynamicResource AccentBrush}"
+                         IsVisible="{Binding !HasProfileAvatar}" />
+                <TextBlock Text="{Binding ProfileInitials}" IsVisible="{Binding !HasProfileAvatar}"
+                           FontSize="14" FontWeight="Bold" Foreground="White"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Panel>
+
+              <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                <TextBlock Text="{Binding ProfileName}" FontSize="15" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding ProfileBadgeCountText}" FontSize="11"
+                           Foreground="{DynamicResource TextMutedBrush}"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="Open the account section ›" FontSize="11" Classes="accent" />
+              </StackPanel>
+
+              <Panel Grid.Column="2" Width="52" Height="52" VerticalAlignment="Center">
+                <Ellipse Fill="{DynamicResource AccentBrush}" />
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                  <TextBlock Text="{Binding ProfileScoreCircleText}" FontSize="16" FontWeight="Bold"
+                             Foreground="White" HorizontalAlignment="Center" />
+                  <TextBlock Text="score" FontSize="9" Foreground="#CCFFFFFF"
+                             HorizontalAlignment="Center" />
+                </StackPanel>
+              </Panel>
+            </Grid>
+          </Panel>
+        </Button>
+
+      </Panel>
+    </Border>
+
+  </Panel>
+</Window>

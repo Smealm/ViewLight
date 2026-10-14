@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ViewLight.Views.ConfirmCloseDialog"
+        Title="Close ViewLight?"
+        Width="480"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ContentBackgroundBrush}">
+
+  <StackPanel Margin="24" Spacing="14">
+
+    <TextBlock Classes="cardTitle" FontSize="17"
+               Text="Close ViewLight and stop the server?" />
+
+    <TextBlock Classes="muted"
+               Text="ViewLight started the Imlight server, and closing the launcher stops it. Anyone playing on that server is disconnected." />
+
+    <TextBlock x:Name="DetailText" Classes="muted" />
+
+    <CheckBox x:Name="DontAskAgainCheck"
+              Content="Don't ask me again (the setting is in Settings)" />
+
+    <!-- Enter keeps the server up; stopping it takes a deliberate click. -->
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
+      <Button Content="Keep it running" MinWidth="140"
+              IsDefault="True" IsCancel="True" Click="OnKeepRunningClick" />
+      <Button Classes="accent" Content="Stop the server and close" MinWidth="200"
+              Click="OnCloseAndStopClick" />
+    </StackPanel>
+
+  </StackPanel>
+</Window>

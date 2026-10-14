@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ViewLight/ViewLight.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ViewLight.Tests/ViewLight.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,249 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             xmlns:models="using:ViewLight.Models"
+             x:Class="ViewLight.Views.ProfileView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="16">
+
+      <!-- ============================================================ the profile itself
+           First on the tab, because it is what the tab is about: whose profile this is, what they look
+           like, how they stand on this server, and what they are worth - which is the circle, and the way
+           in to the achievements it was scored from. The account switcher sits under it rather than over
+           it: a screen that opens on a choice of accounts reads as a form, not as a person. -->
+      <Border Classes="card" Padding="0" IsVisible="{Binding HasProfile}">
+        <StackPanel>
+
+          <!-- The banner. A picture if one was chosen, and otherwise the card the profile lives on, so
+               the header does not collapse into a gap. The picture is the fill of the rounded box rather
+               than a picture clipped to one, so no corner of it can show outside the rounding. -->
+          <Border Height="132" CornerRadius="10,10,0,0"
+                  Background="{DynamicResource SidebarBackgroundBrush}">
+            <Border CornerRadius="10,10,0,0" IsVisible="{Binding HasProfileBanner}">
+              <Border.Background>
+                <ImageBrush Source="{Binding ProfileBanner}" Stretch="UniformToFill" />
+              </Border.Background>
+            </Border>
+          </Border>
+
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16" Margin="18,14">
+
+            <!-- The picture is the fill of an ellipse rather than a picture clipped to a round-cornered
+                 box: the shape is the mask, so no part of the picture can show outside the circle and the
+                 circle cannot come out looking like a rounded square. -->
+            <Panel Width="76" Height="76" VerticalAlignment="Center">
+              <Ellipse Width="76" Height="76" IsVisible="{Binding HasProfileAvatar}"
+                       Stroke="{DynamicResource CardBorderBrush}" StrokeThickness="2">
+                <Ellipse.Fill>
+                  <ImageBrush Source="{Binding ProfileAvatar}" Stretch="UniformToFill" />
+                </Ellipse.Fill>
+              </Ellipse>
+
+              <Ellipse Width="76" Height="76" Fill="{DynamicResource AccentBrush}"
+                       IsVisible="{Binding !HasProfileAvatar}" />
+              <TextBlock Text="{Binding ProfileInitials}" IsVisible="{Binding !HasProfileAvatar}"
+                         FontSize="26" FontWeight="Bold" Foreground="White"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Panel>
+
+            <StackPanel Grid.Column="1" Spacing="6" VerticalAlignment="Center">
+              <TextBlock Text="{Binding ProfileName}" FontSize="19" FontWeight="SemiBold" />
+              <TextBlock Classes="muted" Text="{Binding ProfileAccountLine}" />
+
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Border Classes="pill">
+                  <TextBlock Text="{Binding ProfilePlaytimeText}" />
+                </Border>
+                <Border Classes="pill">
+                  <TextBlock Text="{Binding ProfileSessionsText}" />
+                </Border>
+                <Border Classes="pill">
+                  <TextBlock Text="{Binding ProfileStandingText}" Classes.muted="{Binding ProfileIsNotClean}"
+                             Classes.warning="{Binding ProfileIsNotClean}" />
+                </Border>
+              </StackPanel>
+            </StackPanel>
+
+            <!-- The score, as a circle: what the profile is worth at a glance, and the way in to the
+                 achievements it was scored from. One page of its own rather than a card that unfolds here,
+                 because the catalog is long enough to be read rather than glanced at. -->
+            <StackPanel Grid.Column="2" Spacing="8" VerticalAlignment="Center">
+              <Panel Width="84" Height="84" HorizontalAlignment="Center">
+                <Ellipse Fill="{DynamicResource AccentBrush}" />
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                  <TextBlock Text="{Binding ProfileScoreCircleText}" FontSize="24" FontWeight="Bold"
+                             Foreground="White" HorizontalAlignment="Center" />
+                  <TextBlock Text="score" FontSize="10" Foreground="#CCFFFFFF"
+                             HorizontalAlignment="Center" />
+                </StackPanel>
+              </Panel>
+
+              <Button Content="Achievements" Command="{Binding OpenAchievementsCommand}"
+                      HorizontalAlignment="Center" />
+            </StackPanel>
+          </Grid>
+
+          <StackPanel Spacing="10" Margin="18,0,18,18">
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Choose picture…" Command="{Binding ChooseProfilePictureCommand}" />
+              <Button Content="Choose banner…" Command="{Binding ChooseProfileBannerCommand}" />
+              <Button Content="Remove picture" Command="{Binding ClearProfilePictureCommand}" />
+              <Button Content="Remove banner" Command="{Binding ClearProfileBannerCommand}" />
+            </StackPanel>
+
+            <Border Classes="list">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="muted" Text="{Binding ProfileFirstPlayedText}" />
+                <TextBlock Classes="muted" Text="{Binding ProfileLastPlayedText}" />
+                <TextBlock Classes="muted" Text="{Binding ProfileStandingDetail}" TextWrapping="Wrap" />
+                <TextBlock Classes="value" Text="{Binding ProfileBadgeCountText}" />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="{Binding ProfileNotice}" Classes="muted" TextWrapping="Wrap"
+                       IsVisible="{Binding HasProfileNotice}" />
+
+            <!-- Bosses, counted against the server's own creature list. Said here rather than left to the
+                 badges, because when there are none the reason is worth reading. -->
+            <TextBlock Text="{Binding ProfileBossesText}" Classes="muted" TextWrapping="Wrap" />
+
+            <TextBlock Text="{Binding ProfileDataProblem}" Classes="warning" TextWrapping="Wrap"
+                       IsVisible="{Binding HasProfileDataProblem}" />
+
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================================ the account
+           The same list is both "whose profile is on screen" and "who Play signs in as", so it is named
+           for the thing the player does with it. A button rather than a box across the card: the launcher
+           has one profile almost always, and a picker in the layout takes the space of a choice nobody is
+           making. -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Account" />
+
+          <StackPanel Spacing="6" IsVisible="{Binding HasProfiles}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button x:Name="SwitchAccountButton" Content="Switch account">
+                <Button.Flyout>
+                  <Flyout Placement="BottomEdgeAlignedLeft">
+                    <StackPanel Spacing="6" MinWidth="240">
+                      <TextBlock Classes="label" Text="Sign in as" />
+                      <ListBox x:Name="ProfileChoices" ItemsSource="{Binding Profiles}"
+                               SelectedItem="{Binding SelectedProfile, Mode=TwoWay}"
+                               SelectionChanged="OnProfileChoiceMade"
+                               PointerReleased="OnProfileChoiceMade">
+                        <ListBox.ItemTemplate>
+                          <DataTemplate x:DataType="models:LauncherProfile">
+                            <StackPanel Spacing="2">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                              <TextBlock Classes="muted" FontSize="11" Text="{Binding Username}" />
+                            </StackPanel>
+                          </DataTemplate>
+                        </ListBox.ItemTemplate>
+                      </ListBox>
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+
+              <!-- The list behind the button is the last known one rather than a live read, said out loud
+                   so it is not taken for the database having been consulted. -->
+              <Border Classes="pill" VerticalAlignment="Center"
+                      IsVisible="{Binding AccountsAreRemembered}">
+                <TextBlock Text="remembered" Classes="muted" FontSize="11" />
+              </Border>
+            </StackPanel>
+
+            <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                       Text="Switching account is also switching who Play signs in as: the game is handed over as the account picked here." />
+          </StackPanel>
+
+          <!-- With nothing to pick, the screen says why rather than leaving an empty box: an account
+               exists only once a server *here* has made one, and the one Imlight starts a server with is
+               the admin account named in its config. A name remembered from another server is not
+               offered - it would be somebody else's account, presented as an account of this one. -->
+          <Border Classes="list" IsVisible="{Binding !HasProfile}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+              <Panel Width="44" Height="44" VerticalAlignment="Top"
+                     IsVisible="{Binding HasStarterAccount}">
+                <Ellipse Fill="{DynamicResource AccentBrush}" />
+                <TextBlock Text="{Binding StarterAccountInitials}" FontSize="16" FontWeight="Bold"
+                           Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Panel>
+              <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock Text="{Binding StarterAccountTitle}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Classes="muted" Text="{Binding StarterAccountSummary}" TextWrapping="Wrap" />
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <TextBlock Classes="muted" Text="{Binding AutoLoginSummary}" TextWrapping="Wrap"
+                     IsVisible="{Binding HasProfile}" />
+
+          <!-- A profile kept for an account this server does not have is not offered, and is not hidden
+               either: saying so is what stops it from looking like the launcher lost it. -->
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="{Binding UnlistedProfilesText}"
+                     IsVisible="{Binding HasUnlistedProfiles}" />
+
+          <!-- Whether the launcher is holding the database itself, and what it is doing with it. A
+               launcher that cannot run the server's RavenDB says so here rather than looking idle. -->
+          <TextBlock Classes="muted" FontSize="11" Text="{Binding IdleDatabaseStatus}" TextWrapping="Wrap"
+                     IsVisible="{Binding HasIdleDatabaseStatus}" />
+
+          <!-- The whole point of the feature, said on the screen rather than only in a document. -->
+          <TextBlock Classes="muted" Text="{Binding ProfileScopeNote}" TextWrapping="Wrap" FontSize="11" />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================================ the wizards on the account -->
+      <Border Classes="card" IsVisible="{Binding HasProfile}">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Wizards" />
+          <TextBlock Classes="muted" Text="{Binding ProfileWizardsSummary}" TextWrapping="Wrap" />
+
+          <ItemsControl ItemsSource="{Binding ProfileWizards}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="models:ProfileWizard">
+                <Border Classes="list" Margin="0,4">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Spacing="5">
+                      <TextBlock Classes="value" Text="{Binding DisplayName}" />
+
+                      <!-- What the wizard is, at a glance: the game's own school name and the level, both
+                           read from the player database. -->
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Classes="pill">
+                          <TextBlock Text="{Binding SchoolText}" FontSize="11" />
+                        </Border>
+                        <Border Classes="pill">
+                          <TextBlock Text="{Binding LevelText}" FontSize="11" />
+                        </Border>
+                      </StackPanel>
+
+                      <TextBlock Classes="muted" Text="{Binding LastSeenText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="3" HorizontalAlignment="Right">
+                      <TextBlock Classes="value" Text="{Binding GoldText}" HorizontalAlignment="Right" />
+                      <TextBlock Classes="muted" HorizontalAlignment="Right"
+                                 Text="{Binding QuestsText}" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Names, schools, levels, gold and finished quests are all read while the server is running: a name is resolved from the game's own name tables - the same ones the client uses - or from the name the server's log used, whichever the launcher can read. A character whose name it could not read at all is shown by its id rather than under a name that might be someone else's." />
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

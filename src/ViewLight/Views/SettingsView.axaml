@@ -1,0 +1,470 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             xmlns:models="using:ViewLight.Models"
+             x:Class="ViewLight.Views.SettingsView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="16">
+
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Classes="accent" Content="Apply starter settings" Command="{Binding ApplyStarterPresetCommand}" />
+        <Button Content="Save settings" Command="{Binding SaveSettingsCommand}" />
+        <Button Content="Reload from disk" Command="{Binding ReloadSettingsCommand}" />
+      </StackPanel>
+
+      <TextBlock Classes="muted"
+                 Text="Everything below is written into Config/Imlight.ini in your server folder. ViewLight only changes the values you can see; the rest of the file, comments and all, is left alone." />
+
+      <!-- ==================================================== the game folder -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Game folder" />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Where Wizard101 is installed" />
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBox Text="{Binding ClientPath, Mode=TwoWay}"
+                       Watermark="C:\Program Files (x86)\Steam\steamapps\common\Wizard101" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Detect"
+                      Command="{Binding DetectGameFolderCommand}" />
+              <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                      Command="{Binding BrowseClientFolderCommand}" />
+            </Grid>
+            <TextBlock Classes="muted"
+                       Text="The folder holding bin\ and Data\ - not the bin folder itself. The game is started from here, and the client's own build is read from here." />
+            <TextBlock Classes="status" Text="{Binding GameFolderStatus}" />
+            <TextBlock Classes="muted" Text="{Binding RootWadStatus}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== the server
+           Everything to do with the Imlight server itself: where it lives, which build it is, keeping
+           it current, and running it by hand. Home does the everyday version of this with Play, so this
+           is where you come when you want the server on its own. -->
+      <Border Classes="card">
+        <StackPanel Spacing="14">
+          <TextBlock Classes="cardTitle" Text="Server Settings" />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Server folder" />
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBox Text="{Binding ServerPath, Mode=TwoWay}" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Use recommended"
+                      Command="{Binding UseRecommendedServerFolderCommand}" />
+              <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                      Command="{Binding BrowseServerFolderCommand}" />
+            </Grid>
+            <TextBlock Classes="status" Text="{Binding ServerFolderStatus}" />
+          </StackPanel>
+
+          <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto">
+            <TextBlock Classes="label" Text="Server build" />
+            <TextBlock Grid.Column="1" Classes="value" Text="{Binding ServerBuildText}" />
+
+            <TextBlock Grid.Row="1" Classes="label" Text="Client build" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding ClientBuildText}" />
+
+            <TextBlock Grid.Row="2" Classes="label" Text="Installed" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Classes="value"
+                       Text="{Binding InstalledReleaseText}" />
+
+            <TextBlock Grid.Row="3" Classes="label" Text="Newest release" />
+            <TextBlock Grid.Row="3" Grid.Column="1" Classes="value"
+                       Text="{Binding LatestReleaseText}" />
+          </Grid>
+
+          <TextBlock Classes="muted" Text="{Binding ClientBuildMissingHint}"
+                     IsVisible="{Binding !HasClientBuild}" />
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Check for updates" Command="{Binding CheckForUpdatesCommand}" />
+            <Button Classes="accent" Content="Download latest"
+                    Command="{Binding InstallOrUpdateCommand}" />
+          </StackPanel>
+
+          <Border Classes="glass" IsVisible="{Binding IsBusy}">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding InstallStage}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Cancel" Command="{Binding CancelInstallCommand}" />
+              </Grid>
+              <ProgressBar Value="{Binding InstallProgress}" Maximum="100" />
+            </StackPanel>
+          </Border>
+
+          <StackPanel Spacing="6">
+            <TextBlock Classes="label" Text="Run the server yourself" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Start the server" Command="{Binding StartServerCommand}" />
+              <Button Content="Stop the server" Command="{Binding StopServerCommand}" />
+              <Button Content="Start Wizard101" Command="{Binding LaunchClientCommand}" />
+              <Button Content="Open the log" Command="{Binding NavigateCommand}"
+                      CommandParameter="Logs" />
+            </StackPanel>
+            <TextBlock Classes="muted"
+                       Text="Play on Home does all of this for you. These are here for running the server without the game, or starting the game against a server that is already up." />
+          </StackPanel>
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="What Wizard101 is started with" />
+            <TextBlock Classes="value" Text="{Binding ClientLaunchArguments}" />
+          </StackPanel>
+
+          <TextBlock Text="{Binding ClientBuildMismatch}" IsVisible="{Binding HasClientBuildMismatch}"
+                     Classes.warning="{Binding EnforceRevision}"
+                     Classes.muted="{Binding !EnforceRevision}" />
+          <TextBlock Classes="error" Text="{Binding ReleaseCheckError}"
+                     IsVisible="{Binding HasReleaseCheckError}" />
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== administrator -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Administrator account" />
+          <TextBlock Classes="muted"
+                     Text="Imlight creates this account on boot. Do not leave the stock values in place." />
+
+          <Grid ColumnDefinitions="*,16,*">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Username (AdminAccountUsername)" />
+              <TextBox Text="{Binding AdminUsername, Mode=TwoWay}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2">
+              <TextBlock Classes="label" Text="Password (AdminAccountPassword)" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Text="{Binding AdminPassword, Mode=TwoWay}" />
+                <Button Grid.Column="1" Margin="8,0,0,0" Content="Generate"
+                        Command="{Binding GenerateAdminPasswordCommand}" />
+              </Grid>
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== making an account
+           Here rather than on the profile tab, with the rest of account management: making an account is a
+           thing an owner does to their server, not something about who is playing right now. It writes
+           straight into the server's own database in the shape Imlight writes, because Imlight's own way of
+           making one is a chat command typed inside the game. -->
+      <Border Classes="card" IsVisible="{Binding ServerInstalled}">
+        <StackPanel Spacing="12">
+
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Classes="cardTitle" Text="Create an account" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Classes="muted" Text="Your server's player database"
+                       VerticalAlignment="Center" />
+          </Grid>
+
+          <TextBlock Classes="muted" Text="{Binding CreateAccountSummary}" TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="10">
+            <TextBox Grid.Column="0" Text="{Binding NewAccountUsername, Mode=TwoWay}"
+                     Watermark="Username" />
+            <TextBox Grid.Column="1" Text="{Binding NewAccountPassword, Mode=TwoWay}"
+                     Watermark="Password" PasswordChar="•" />
+            <Button Grid.Column="2" Classes="accent" Content="Create account"
+                    Command="{Binding CreateAccountCommand}" />
+          </Grid>
+
+          <TextBlock Classes="muted" Text="{Binding CreateAccountNotice}" TextWrapping="Wrap"
+                     IsVisible="{Binding HasCreateAccountNotice}" />
+
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== new characters -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="New characters" />
+          <TextBlock Classes="muted"
+                     Text="What a brand new character starts with. The starter item list is set further down." />
+
+          <CheckBox Content="Skip the tutorial (TutorialDisabled)"
+                    IsChecked="{Binding TutorialDisabled, Mode=TwoWay}" />
+
+          <Grid ColumnDefinitions="*,16,*">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Starting level (StartingLevel)" />
+              <TextBox Text="{Binding StartingLevel, Mode=TwoWay}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2">
+              <TextBlock Classes="label" Text="Starting gold (BaseGoldPouch)" />
+              <TextBox Text="{Binding BaseGoldPouch, Mode=TwoWay}" />
+            </StackPanel>
+          </Grid>
+
+          <StackPanel>
+            <TextBlock Classes="label" Text="Starting zone (StartingZone)" />
+            <TextBox Text="{Binding StartingZone, Mode=TwoWay}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== starter items -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Starter items" />
+          <TextBlock Classes="muted"
+                     Text="These are the items a new character ends up holding, granted in the tutorial or on the first login when the tutorial is skipped." />
+
+          <TextBlock Classes="warning" Text="{Binding StarterKitRequirement}" />
+
+          <StackPanel>
+            <TextBlock Classes="label" Text="Items granted (DefaultItems)" />
+            <TextBox Text="{Binding DefaultItemsText, Mode=TwoWay}" />
+          </StackPanel>
+
+          <TextBlock Classes="error" Text="{Binding StarterKitError}"
+                     IsVisible="{Binding HasStarterKitError}" />
+
+          <Grid ColumnDefinitions="*,Auto,*" Height="270">
+
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Classes="label" Text="Available items" />
+              <TextBlock DockPanel.Dock="Top" Classes="muted" Margin="0,0,0,4"
+                         Text="{Binding CatalogCountText}" />
+              <TextBox DockPanel.Dock="Top" Margin="0,0,0,8"
+                       Text="{Binding ItemSearch, Mode=TwoWay}"
+                       Watermark="Search by name, category or ID…" />
+              <Button DockPanel.Dock="Bottom" Margin="0,8,0,0" Content="Add all shown"
+                      Command="{Binding AddAllFilteredToKitCommand}"
+                      IsEnabled="{Binding CanAddStarterItem}" />
+
+              <Border Classes="list">
+                <ListBox ItemsSource="{Binding FilteredCatalog}"
+                         SelectedItem="{Binding SelectedCatalogItem, Mode=TwoWay}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:ItemTemplate">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{Binding Name}" FontSize="13" />
+                          <TextBlock Text="{Binding Category}" Classes="muted" FontSize="11" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{Binding TemplateId}" Classes="muted"
+                                   FontFamily="Consolas, monospace" VerticalAlignment="Center"
+                                   Margin="8,0,0,0" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Border>
+            </DockPanel>
+
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8" Margin="12,0">
+              <Button Content="Add →" Command="{Binding AddSelectedItemToKitCommand}"
+                      IsEnabled="{Binding CanAddStarterItem}" />
+              <Button Content="← Remove" Command="{Binding RemoveSelectedItemFromKitCommand}"
+                      IsEnabled="{Binding CanRemoveStarterItem}" />
+            </StackPanel>
+
+            <DockPanel Grid.Column="2">
+              <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,8">
+                <TextBlock Classes="label" Text="Granted after the tutorial" />
+                <TextBlock Classes="muted" Text="{Binding StarterKitSummary}" />
+              </StackPanel>
+
+              <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                <Button Content="Reset to wand + deck" Command="{Binding ResetStarterKitCommand}" />
+                <Button Classes="accent" Content="Save starter kit" Command="{Binding SaveStarterKitCommand}" />
+              </StackPanel>
+
+              <Border Classes="list">
+                <ListBox ItemsSource="{Binding StarterKit}"
+                         SelectedItem="{Binding SelectedStarterItem, Mode=TwoWay}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:ItemTemplate">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{Binding Name}" FontSize="13" />
+                          <TextBlock Text="{Binding Category}" Classes="muted" FontSize="11" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{Binding TemplateId}" Classes="muted"
+                                   FontFamily="Consolas, monospace" VerticalAlignment="Center"
+                                   Margin="8,0,0,0" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Border>
+            </DockPanel>
+
+          </Grid>
+
+          <!-- The item names come from Imlight's own list for now, because the game's data cannot be
+               decoded yet. One short line here; About explains what that means. -->
+          <Border Classes="card" Padding="14" BorderBrush="{DynamicResource WarningBrush}">
+            <StackPanel Spacing="6">
+              <TextBlock FontWeight="SemiBold" Foreground="{DynamicResource WarningBrush}"
+                         Text="Names are limited for now" IsVisible="{Binding ItemsAreStubbed}" />
+              <TextBlock Classes="muted" Text="{Binding ItemsNotice}" />
+              <TextBlock Classes="value" Text="{Binding RootWadProbeText}" />
+              <TextBlock Classes="muted" Text="{Binding RootWadManifestText}" />
+            </StackPanel>
+          </Border>
+
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== network -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Network" />
+
+          <Grid ColumnDefinitions="*,16,*">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Server address given to the client (GameServerIP)" />
+              <TextBox Text="{Binding GameServerIp, Mode=TwoWay}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2">
+              <TextBlock Classes="label" Text="Login port (LoginServerPort)" />
+              <TextBox Text="{Binding LoginServerPort, Mode=TwoWay}" />
+            </StackPanel>
+          </Grid>
+
+          <Grid ColumnDefinitions="*,16,*">
+            <StackPanel>
+              <TextBlock Classes="label" Text="First realm's port (GameServerPort)" />
+              <TextBox Text="{Binding GameServerPort, Mode=TwoWay}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2">
+              <TextBlock Classes="label" Text="How many realms (GameServerCount)" />
+              <TextBox Text="{Binding GameServerCount, Mode=TwoWay}" />
+            </StackPanel>
+          </Grid>
+
+          <StackPanel>
+            <TextBlock Classes="label" Text="Realm names, comma-separated (RealmNames)" />
+            <TextBox Text="{Binding RealmNames, Mode=TwoWay}" />
+          </StackPanel>
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Patch server (PatchServerInternalUrl)" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Text="{Binding PatchServerUrl, Mode=TwoWay}"
+                       Watermark="https://patcher.phill030.de" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Use the public one"
+                      Command="{Binding UsePublicPatchServerCommand}" />
+            </Grid>
+            <TextBlock Classes="muted"
+                       Text="Imlight downloads Root.wad from a patch server, so a server that is not answering stops the whole thing booting. Leave this on the public address the Revive101 team runs, or point it at your own patch server (Aurorium)." />
+          </StackPanel>
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Client launch arguments" />
+            <TextBlock Classes="value" Text="{Binding ClientLaunchArguments}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== world data -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="World data and logging" />
+
+          <CheckBox Content="Fetch the latest world data on every start (SpiralDBAutoFetch)"
+                    IsChecked="{Binding SpiralDbAutoFetch, Mode=TwoWay}" />
+
+          <Grid ColumnDefinitions="*,16,*">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Server log level (LogLevel)" />
+              <ComboBox ItemsSource="{Binding LogLevels}"
+                        SelectedItem="{Binding SelectedLogLevel, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2">
+              <TextBlock Classes="label" Text="Client revision this server accepts (GameRevision)" />
+              <TextBox Text="{Binding GameRevision, Mode=TwoWay}" IsEnabled="False" />
+            </StackPanel>
+          </Grid>
+
+          <CheckBox Content="Refuse clients whose revision does not match (EnforceRevision)"
+                    IsChecked="{Binding EnforceRevision, Mode=TwoWay}" />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Database port (EmbeddedDatabasePort)" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Text="{Binding EmbeddedDatabasePort, Mode=TwoWay}" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Find a free port"
+                      Command="{Binding FindFreeEmbeddedDatabasePortCommand}" />
+            </Grid>
+            <TextBlock Classes="muted"
+                       Text="The server's own database listens here. Imlight will not start when 8080 is already taken by something else, so the launcher moves it to a free port for you." />
+          </StackPanel>
+
+        </StackPanel>
+      </Border>
+
+      <!-- ==================================================== the launcher itself -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="ViewLight Settings" />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Theme" />
+            <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme, Mode=TwoWay}"
+                      HorizontalAlignment="Left" MinWidth="200" />
+            <TextBlock Classes="muted"
+                       Text="System follows your desktop's light or dark setting. The change applies straight away, with no restart." />
+          </StackPanel>
+
+          <!-- The page the launcher opens on. A setting rather than a memory, so leaving the launcher on
+               any given page does not change where the next start begins. -->
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Default page" />
+            <ComboBox ItemsSource="{Binding LandingPages}"
+                      SelectedItem="{Binding DefaultLandingPage, Mode=TwoWay}"
+                      HorizontalAlignment="Left" MinWidth="200" />
+            <TextBlock Classes="muted"
+                       Text="Which page ViewLight opens on. Home is the default: starting the launcher should land you ready to play, not on whatever page you last looked at." />
+          </StackPanel>
+
+          <CheckBox Content="Ask before closing while the server is running"
+                    IsChecked="{Binding ConfirmCloseWhenServerRunning, Mode=TwoWay}" />
+
+          <TextBlock Classes="muted"
+                     Text="Closing ViewLight stops the server it started, so it asks first. That is true even if the launcher is killed outright, so the server can never be left holding its ports." />
+
+          <!-- Milestones are the rungs of two long ladders - every five levels of every school, every ten
+               duels - so somebody levelling or farming earns a run of them in one session. -->
+          <CheckBox Content="Announce milestone achievements (the level and battle ladders)"
+                    IsChecked="{Binding ShowMilestoneToasts, Mode=TwoWay}" />
+
+          <TextBlock Classes="muted"
+                     Text="Turning these off stops the notification only: the badge is still earned, still worth its points, and still on the profile." />
+
+          <!-- Portable mode decides where everything lives, so it is a launcher setting - and one that
+               takes a restart, because the paths in use were settled when this run began. -->
+          <StackPanel Spacing="6">
+            <TextBlock Classes="label" Text="Portable mode" />
+
+            <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
+              <TextBlock Classes="label" Text="This run" />
+              <TextBlock Grid.Column="1" Classes="value" Text="{Binding PortableRunText}" />
+              <TextBlock Grid.Row="1" Classes="label" Text="Lives in" />
+              <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding LauncherRoot}" />
+            </Grid>
+
+            <Button HorizontalAlignment="Left" Content="{Binding PortableToggleLabel}"
+                    Command="{Binding TogglePortableModeCommand}" />
+
+            <TextBlock Classes="warning" Text="{Binding PortableRestartNote}"
+                       IsVisible="{Binding PortableNeedsRestart}" />
+
+            <TextBlock Classes="muted"
+                       Text="Portable mode keeps ViewLight's settings, the server and the game in the folder it is run from, so the whole thing can be moved to another drive and still work. A Steam copy of the game still needs Steam installed to launch, because that is the game's own dependency rather than ViewLight's; a standalone install copied in has no such requirement." />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -1,0 +1,198 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             xmlns:services="using:ViewLight.Services"
+             x:Class="ViewLight.Views.AchievementsView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="16">
+
+      <!-- ============================================================ the way back
+           Achievements is a page of the profile rather than a section of its own, so it is opened from the
+           profile and leaves the same way - with the account it belongs to named, because a list of badges
+           with no owner on it is a list of numbers. -->
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+        <Button Content="‹ Profile" Command="{Binding CloseAchievementsCommand}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Classes="muted" Text="{Binding ProfileName}"
+                   VerticalAlignment="Center" />
+      </Grid>
+
+      <!-- ============================================================ what it adds up to -->
+      <Border Classes="card" IsVisible="{Binding HasProfile}">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="18">
+
+          <Panel Width="84" Height="84" VerticalAlignment="Center">
+            <Ellipse Fill="{DynamicResource AccentBrush}" />
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+              <TextBlock Text="{Binding ProfileScoreCircleText}" FontSize="24" FontWeight="Bold"
+                         Foreground="White" HorizontalAlignment="Center" />
+              <TextBlock Text="score" FontSize="10" Foreground="#CCFFFFFF" HorizontalAlignment="Center" />
+            </StackPanel>
+          </Panel>
+
+          <StackPanel Grid.Column="1" Spacing="5" VerticalAlignment="Center">
+            <TextBlock Classes="cardTitle" Text="Achievements" />
+            <TextBlock Classes="value" Text="{Binding ProfileBadgeCountText}" />
+            <TextBlock Classes="muted" Text="{Binding HighestScoreText}" />
+            <!-- Why the score is what it is: a doubled total with nothing to explain it is a total the
+                 badges underneath cannot account for. -->
+            <TextBlock Classes="muted" FontSize="11" Text="{Binding ProfileMultiplierText}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- ============================================================ the badges, by category -->
+      <Border Classes="card" IsVisible="{Binding HasProfile}">
+        <StackPanel Spacing="12">
+
+          <!-- Offered right where the badges that need it are, because Imlight writes zone entries and duel
+               results at debug level and a stock config does not keep them. -->
+          <Border Classes="list" IsVisible="{Binding ShowEnableDetailedLogging}">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="warning" TextWrapping="Wrap"
+                         Text="Some of these are earned from lines Imlight only writes at DEBUG level, so they cannot be earned with the server's current log level. Turning it on writes Logging.LogLevel into Config/Imlight.ini — the log file gets much bigger." />
+              <Button HorizontalAlignment="Left" Classes="accent"
+                      Content="Turn on DEBUG logging" Command="{Binding EnableDetailedLoggingCommand}" />
+            </StackPanel>
+          </Border>
+
+          <!-- Grouped by category rather than listed flat, with each heading carrying its own progress and
+               score: with this many badges, "what is left in the part I am working on" is the useful
+               question and a single list of everything cannot answer it. -->
+          <ItemsControl ItemsSource="{Binding BadgeGroups}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="services:ProfileBadgeGroup">
+                <StackPanel Spacing="8" Margin="0,0,0,18">
+
+                  <!-- The heading is the toggle: what the group is, how much of it is done, what it has
+                       scored, and an arrow saying which way clicking it will go. The progress bar stays
+                       outside the heading, so a group that has been put away still says how far along it
+                       is rather than becoming a bare word. -->
+                  <Button Classes="group" Command="{Binding ToggleCommand}" Padding="0,2">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                      <TextBlock Text="{Binding Chevron}" Classes="muted" FontSize="12" Width="10"
+                                 VerticalAlignment="Center" />
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="✓" Classes="accent" FontSize="12" VerticalAlignment="Center"
+                                   IsVisible="{Binding HasUnlocked}" />
+                      </StackPanel>
+                      <TextBlock Grid.Column="2" Classes="muted" Text="{Binding Summary}"
+                                 FontSize="11" VerticalAlignment="Center" />
+                    </Grid>
+                  </Button>
+
+                  <ProgressBar Minimum="0" Maximum="1" Value="{Binding Fraction}" Height="4" />
+
+                  <!-- The ladders, one card each rather than a tile per rung: where the account is on it,
+                       what the next milestone is, how close it is, and what that is worth. Above the badges
+                       because it is where somebody is going rather than what they have already got. -->
+                  <ItemsControl ItemsSource="{Binding Milestones}" IsVisible="{Binding IsExpanded}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="services:ProfileMilestone">
+                        <Border Classes="list" Width="252" Margin="0,0,10,10">
+                          <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                              <TextBlock Grid.Column="1" Classes="accent" FontSize="12" Text="✓"
+                                         VerticalAlignment="Center" IsVisible="{Binding IsComplete}" />
+                            </Grid>
+
+                            <TextBlock Classes="value" Text="{Binding CurrentText}" />
+
+                            <!-- The bar runs from the last milestone passed to the next one, so what it
+                                 measures is how close the next one is rather than how far the ladder goes. -->
+                            <ProgressBar Minimum="0" Maximum="1" Value="{Binding Fraction}" Height="6" />
+
+                            <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                                       Text="{Binding NextText}" />
+
+                            <Grid ColumnDefinitions="*,Auto">
+                              <TextBlock Classes="muted" FontSize="10" Text="{Binding PointsText}" />
+                              <TextBlock Grid.Column="1" Classes="accent" FontSize="10"
+                                         Text="{Binding NextPointsText}" IsVisible="{Binding HasNext}" />
+                            </Grid>
+
+                            <Grid ColumnDefinitions="*,Auto">
+                              <TextBlock Classes="muted" FontSize="10" Text="{Binding StepText}" />
+                              <TextBlock Grid.Column="1" Classes="muted" FontSize="10"
+                                         Text="{Binding RungsText}" />
+                            </Grid>
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <!-- Discovery's sub-grouping: a world and the zones of it that have been found. A world
+                       nobody has been to is not here, because it is not a discovery - its badge is in the
+                       grid below, locked, saying what it would take. -->
+                  <ItemsControl ItemsSource="{Binding Worlds}" IsVisible="{Binding IsExpanded}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="services:ProfileWorld">
+                        <Border Classes="list" Margin="0,0,0,8" Padding="12,10">
+                          <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                              <TextBlock Grid.Column="1" Classes="muted" FontSize="11"
+                                         Text="{Binding ZonesText}" VerticalAlignment="Center" />
+                            </Grid>
+
+                            <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                                       Text="{Binding ZoneList}" IsVisible="{Binding HasZones}" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <ItemsControl ItemsSource="{Binding Badges}" IsVisible="{Binding IsExpanded}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="services:ProfileBadge">
+                        <Border Classes="list" Width="252" Margin="0,0,10,10">
+                          <StackPanel Spacing="5">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                              <TextBlock Grid.Column="1" Text="✓" Classes="accent"
+                                         IsVisible="{Binding IsEarned}" />
+                            </Grid>
+
+                            <!-- The date on its own line, so when it was earned and what earned it are not
+                                 run together into one string. -->
+                            <TextBlock Text="{Binding UnlockedText}" Classes="accent" FontSize="10"
+                                       IsVisible="{Binding IsEarned}" />
+
+                            <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" FontSize="11"
+                                       MaxLines="4" TextTrimming="CharacterEllipsis"
+                                       Classes.muted="{Binding IsLocked}"
+                                       Classes.warning="{Binding IsUnavailable}" />
+
+                            <TextBlock Classes="muted" Text="{Binding ScoreText}" FontSize="10" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

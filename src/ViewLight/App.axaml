@@ -1,0 +1,145 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="using:ViewLight.Converters"
+             x:Class="ViewLight.App">
+
+  <!-- ==================================================================== the palette
+       Two full themes, chosen in Settings and applied at runtime. The surfaces are neutral greys:
+       an earlier version tinted everything blue, which read as a cold blue interface rather than a
+       dark one. The accent stays the purple the Play button is built on.
+
+       Nothing here uses an OS-composited material (Mica, acrylic, vibrancy), so both themes render
+       identically on every platform - see the readme on the Linux build. -->
+  <Application.Resources>
+    <ResourceDictionary>
+
+      <ResourceDictionary.ThemeDictionaries>
+
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#18181B" />
+          <SolidColorBrush x:Key="ContentBackgroundBrush" Color="#121214" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#1E1E21" />
+          <SolidColorBrush x:Key="CardBackgroundAltBrush" Color="#26262A" />
+          <SolidColorBrush x:Key="CardHoverBackgroundBrush" Color="#2E2E33" />
+          <SolidColorBrush x:Key="CardBorderBrush" Color="#303036" />
+
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F2F2F3" />
+          <SolidColorBrush x:Key="TextMutedBrush" Color="#9B9BA3" />
+
+          <SolidColorBrush x:Key="AccentBrush" Color="#7C5CFF" />
+          <SolidColorBrush x:Key="AccentHoverBrush" Color="#8F73FF" />
+          <SolidColorBrush x:Key="SuccessBrush" Color="#4CC38A" />
+          <SolidColorBrush x:Key="WarningBrush" Color="#E0A458" />
+          <SolidColorBrush x:Key="ErrorBrush" Color="#F0736A" />
+
+          <!-- Translucent panels: ordinary alpha, no platform material behind them. -->
+          <SolidColorBrush x:Key="GlassBackgroundBrush" Color="#1AFFFFFF" />
+          <SolidColorBrush x:Key="GlassBorderBrush" Color="#26FFFFFF" />
+
+          <!-- The Play button before it can be pressed, e.g. mid-download. -->
+          <SolidColorBrush x:Key="PlayDisabledBrush" Color="#3A3A42" />
+
+          <!-- The achievement toast, which is the one surface that floats over the desktop and the game
+               rather than sitting inside the launcher. Its panel is opaque and its text is not the shared
+               muted grey, because a translucent card over an unknown background is exactly how a
+               notification ends up unreadable - and unlike everything else here, this one has no
+               background of its own to be read against. -->
+          <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#FF23232B" />
+          <SolidColorBrush x:Key="ToastTitleBrush" Color="#FFF6F6F8" />
+          <SolidColorBrush x:Key="ToastDetailBrush" Color="#FFC9C9D3" />
+          <SolidColorBrush x:Key="ToastAccentBrush" Color="#FFB5A2FF" />
+
+          <!-- What the open profile card brings up over the bottom half of its banner: the card's own
+               surface, faded in rather than started, so the picture goes under it instead of being cut off
+               by it. It is the surface the name and the score are read against, so it is per theme - and
+               the text on it is the theme's own text brushes rather than the white the banner would want. -->
+          <LinearGradientBrush x:Key="ProfileCardGradientBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+            <GradientStop Offset="0" Color="#001E1E21" />
+            <GradientStop Offset="0.45" Color="#001E1E21" />
+            <GradientStop Offset="0.72" Color="#BF1E1E21" />
+            <GradientStop Offset="1" Color="#F21E1E21" />
+          </LinearGradientBrush>
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#ECECEF" />
+          <SolidColorBrush x:Key="ContentBackgroundBrush" Color="#F5F5F7" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="CardBackgroundAltBrush" Color="#F2F2F5" />
+          <SolidColorBrush x:Key="CardHoverBackgroundBrush" Color="#E6E6EA" />
+          <SolidColorBrush x:Key="CardBorderBrush" Color="#D8D8DE" />
+
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#17171A" />
+          <SolidColorBrush x:Key="TextMutedBrush" Color="#5C5C66" />
+
+          <SolidColorBrush x:Key="AccentBrush" Color="#6A48F0" />
+          <SolidColorBrush x:Key="AccentHoverBrush" Color="#7C5CFF" />
+          <SolidColorBrush x:Key="SuccessBrush" Color="#1F8A5B" />
+          <SolidColorBrush x:Key="WarningBrush" Color="#9A6A12" />
+          <SolidColorBrush x:Key="ErrorBrush" Color="#C0392B" />
+
+          <SolidColorBrush x:Key="GlassBackgroundBrush" Color="#B3FFFFFF" />
+          <SolidColorBrush x:Key="GlassBorderBrush" Color="#1A000000" />
+
+          <SolidColorBrush x:Key="PlayDisabledBrush" Color="#D5D5DA" />
+
+          <!-- Opaque and high-contrast for the same reason as the dark theme's: this card is read over
+               whatever happens to be on screen behind it. -->
+          <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#FFFFFFFF" />
+          <SolidColorBrush x:Key="ToastTitleBrush" Color="#FF14141A" />
+          <SolidColorBrush x:Key="ToastDetailBrush" Color="#FF4C4C57" />
+          <SolidColorBrush x:Key="ToastAccentBrush" Color="#FF5B37E8" />
+
+          <!-- The same gradient as the dark theme's, in this theme's own surface colour. -->
+          <LinearGradientBrush x:Key="ProfileCardGradientBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+            <GradientStop Offset="0" Color="#00FFFFFF" />
+            <GradientStop Offset="0.45" Color="#00FFFFFF" />
+            <GradientStop Offset="0.72" Color="#BFFFFFFF" />
+            <GradientStop Offset="1" Color="#F2FFFFFF" />
+          </LinearGradientBrush>
+        </ResourceDictionary>
+
+      </ResourceDictionary.ThemeDictionaries>
+
+      <!-- ================================================================ the banner
+           Deliberately outside the themes: the banner is a photo the game's own art shows through,
+           and light text on a dark scrim is right over it in either theme. -->
+      <LinearGradientBrush x:Key="HeroScrimBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#330A0D14" />
+        <GradientStop Offset="0.5" Color="#260A0D14" />
+        <GradientStop Offset="1" Color="#B30A0D14" />
+      </LinearGradientBrush>
+
+      <!-- The glossy button: a light top half and a darker bottom half, split hard down the middle,
+           which is the whole trick to the look. -->
+      <LinearGradientBrush x:Key="PlayGradientBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#9878FF" />
+        <GradientStop Offset="0.49" Color="#7C5CFF" />
+        <GradientStop Offset="0.5" Color="#6A48F0" />
+        <GradientStop Offset="1" Color="#5636DC" />
+      </LinearGradientBrush>
+
+      <LinearGradientBrush x:Key="PlayGradientHoverBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#AC91FF" />
+        <GradientStop Offset="0.49" Color="#8F73FF" />
+        <GradientStop Offset="0.5" Color="#7A5AF8" />
+        <GradientStop Offset="1" Color="#6446E8" />
+      </LinearGradientBrush>
+
+      <LinearGradientBrush x:Key="PlayGradientPressedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#6A48F0" />
+        <GradientStop Offset="0.49" Color="#5F3DE0" />
+        <GradientStop Offset="0.5" Color="#5636DC" />
+        <GradientStop Offset="1" Color="#4A2CC6" />
+      </LinearGradientBrush>
+
+      <conv:LogLevelToBrushConverter x:Key="LogLevelBrush" />
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://ViewLight/Styles/LauncherStyles.axaml" />
+  </Application.Styles>
+
+</Application>

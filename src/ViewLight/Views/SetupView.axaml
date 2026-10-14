@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             x:Class="ViewLight.Views.SetupView"
+             x:DataType="vm:MainWindowViewModel"
+             Background="{DynamicResource ContentBackgroundBrush}">
+
+  <ScrollViewer>
+    <StackPanel MaxWidth="660" Spacing="16" Margin="40,44"
+                HorizontalAlignment="Center" VerticalAlignment="Center">
+
+      <TextBlock Text="ViewLight" Classes="heroTitle" HorizontalAlignment="Center" />
+      <TextBlock HorizontalAlignment="Center" TextAlignment="Center" Classes="muted"
+                 Text="Before you can play, point ViewLight at your Wizard101 game folder and pick somewhere to keep the server. Both can be changed later in Settings." />
+
+      <!-- ============================================ game folder -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Game folder" />
+          <TextBlock Classes="muted"
+                     Text="The Wizard101 folder itself — the one containing bin\ and Data\." />
+
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <TextBox Text="{Binding ClientPath, Mode=TwoWay}"
+                     Watermark="C:\Program Files (x86)\Steam\steamapps\common\Wizard101" />
+            <Button Grid.Column="1" Margin="8,0,0,0" Content="Detect"
+                    Command="{Binding DetectGameFolderCommand}" />
+            <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                    Command="{Binding BrowseClientFolderCommand}" />
+          </Grid>
+
+          <TextBlock Classes="status" Text="{Binding GameFolderStatus}" />
+          <TextBlock Classes="muted" Text="{Binding RootWadStatus}" />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================ server folder -->
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Server folder" />
+          <TextBlock Classes="muted"
+                     Text="Where Imlight is downloaded and run. ViewLight manages this folder, and updates leave your settings in place." />
+
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <TextBox Text="{Binding ServerPath, Mode=TwoWay}" />
+            <Button Grid.Column="1" Margin="8,0,0,0" Content="Use recommended"
+                    Command="{Binding UseRecommendedServerFolderCommand}" />
+            <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                    Command="{Binding BrowseServerFolderCommand}" />
+          </Grid>
+
+          <TextBlock Classes="status" Text="{Binding ServerFolderStatus}" />
+        </StackPanel>
+      </Border>
+
+      <Button Classes="accent play" Content="Continue" HorizontalAlignment="Center"
+              Command="{Binding CompleteSetupCommand}" />
+
+      <TextBlock Classes="muted" HorizontalAlignment="Center" TextAlignment="Center"
+                 Text="Both boxes need a folder before you can continue. Detect looks for a Steam or standard Wizard101 install." />
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

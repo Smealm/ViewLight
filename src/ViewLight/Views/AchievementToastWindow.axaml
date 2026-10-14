@@ -1,0 +1,37 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ViewLight.ViewModels"
+        x:Class="ViewLight.Views.AchievementToastWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Achievement"
+        SystemDecorations="None"
+        CanResize="False"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
+        Topmost="True"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent">
+
+  <!-- ================================================= the toast itself
+       The same card the launcher styles, in a window of its own. Nothing here is a control the user
+       operates: it is a notification, so it takes no focus, no clicks and no space in the taskbar, and it
+       appears over the game rather than behind it.
+
+       Its text uses the toast's own classes rather than accent/muted. Those are tuned for a card drawn by
+       the launcher, against a background the launcher controls; this one hangs over whatever is on the
+       desktop, so it is written in the toast palette, which is opaque with it. -->
+  <Border x:Name="ToastCard" Classes="toast" Margin="0" MaxWidth="380" HorizontalAlignment="Right">
+    <StackPanel Spacing="6">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Text="ACHIEVEMENT UNLOCKED" Classes="toastLabel" />
+        <TextBlock Grid.Column="1" Text="{Binding ToastPoints}" Classes="toastPoints" />
+      </Grid>
+      <TextBlock Text="{Binding ToastTitle}" Classes="toastTitle" />
+      <TextBlock Text="{Binding ToastDetail}" Classes="toastDetail" />
+    </StackPanel>
+  </Border>
+
+</Window>

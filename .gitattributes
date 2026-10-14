@@ -1,0 +1,6 @@
+# The project is written with LF endings, on every machine. Without this, a Windows checkout
+# rewrites every source file and every diff shows the whole file as changed.
+* text=auto eol=lf
+
+# Images are not text; never touch them.
+*.png binary

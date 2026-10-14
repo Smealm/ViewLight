@@ -1,0 +1,267 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             x:Class="ViewLight.Views.HomeView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="16">
+
+      <!-- ============================================================ the banner
+           The game, and the one button that matters. Everything else on this screen is deliberately
+           quieter than this: pressing Play here should look like starting Wizard101.
+
+           The art is the game's own, fetched once and cached - nothing of KingsIsle's ships with the
+           launcher - so it may simply not be there yet. Hence the wordmark fallback: on a first run
+           with no connection the banner still says what game this is. -->
+      <Border Classes="hero">
+        <Panel Height="360">
+
+          <!-- Downscaled from 3840px wide, so it is filtered rather than point-sampled: at default
+               quality the reduction leaves the art looking hard-edged and aliased. -->
+          <Image Source="{Binding HeroArt}"
+                 RenderOptions.BitmapInterpolationMode="HighQuality"
+                 Stretch="UniformToFill"
+                 IsVisible="{Binding HasHeroArt}" />
+
+          <!-- Legibility rather than a blur: the art shows through a gradient instead of sitting
+               behind a composited translucent material, so this looks the same on every platform. -->
+          <Border Classes="heroScrim" />
+
+          <StackPanel Spacing="14" Margin="32" VerticalAlignment="Center" HorizontalAlignment="Center">
+
+            <Image Source="{Binding LogoArt}"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Width="272" Stretch="Uniform" HorizontalAlignment="Center"
+                   IsVisible="{Binding HasLogoArt}" />
+
+            <TextBlock Classes="heroWordmark" Text="WIZARD101"
+                       IsVisible="{Binding UsesWordmarkFallback}" />
+
+            <!-- A split button rather than a plain one: the left half is still the one press that
+                 starts everything, and the caret is every other way to play. Opening the menu is the
+                 caret's job rather than the button's, so pressing Play never costs an extra click. -->
+            <SplitButton Classes="heroPlay" HorizontalAlignment="Center"
+                         Content="{Binding PrimaryActionLabel}"
+                         Command="{Binding PrimaryActionCommand}">
+              <SplitButton.Flyout>
+                <MenuFlyout>
+                  <MenuItem Header="Play (start the server here)"
+                            Command="{Binding PrimaryActionCommand}" />
+                  <Separator />
+                  <MenuItem Header="Join a server…" Command="{Binding ShowJoinPanelCommand}" />
+                  <MenuItem Header="Find servers on my network"
+                            Command="{Binding ScanForServersCommand}" />
+                  <Separator />
+                  <MenuItem Header="Wizard101 official — standard account"
+                            Command="{Binding JoinOfficialStandaloneCommand}" />
+                  <MenuItem Header="Wizard101 official — Steam account"
+                            Command="{Binding JoinOfficialSteamCommand}" />
+                </MenuFlyout>
+              </SplitButton.Flyout>
+            </SplitButton>
+
+            <TextBlock Text="{Binding HomeHint}" Classes="heroHint" MaxWidth="540"
+                       HorizontalAlignment="Center" TextAlignment="Center" />
+
+            <Border Classes="pill" HorizontalAlignment="Center" IsVisible="{Binding HasLoginHint}">
+              <TextBlock Text="{Binding LoginHint}" Classes="accent" FontSize="12" />
+            </Border>
+
+          </StackPanel>
+        </Panel>
+      </Border>
+
+      <!-- ============================================================ downloading, while it runs -->
+      <Border Classes="glass" IsVisible="{Binding IsBusy}">
+        <StackPanel Spacing="10">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Text="{Binding InstallStage}" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="Cancel" Command="{Binding CancelInstallCommand}" />
+          </Grid>
+          <ProgressBar Value="{Binding InstallProgress}" Maximum="100" />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================================ what Play is doing
+           Rendered only while there is something to say. A server that is not running yet is not worth
+           a word: the launcher starts it on Play, so the resting state of this screen is the game and
+           nothing else. Once Play is pressed the panel appears, animates while it works, and stays up
+           afterwards so it can say that the server and the game are both still running. -->
+      <Border x:Name="StatusPanel" Classes="glass" IsVisible="{Binding IsStatusVisible}">
+        <StackPanel Spacing="14">
+
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+            <Panel Width="14" Height="14" VerticalAlignment="Center">
+              <Ellipse Width="14" Height="14" Fill="{DynamicResource WarningBrush}"
+                       Classes="pulsing" IsVisible="{Binding IsStatusWorking}" />
+              <Ellipse Width="14" Height="14" Fill="{DynamicResource SuccessBrush}"
+                       IsVisible="{Binding IsStatusGood}" />
+              <Ellipse Width="14" Height="14" Fill="{DynamicResource ErrorBrush}"
+                       IsVisible="{Binding IsStatusFailed}" />
+            </Panel>
+
+            <StackPanel Grid.Column="1" Spacing="3">
+              <TextBlock Text="{Binding StatusHeadline}" FontSize="16" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding StatusDetail}" Classes="muted" />
+            </StackPanel>
+          </Grid>
+
+          <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding IsStatusWorking}" />
+
+          <Border Classes="list">
+            <StackPanel Spacing="8">
+
+              <Grid ColumnDefinitions="Auto,110,*" ColumnSpacing="10">
+                <Border Classes="dot" VerticalAlignment="Center"
+                        Classes.working="{Binding IsServerWorking}"
+                        Classes.ready="{Binding IsServerRowReady}"
+                        Classes.faulted="{Binding IsServerFaulted}"
+                        Classes.pulsing="{Binding IsServerWorking}" />
+                <TextBlock Grid.Column="1" Text="{Binding ServerRowLabel}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding ServerRowState}" FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+              </Grid>
+
+              <Grid ColumnDefinitions="Auto,110,*" ColumnSpacing="10">
+                <Border Classes="dot" VerticalAlignment="Center"
+                        Classes.ready="{Binding ClientIsRunning}"
+                        Classes.working="{Binding ClientIsStarting}"
+                        Classes.pulsing="{Binding ClientIsStarting}" />
+                <TextBlock Grid.Column="1" Text="Wizard101" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding ClientStateText}" FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+              </Grid>
+
+            </StackPanel>
+          </Border>
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <!-- Shown whenever a local server is actually alive, so joining somebody else's server does
+                 not strand one this launcher started. -->
+            <Button Content="Stop the server" Command="{Binding StopServerCommand}"
+                    IsVisible="{Binding ServerIsRunning}" />
+            <Button Content="Open the log" Command="{Binding NavigateCommand}" CommandParameter="Logs" />
+          </StackPanel>
+
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================================ playing on someone else's server
+           Opened from the Play dropdown. Nothing is started here: the client is pointed straight at an
+           address somebody else is already listening on, which is why the account picker above has
+           nothing to do with it. -->
+      <Border Classes="card" IsVisible="{Binding IsJoinPanelVisible}">
+        <StackPanel Spacing="14">
+
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Classes="cardTitle" Text="Play on another server" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="Close" Command="{Binding HideJoinPanelCommand}" />
+          </Grid>
+
+          <TextBlock Classes="muted"
+                     Text="ViewLight starts nothing here: it points Wizard101 straight at a server that is already running. Signing in automatically only works on the server this launcher runs, so Wizard101 will ask you to log in." />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Server address and port" />
+            <Grid ColumnDefinitions="*,120,Auto" ColumnSpacing="10">
+              <TextBox Grid.Column="0" Text="{Binding RemoteHost, Mode=TwoWay}"
+                       Watermark="192.168.1.20 or a hostname" />
+              <TextBox Grid.Column="1" Text="{Binding RemotePortText, Mode=TwoWay}"
+                       Watermark="12000" />
+              <Button Grid.Column="2" Classes="accent" Content="Join"
+                      Command="{Binding JoinRemoteCommand}" />
+            </Grid>
+          </StackPanel>
+
+          <StackPanel Spacing="6">
+            <Button HorizontalAlignment="Left" Content="Find servers on my network"
+                    Command="{Binding ScanForServersCommand}" />
+            <ProgressBar IsIndeterminate="True" Width="200" Height="4"
+                         HorizontalAlignment="Left" IsVisible="{Binding IsScanning}" />
+            <TextBlock Classes="muted" Text="{Binding JoinStatus}"
+                       IsVisible="{Binding HasJoinStatus}" />
+
+            <Border Classes="list" IsVisible="{Binding HasDiscoveredServers}">
+              <ListBox ItemsSource="{Binding DiscoveredServers}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:DiscoveredServer">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Classes="value" Text="{Binding Address}"
+                                 VerticalAlignment="Center" />
+                      <Button Grid.Column="1" Content="Join" Command="{Binding JoinCommand}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Border>
+          </StackPanel>
+
+          <StackPanel Spacing="6">
+            <TextBlock Classes="label" Text="Wizard101's own server — login.us.wizard101.com:12000" />
+            <TextBlock Classes="muted"
+                       Text="Which account you sign in with has to be said out loud: a Steam-linked Wizard101 account is started differently, and the wrong one is simply refused at the login screen." />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="I sign in with a Steam account"
+                      Command="{Binding JoinOfficialSteamCommand}" />
+              <Button Content="I sign in with a standalone account"
+                      Command="{Binding JoinOfficialStandaloneCommand}" />
+            </StackPanel>
+          </StackPanel>
+
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================================ portable: copy the game in
+           Portable mode keeps the launcher, the server and the game in one folder that can be carried
+           anywhere. The game is the one part ViewLight cannot fetch, so this is where it gets copied in -
+           and where a Steam copy is called out, because copying it does not make it independent of Steam. -->
+      <Border Classes="card" IsVisible="{Binding ShowPortableClientCard}">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Copy your game into this folder" />
+          <TextBlock Classes="muted"
+                     Text="ViewLight is running portably, so it plays the game from its own folder rather than from an install elsewhere. Point it at your Wizard101 folder and it will copy the game in; your existing install is left untouched." />
+          <TextBlock Classes="value" Text="{Binding PortableGameFolder}" />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="Copy the game from" />
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBox Text="{Binding PortableGameSource, Mode=TwoWay}"
+                       Watermark="C:\Program Files (x86)\Steam\steamapps\common\Wizard101" />
+              <Button Grid.Column="1" Margin="8,0,0,0" Content="Detect"
+                      Command="{Binding DetectPortableGameSourceCommand}" />
+              <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                      Command="{Binding BrowsePortableGameSourceCommand}" />
+            </Grid>
+          </StackPanel>
+
+          <TextBlock Classes="warning" Text="{Binding PortableSteamWarning}"
+                     IsVisible="{Binding HasPortableSteamWarning}" />
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Classes="accent" Content="Copy the game in"
+                    Command="{Binding CopyGameIntoPortableCommand}" />
+            <Button Content="Cancel" Command="{Binding CancelCopyGameCommand}"
+                    IsVisible="{Binding IsCopyingGame}" />
+          </StackPanel>
+
+          <Border Classes="glass" IsVisible="{Binding IsCopyingGame}">
+            <StackPanel Spacing="10">
+              <TextBlock Text="{Binding CopyGameStage}" />
+              <ProgressBar Value="{Binding CopyGameProgress}" Maximum="100" />
+            </StackPanel>
+          </Border>
+
+          <TextBlock Classes="muted" Text="{Binding CopyGameMessage}"
+                     IsVisible="{Binding HasCopyGameMessage}" />
+        </StackPanel>
+      </Border>
+
+      <!-- Nothing here says who Play signs in as any more: the account is a state the launcher is in
+           rather than a step on the way to pressing Play, so it is drawn in the corner of every page with
+           the profile itself - the picture, the name, the banner and the score - and switched from the
+           profile's own Account card. -->
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

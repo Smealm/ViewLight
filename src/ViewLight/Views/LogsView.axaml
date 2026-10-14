@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             xmlns:services="using:ViewLight.Services"
+             x:Class="ViewLight.Views.LogsView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <DockPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
+      <Button Content="Clear" Command="{Binding ClearLogsCommand}" />
+      <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScrollLogs, Mode=TwoWay}" />
+      <TextBlock Classes="muted" VerticalAlignment="Center"
+                 Text="Server output appears here as it is written, including the line that marks the server ready." />
+    </StackPanel>
+
+    <Border Classes="card" Padding="0">
+      <ListBox x:Name="LogList" ItemsSource="{Binding Logs}" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="services:LogEntry">
+            <Grid ColumnDefinitions="66,58,*">
+              <TextBlock Text="{Binding TimeDisplay}" Classes="muted"
+                         FontFamily="Consolas, monospace" VerticalAlignment="Top" />
+              <TextBlock Grid.Column="1" Text="{Binding LevelDisplay}"
+                         FontFamily="Consolas, monospace" FontSize="11" VerticalAlignment="Top"
+                         Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" />
+              <SelectableTextBlock Grid.Column="2" Text="{Binding Message}"
+                                   TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+
+  </DockPanel>
+</UserControl>

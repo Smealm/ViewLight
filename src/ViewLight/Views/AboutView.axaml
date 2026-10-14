@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             x:Class="ViewLight.Views.AboutView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="16">
+
+      <Border Classes="card">
+        <StackPanel Spacing="8">
+          <TextBlock Classes="cardTitle" Text="ViewLight" />
+          <TextBlock Classes="muted"
+                     Text="A launcher for Imlight, the Revive101 private Wizard101 server. Point it at your game folder, press Play, and it downloads and runs the server, sets up Config/Imlight.ini for you, and starts Wizard101 connected to it." />
+          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
+            <TextBlock Classes="label" Text="Version" />
+            <TextBlock Grid.Column="1" Classes="value" Text="{Binding AppVersion}" />
+            <TextBlock Grid.Row="1" Classes="label" Text="Launcher data" Margin="0,6,0,0" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Margin="0,6,0,0"
+                       Text="{Binding LauncherDataRoot}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Item names" />
+          <TextBlock Classes="muted"
+                     Text="The starter-item picker lists the items from Imlight's own list, not from the game. Reading the real names out of the game's Root.wad is a separate piece of work: the item definitions inside it are stored in a form that needs the game's own type definitions to make sense of." />
+          <TextBlock Classes="muted"
+                     Text="What the launcher can do so far is open Root.wad and describe it, which is what the line below is." />
+          <TextBlock Classes="muted" Text="{Binding RootWadProbeText}" />
+        </StackPanel>
+      </Border>
+
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="cardTitle" Text="Links" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Imlight on GitHub"
+                    Command="{Binding OpenLinkCommand}"
+                    CommandParameter="https://github.com/Revive101/Imlight" />
+            <Button Content="Imlight documentation"
+                    Command="{Binding OpenLinkCommand}"
+                    CommandParameter="https://revive101.github.io/Imlight/imlight/" />
+            <Button Content="Revive101"
+                    Command="{Binding OpenLinkCommand}"
+                    CommandParameter="https://revive101.de/" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="card">
+        <StackPanel Spacing="8">
+          <TextBlock Classes="cardTitle" Text="Notes" />
+          <TextBlock Classes="muted"
+                     Text="Imlight is BYOD: it never ships copyrighted game files. You must supply your own client and data." />
+          <TextBlock Classes="muted"
+                     Text="Updating the server replaces its program files and keeps your Imlight.ini values, merging them back over the new defaults. The config from before the update is kept beside it as Imlight.ini.bak." />
+          <TextBlock Classes="muted"
+                     Text="Closing ViewLight stops the server it started, and asks first while that server is running. It stops even if the launcher is killed outright, so no server is ever left holding the ports." />
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -1,0 +1,23 @@
+## Build output
+bin/
+obj/
+*.user
+*.suo
+
+## Local publish/scratch (release zips are attached to GitHub releases, not committed)
+/.tmp/
+/publish/
+
+## Rider / VS
+.idea/
+.vs/
+
+## Launcher runtime data (server installs, downloads, logs)
+/runtime/
+/servers/
+/downloads/
+
+## OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
