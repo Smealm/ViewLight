@@ -620,7 +620,7 @@ server at that revision too, see *Make the server accept the patch server's revi
 fills it is a long one: the launcher starts it and reports on it rather than waiting, and shows no progress
 for it beyond what Aurorium itself logs.
 - **Choosing an older server build** - ViewLight always takes the newest release.
-- - **The revision mirror only asks this machine's patch server.** With a remote patch server in use it has
+- **The revision mirror only asks this machine's patch server.** With a remote patch server in use it has
   nothing to read and does nothing, which is the case it would be most useful in: the public instance is
   likelier to hold a build older than your game than a local one is. It is written up in
   [docs/design-notes.md](docs/design-notes.md) rather than fixed quietly, because whether it should hide

@@ -1556,7 +1556,9 @@ dotnet publish src/ViewLight/ViewLight.csproj -c Release -r win-x64 --self-conta
 
 **Self-contained on purpose.** The launcher's audience is people who want to play a private Wizard101
 server without first installing a development toolchain, so the zip carries its own runtime and needs
-neither .NET nor administrator rights. The cost is size, and it is worth paying here: every alternative
+neither .NET nor administrator rights *for the launcher itself*. The one thing it does ask a machine for is
+the runtime its own database runs in - a consequence of keeping the notes in the RavenDB the server already
+ships, and the reason the first screen checks for it rather than the profile screen failing later. The cost is size, and it is worth paying here: every alternative
 ends in "install the .NET 10 desktop runtime" instructions on a page that wanted one button.
 
 The zip root *is* the launcher folder, and that is deliberate rather than incidental - it is what makes
