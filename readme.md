@@ -367,6 +367,20 @@ have already repaired an address that was blank or pointing at nothing.
 the files yet. Leave it running and try again later, or hand it the files your game already has - see
 [the patch server](#the-patch-server-in-plain-words).
 
+**You run a patch server on this machine and the server will not start.** Turn on **Make the server accept the
+patch server's revision** in the patch server card. Imlight and the patch server are separate projects on
+their own schedules, and Imlight can be a few updates behind the patch server - which is usually fine, but it
+means the server can be asked for a revision it was not built expecting and refuse to boot instead of failing
+in a way that reads clearly.
+
+That switch is **off by default for a reason: it should not be needed.** Run both from their latest builds and
+they are the same version, which is the state they are meant to be in, and leaving the switch alone is the way
+to keep them there. Turn it on when they have drifted apart, and turn it **back off once either one has been
+updated** - it covers a gap rather than being a setting to live with. If you would rather not take the chance
+at all, the other way through is to wait for whichever one is behind to catch up, because an out-of-date patch
+server - or an up-to-date one serving an out-of-date server - is exactly the combination the switch is willing
+to accept the consequences of.
+
 **Wizard101 cannot connect to the server.** This is the one fault the launcher cannot see or fix, because
 nothing is actually broken: the patch server, the Imlight server and the game are all running, all on this
 machine, and all talking to each other over a local IP address - and something in between is stopping them.
@@ -388,7 +402,8 @@ Anything in the way of that shows up as a connection error rather than as a faul
 intercepting the traffic before you suspect what is running it.
 
 **A login is refused.** Compare the two versions on Home. Your game has been updated past the version your
-server accepts; turn on **Make the server accept the patch server's revision** in the patch server card.
+server accepts; turn on **Make the server accept the patch server's revision** in the patch server card -
+the same switch as above, and the same rule: turn it back off once one of the two has been updated.
 
 **An update says a file in the server folder is in use.** Something is running the server's files. Stop the
 server under **Settings → Stop the server** and try again. The message names the file, and nothing is
