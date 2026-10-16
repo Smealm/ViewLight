@@ -187,6 +187,65 @@ public sealed record ZoneNamed(DateTimeOffset At, string Raw, string Zone) : Ser
 public sealed record CommandUsed(DateTimeOffset At, string Raw, string Username, string Command) : ServerLogFact(At, Raw);
 
 /// <summary>
+/// The server could not load one of its own files from the patch server.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This is the server saying, in its own words, that the two halves of the stack disagree about which
+/// revision of the game they are talking about - and it is the only place the launcher can learn it, because
+/// the failure is invisible from outside: the server is alive, its ports are open, and it simply never
+/// finishes warming up.
+/// </para>
+/// <para>
+/// The line, copied out of a real one:
+/// </para>
+/// <code>
+/// Error while downloading file http://127.0.0.1:12369/V_r803238.Wizard_1_610/Data/GameData/Root.wad from
+/// patch server endpoint: Response status code does not indicate success: 404 (Not Found).
+/// </code>
+/// <para>
+/// The URL is the part that matters: it is the revision the server asked for, spelled out, which is what
+/// can be compared against the revision the patch server actually holds. Whether the address was right is
+/// not the question - it is this machine's patch server, on the port the launcher gave it - and the 404 is
+/// the patch server not having that revision's files.
+/// </para>
+/// </remarks>
+/// <param name="Url">The address it asked for, in full.</param>
+/// <param name="Revision">The revision segment of that address, e.g. <c>V_r803238.Wizard_1_610</c>.</param>
+/// <param name="File">The file inside the revision, e.g. <c>Data/GameData/Root.wad</c>.</param>
+public sealed record PatchServerRefusedAFile(
+    DateTimeOffset At, string Raw, string Url, string Revision, string File) : ServerLogFact(At, Raw) {
+
+    /// <summary>
+    /// Reads the address the server named into the revision and the file it was asking for, or returns
+    /// <c>null</c> for an address that is not one of a patch server's.
+    /// </summary>
+    /// <remarks>
+    /// A patch server's addresses are <c>{address}/V_{revision}/{path}</c>, so the revision is the segment
+    /// that begins with <c>V_</c> and everything after it is the file. An address with no such segment - a
+    /// patch server laid out some other way, or a line about something else entirely - says nothing about a
+    /// revision, and guessing one is exactly what would make this worthless.
+    /// </remarks>
+    public static PatchServerRefusedAFile? From(DateTimeOffset at, string line, string url) {
+        var segments = url.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var start = Array.FindIndex(
+            segments, segment => segment.StartsWith("V_", StringComparison.OrdinalIgnoreCase));
+
+        if (start < 0 || start == segments.Length - 1) {
+            return null;
+        }
+
+        return new PatchServerRefusedAFile(
+            at, line, url, segments[start], string.Join('/', segments[(start + 1)..]));
+    }
+
+    /// <summary>The game revision that segment stands for, without its <c>V_</c>.</summary>
+    public string GameRevision => Revision.StartsWith("V_", StringComparison.OrdinalIgnoreCase)
+        ? Revision[2..]
+        : Revision;
+}
+
+/// <summary>
 /// Reads the facts out of the server's log lines.
 /// </summary>
 /// <remarks>
@@ -311,6 +370,14 @@ public static class ServerLogFacts {
         if (NameBefore(text, " Uses command: ") is { Length: > 0 } username
             && After(text, " Uses command: ") is { Length: > 0 } command) {
             facts.Add(new CommandUsed(at, text, username, command));
+        }
+
+        // "Error while downloading file http://127.0.0.1:12369/V_r803238.Wizard_1_610/Data/GameData/Root.wad
+        //  from patch server endpoint: Response status code does not indicate success: 404 (Not Found)." - the
+        // server failing to load its own files, which is the one way the launcher learns of it.
+        if (Between(text, "Error while downloading file ", " from patch server endpoint") is { Length: > 0 } refused
+            && PatchServerRefusedAFile.From(at, text, refused) is { } refusal) {
+            facts.Add(refusal);
         }
 
         return facts;

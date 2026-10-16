@@ -622,6 +622,10 @@ public sealed partial class MainWindowViewModel {
                 var lines = ReadNewLogLines();
                 if (lines.Count > 0) {
                     Announce(_ledger.ApplyLogLines(lines), $"the server log said {lines.Count} new thing(s)");
+
+                    // The server's own account of a file it could not load from its patch server, which is
+                    // the only place that failure exists - and the one a session cannot warm up through.
+                    ReportPatchServerRefusals(lines);
                 }
 
                 await ReadProfilesAsync(token).ConfigureAwait(true);

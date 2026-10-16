@@ -109,6 +109,12 @@
 
           <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding IsStatusWorking}" />
 
+          <!-- A server that could not load its own files from the patch server, which is the one failure
+               with no other symptom: it is alive, its ports are open, and it never finishes warming up. -->
+          <Border Classes="glass" IsVisible="{Binding HasPatchServerRefusalNotice}">
+            <TextBlock Classes="error" TextWrapping="Wrap" Text="{Binding PatchServerRefusalNotice}" />
+          </Border>
+
           <Border Classes="list">
             <StackPanel Spacing="8">
 
@@ -126,6 +132,29 @@
                 <TextBlock Grid.Column="2" Text="{Binding PatchServerRowState}" FontWeight="SemiBold"
                            VerticalAlignment="Center" />
               </Grid>
+
+              <!-- What the patch server has fetched, while it is fetching it. The row above is the process
+                   and nothing more; this is the one thing about it that decides the session - Imlight asks
+                   it for Root.wad during its own boot, and a revision that has not arrived is a session
+                   that falls back to Imlight's own cache. Indented to sit under the row it belongs to. -->
+              <StackPanel Spacing="6" Margin="24,0,0,0" IsVisible="{Binding HasFetchStatus}">
+                <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding FetchStatus}" />
+                <ProgressBar Value="{Binding FetchProgress}" Maximum="100" Height="4" />
+              </StackPanel>
+
+              <!-- Play holding the server back, which is the one moment the launcher waits on the patch
+                   server's download. It says what it is waiting for and where the fetch has got to, and the
+                   way out is right here: the wait can be an hour on a first run, so it is never something
+                   the user is stuck in. -->
+              <StackPanel Spacing="8" Margin="24,0,0,0"
+                          IsVisible="{Binding IsWaitingForPatchServerFiles}">
+                <TextBlock Classes="muted" TextWrapping="Wrap"
+                           Text="{Binding WaitingForPatchServerFilesText}" />
+                <Button Classes="accent" Content="Play anyway"
+                        HorizontalAlignment="Left"
+                        IsEnabled="{Binding CanPlayAnyway}"
+                        Command="{Binding PlayAnywayCommand}" />
+              </StackPanel>
 
               <Grid ColumnDefinitions="Auto,110,*" ColumnSpacing="10">
                 <Border Classes="dot" VerticalAlignment="Center"

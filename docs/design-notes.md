@@ -1,4 +1,4 @@
-# ViewLight design notes
+﻿# ViewLight design notes
 
 **These are internal notes, not the manual.** They record why things are the way they are - what was
 measured, what was tried, what was deliberately left out - and they are written for whoever changes the
@@ -579,40 +579,103 @@ are the difference between filling a patch server in and inventing one:
 
 | Rule | Why it is there |
 | --- | --- |
-| A copy is only ever planned for an install whose build **is** the revision the patch server is holding (`PatchServerPreload.IsTheBuild`) | the revision folder is named after the build, and the folder plus its file list only exist once Aurorium has fetched that revision - so a build of any other revision has nowhere to go and is refused instead |
-| A file goes in only when its length equals the length the revision's own file list gives for it | the right name at the wrong length is a different build's file, and a wrong file cannot be repaired later: the patch server only ever fetches what is missing, so it would serve that file forever |
+| The revision being filled is the one **the server asks for**, and only ever that one | `GameRevision` is both what Imlight asks the patch server for and what the server accepts clients on, so filling in the client's own revision instead would leave the server asking for a folder the patch server does not have - the 404 the whole arrangement exists to avoid. This is the safety net the copy is, rather than a second way to collect a revision (entry 23) |
+| The install it comes from **is** that revision, read from the game itself (`PatchServerPreload.IsTheBuild`) | the revision folder is named after the revision and only exists once Aurorium has fetched it, so a build of any other revision has nowhere to go and is refused rather than partly given |
+| Not one file the revision names may be present at a different length, in the whole build - any one of them refuses the copy completely | the right name at the wrong length is a different build's file, cannot be repaired later (the patch server only ever fetches what is missing, so it would serve that file forever) and is evidence that this install is not this revision at all. A machine with one of those is a machine nothing may be taken from (entry 23) |
+| Files the revision names that this install does not have are left for the patch server | they are not this machine's to give, and inventing a file for a revision is the one thing this must never do |
 | Nothing is overwritten, and every file is written as `<name>.preloadpart` and then moved into place | what a patch server already has is what it is prepared to serve, and Aurorium skips by name alone - so a copy interrupted halfway must not leave something that looks downloaded. The suffix is deliberately not `.part`, which is Aurorium's own name for a download in flight |
 
 **The plan comes from the patch server's own file list**, `LatestFileList.xml` in the revision folder,
 written by Aurorium on a first pass before any download - not from a list the launcher fetches itself. That
-keeps the two views of the revision identical by construction, and it is why the copy is offered from Play
-*after* the patch server is up rather than before: an unstarted patch server has no revision folder and
-nothing to plan against. The endpoint binds before the file list is written, so Play waits a bounded twenty
-seconds for it - without that wait, the first Play after installing a patch server would never be offered
-the copy at all.
+keeps the two views of the revision identical by construction, and it is why the card in Settings says there
+is nothing to plan against until the patch server has started on that revision at least once: an unstarted
+patch server has no revision folder. (The endpoint binds before the file list is written, which is why the
+plan is worked out again every time the patch server's state changes rather than only when it comes up.)
 
 | Piece | What it does |
 | --- | --- |
 | `PatchServerManifest` | reads a revision's `LatestFileList.xml` for paths and sizes (`TryRead` returns nothing rather than throwing, since a folder being written to is read as half an XML document) |
-| `PatchServerPreload.Plan` | what would be copied and what would not, counted out of that file list: already held, held at another size, not in the build, in the build at another size. Nothing here writes |
+| `PatchServerPreload.Plan` | what would be copied and what would not, counted out of that file list: already held, held at another size, not in the build, and in the build at another size - which refuses the whole copy (entry 23). Nothing here writes |
 | `PatchServerPreload.RunAsync` | the copy itself: off the UI thread, cancellable, resumable by being re-planned, never throwing - a failure is a line in the report |
 | `MainWindowViewModel.DescribePreload` | the sentence under the folder box: how many files of the revision it holds, how many of the rest are here, and how much they weigh |
-| `ShouldOfferPreload` | asked once per revision, and only when there is something to copy |
-| `ShouldPreloadWithoutAsking` | the setting above, and the same "is there anything to do" test - a silent copy of nothing is still nothing |
+| `PreloadPatchServerCacheCommand` | the button in Settings and nowhere else: Play does not copy, so this is a deliberate act about the files the download cannot finish |
 
-**Play asks, and the answer is remembered per revision - or the asking is turned off.** The offer is a
-dialog before the server starts, because that is the moment it is worth having: Imlight reads `Root.wad`
-from the patch server during its own boot, so a copy that arrives later serves the next session rather than
-this one. `PatchServerPreloadAutomatically` is the other way round and is off by default: on, Play stops
-asking and just makes the copy for a patch server that holds nothing of the session's revision, saying in
-the Log that it was a setting rather than an answer. The three conditions below are still what decides
-whether there is anything to do - the setting only decides whether it is asked about. While it copies, Home says
-so under a phase of its own (`LauncherPhase.CopyingGameFiles`) rather than sitting on *Getting ready…* for
-ten minutes with nothing to explain it. Turning the offer down with *don't ask again* stores the revision it
-was about, so the question comes back for the next revision rather than never - the files that cannot be
-downloaded are per-revision, and somebody who said no to one has said nothing about the next. The same copy
-is a button in Settings, for doing it on purpose, and it is safe to press while the patch server is fetching:
-both are writing the same files, and whichever arrives first is the one that stays.
+**Play does not copy anything into the patch server, and this is the decision this section changed its
+mind about.** The copy used to be offered before every session, once per revision, with the patch server's
+own download cast as the long way round. That is backwards. A patch server *is* a thing that fetches a
+revision: it writes the revision's file list, asks Wizard101's own patch server for what that list names,
+skips what it already has, and serves what it has written. The launcher dropping files into its folders is
+not a faster path through that, it is a path around it - the files arrive without the patch server having
+downloaded them, so it has no record of them beyond a name it skips, and whether it indexed or verified
+them is not something the launcher can see. Measured on this machine the copies were identical, which is
+what made the shortcut defensible at all; but "we compared the bytes" is not "this is the workflow the
+software is built around", and the failure mode when they differ is a quest that breaks hours later with
+nothing on screen to connect it to the copy.
+
+So the download is the path, and the launcher's part in it is to report it. The copy is still there - the
+button under Settings → Patch server, where it is pressed on purpose - because a download is not always
+enough on its own: Aurorium aborts any request that runs past its own two-minute limit, and the files large
+enough to run past it are ones it can never finish whatever the connection. That is a known obstacle to
+press a button about, rather than something for Play to do on the way past, and everything the plan says is
+still true - the revision's own file list, the sizes in it, nothing overwritten, nothing invented.
+
+#### Watching it fetch
+
+**The patch server does not expose its progress, so the launcher measures it.** Aurorium's HTTP API is
+`/revisions`, `/latest` and `/{revision}/{file_path}`, and nothing about a fetch in flight; its progress
+bars are drawn with `indicatif` on its own console, and its database knows which assets *should* arrive
+rather than which have. What it does leave behind is the two things a measurement needs: the revision's own
+`LatestFileList.xml`, written before the first asset is fetched, and a folder of the files it has managed to
+write. `PatchServerFetch.Measure` counts one against the other, off the disk, and asks the patch server
+nothing - which is also why watching a fetch cannot perturb it.
+
+Four rules make that count mean what it is shown as:
+
+| Rule | Why it is there |
+| --- | --- |
+| A file is held when its length is the length the revision gives it | Aurorium skips a file by name alone, so anything at that name is a file it will not fetch - but a name at the wrong length is another build's file, and calling that held would overstate what is here |
+| A file is looked for in the patch server's other revisions as well | an unchanged asset between two revisions is served out of the revision that introduced it and never written into the newer folder, so counting only that folder would call a revision thousands of files short that it has been serving all along |
+| `.part` bytes count as progress, and as nothing else | a download in flight is most of a large file's bytes already on disk, which is what makes the figure move while one file is being written rather than only when it finishes - and it is not something the patch server can serve, so it is counted apart from the files it has |
+| A preload's own staging name is neither | `.preloadpart` is a local copy on its way in; it is counted when it is moved into place, which is exactly when the patch server counts it too |
+
+**Which file it is on, and how big that file is, is most of what somebody actually wants to know.** The same
+walk that counts the revision finds the `.part` files Aurorium writes while a download is in flight - its own
+name for a file that is not there yet - and names each against the revision's own file list, so what is said
+is `Equipment-WorldData.wad (12.3 MB of 281.4 MB)` rather than a percentage of something unnamed. Several are
+in flight at once, so the count comes with it and the leading name is the one written to most recently: one
+name presented as "the" file would be a guess dressed up as a fact. The Log gets the same sentence whenever
+the file changes and once a minute besides - a line per sample would bury everything else the launcher has to
+say about a session that is mostly an hours-long download, and no line at all would leave the one thing a
+first run spends its time on invisible in the place the launcher keeps everything else.
+
+**And whether the revision being fetched is the one the server asks for, which is the one question about a
+fetch that is not about progress.** A patch server fetches what Wizard101 serves and nothing can ask it for
+something else, so a server pinned to another revision gets a 404 for its own `Root.wad` and then sits at
+"warming up" forever. Both revisions are named in that sentence, because which of the two is behind is the
+whole of what to do about it, and the mismatch is said the moment it is seen rather than on the next interval
+- it is not progress but an answer to why a session will fail. The same failure is also read out of the
+<i>server's</i> log (`ServerLogFacts.PatchServerRefusedAFile`), which is where it exists in the server's own
+words, and reported on Home with what the launcher does about it; the two halves are the same fact seen from
+either end, and they say the same thing.
+
+**The estimate is a measurement too.** `PatchServerFetchPace` times the bytes that have landed. A rate is
+taken only from a window of at least fifteen seconds - a single slow sample would otherwise become an absurd
+figure - and each window's rate is blended into the one before it rather than replacing it, so the number on
+screen settles instead of flickering. **A fetch that has stopped moving is said as such**: a whole window
+with nothing in it drops the estimate and says so, because Aurorium gives up on a file that runs past its
+request limit and then sleeps `fetch_interval` seconds before trying it again, and a countdown that went on
+running through that would be a lie the user could watch not come true. Nothing is predicted from nothing:
+an estimate needs its first window, and until it has one the line says how much is left and that there is no
+estimate yet.
+
+**The patch server's own row is not one of the lines.** Home's row for it is the process and stays that way;
+what that process is fetching is the paragraph underneath it, and the same line and bar sit in
+Settings → Patch server, where a patch server started by hand is watched from. It is the one thing about a
+patch server that decides a session - Imlight asks for `Root.wad` during its own boot and reads it out of
+its own cache when the patch server has not got it yet - so a session about to fall back to a cached copy is
+one started next to a line saying why. The watch runs exactly as long as the patch server does, because that
+is the only time a fetch advances, and it is there for a patch server started from Settings as much as for
+Play's own.
 
 **The first version of this asked exactly that, and it is gone.** `PatchServerAvailabilityProbe` asked for
 `LatestFileList.xml`, `LatestFileList.bin` and `Data/GameData/Root.wad` under the revision a session
@@ -628,26 +691,51 @@ its own patch server is up, Imlight is told to use it, and the patch server serv
 asks whether a revision's files have arrived, so a patch server still fetching its first revision is a
 session that fails the way any patch server serving nothing fails - Imlight reports the 404 and stops -
 rather than one the launcher quietly sends somewhere else. The one request still made to a patch server is
-`GET /revisions` (`PatchServerRevisions`), and it is made for one reason: the revision mirror below needs
+`GET /revisions` (`PatchServerRevisions`), and it is made for one reason: the revision sync below needs
 to know which revision it holds.
 
-**The fetch is reported and kept alive, and Play still neither waits nor is refused.** Three things,
-and no fourth:
+**The fetch is reported, kept alive, measured - and waited for, for exactly one file.** Five things, and no
+sixth:
 
 | Rule | Where |
 | --- | --- |
-| Ask once, before the server starts, whether the patch server can serve the session's revision - `GET {address}/V_{GameRevision}/Data/GameData/Root.wad`, headers only, the same request Imlight makes first | `PatchServerServing` |
-| Say so in the Log when it cannot, naming the file, and saying the fetch keeps running while ViewLight is open | `WarnIfPatchServerIsStillFetchingAsync` |
+| Ask once, before the server starts, whether the patch server can serve the file the boot asks for - `GET {address}/V_{GameRevision}/Data/GameData/Root.wad`, headers only, the same request Imlight makes first | `PatchServerServing` |
+| Wait for that one file rather than starting a server that will 404 on it, with the fetch line on screen and **Play anyway** beside it as the way out | `WaitForPatchServerFilesAsync` and `ShouldWaitForPatchServerFiles` |
+| Say so in the Log when it cannot be had - naming the file, and saying the fetch keeps running while ViewLight is open | `WarnIfPatchServerIsStillFetchingAsync` |
 | Leave the patch server running when the server stops **if** that is the answer, because stopping it is stopping the download | `PatchServerStopsWithTheServer` |
+| Say how far along the fetch is, which file it is on, how big that file is, whether it is even the right revision, and roughly when the rest will be done | `PatchServerFetch` and `PatchServerFetchPace` |
 
-The answer is remembered only so the third rule can be stated, and the Stop button says *Stop the server*
+The answer is remembered only so the fourth rule can be stated, and the Stop button says *Stop the server*
 rather than *Stop the servers* while it applies - a button that promises to stop something it leaves
 running is worse than one that says which of the two it means. `Stop` in the patch server card stops it
-outright, because that is a person asking. Nothing is repointed on any of this: a session started inside a
-first fetch still loads `Root.wad` from Imlight's own cache, or stops on the 404 - but it now stops next to
-a Log line that says why, and the patch server is still fetching while the user reads it. Blocking Play
-instead would be a spinner on a fifteen-minute job; refusing it would be the launcher deciding the session
-is not worth having.
+outright, because that is a person asking. Nothing is repointed on any of this: a session sent on before
+the patch server has its files is one that loads `Root.wad` from Imlight's own cache if there is one and
+stops on the 404 if there is not - but it stops next to a Log line that says why, and the patch server is
+still fetching while the user reads it.
+
+#### Waiting for the one file the boot needs
+
+**This is the one place Play waits, and the reason it is one file rather than a revision.** Imlight's warm-up
+asks its patch server for `Data/GameData/Root.wad` and nothing else - the rest of the revision is asked for by
+the client, as it plays - so a patch server that has not fetched that file is one the server cannot finish
+warming up against. Waiting for a whole revision before starting anything would be 18 GB and hours on a first
+run; waiting for one file is usually minutes, and it is the difference between a server that boots and one
+that sits at "warming up" with nothing on screen to explain it.
+
+The wait is asked rather than assumed, in the same way the fetch line is: a `HEAD` on the boot file is the
+same request Imlight makes first, so an answer means the boot about to start will get its files. Two things
+keep it from being a trap. It is **always escapable** - Home shows what is being waited for with the fetch
+line under it and a **Play anyway** button beside it, and taking that path is written into the Log, because a
+session started against a fetching patch server is one that will 404 rather than find its files and nothing
+else would connect the two. And it **ends by itself** if the patch server goes away, since a patch server
+that is not running cannot be waited for. The sync is asked again on every pass of the wait, which is what
+makes a first run work at all: the patch server has no revision to list until its own first pass has written
+one, and a session that started out waiting for the server's published revision is moved onto the patch
+server's the moment there is one.
+
+**Time spent waiting is not the server being slow.** Play's own readiness deadline counts from when the
+server is spawned, so the wait is added back onto it - otherwise a session that spent eleven minutes waiting
+on a download would time out before Imlight had been given its chance to boot.
 
 **Order: patch server, then server, then client.** The patch server is started and waited for *before*
 the Director, because the Director reads it during its own boot - starting it afterwards would only serve
@@ -655,11 +743,12 @@ the next session. That is why the wait lives at the top of `StartServerAsync` in
 Play goes through the same door, and a server started by hand from Settings gets the same order.
 
 **A patch server failing is not a failed session.** Imlight keeps its own cached copy of `Root.wad`, so
-the launcher reports the failure - Log, Home's row, Settings' state - and starts the server anyway. The
-same reasoning is why a patch server that cannot serve *yet* does not hold a session back either: it is
-reported, it is left fetching, and the session goes ahead.
+the launcher reports the failure - Log, Home's row, Settings' state - and starts the server anyway.
 Refusing to play because an optional convenience did not start would be the worse trade, and the
-alternative (silently continuing) is what the row and the log lines exist to prevent.
+alternative (silently continuing) is what the row and the log lines exist to prevent. A patch server that
+has not fetched its files *yet* is the one case that is waited for rather than reported through, and even
+that is a wait with a button on it - see [waiting for the one file the boot
+needs](#waiting-for-the-one-file-the-boot-needs).
 
 **Imlight is pointed at it, or at nothing of the launcher's making.** `MainWindowViewModel.PatchServerAddressFor`
 is the whole rule, stated as a static function so it can be tested without a patch server running: this
@@ -696,7 +785,7 @@ So the launcher asks, on a screen of its own after the Imlight download:
 
 | Answer | What the launcher does | What it costs |
 | --- | --- | --- |
-| This machine's own - the default, and the one the screen argues for | downloads `aurorium.exe` there and then, into `LauncherPaths.DefaultPatchServerPath`, and Play starts it and points Imlight at it | about 9 MB, and then the patch server's own first start - which is where the revision's file list, the fetch, and the offer to be handed the game's files instead all belong |
+| This machine's own - the default, and the one the screen argues for | downloads `aurorium.exe` there and then, into `LauncherPaths.DefaultPatchServerPath`, and Play starts it and points Imlight at it | about 9 MB, and then the patch server's own first start - which is where the revision's file list and the fetch belong, and where the launcher's line about how far along that fetch is starts counting |
 | The public patch server | nothing: Imlight keeps the address its config already has | a connection whenever the game wants something it has not already cached |
 
 Asked only where there is something to answer. `PatchServerChoiceAnswered` records that the question was
@@ -704,10 +793,12 @@ put, and the screen is gated on all three of *the folders are known*, *Imlight i
 not been answered yet* - so a machine that already has a patch server is never stopped by it (installing one
 is an answer), and a launcher is never asked twice. *Continue* is only available for the public answer or for
 a local patch server that is genuinely installed, because an answer of *mine* with nothing to be it is not an
-answer at all. Nothing is started from the screen: the first start, the fetch and the copy offer stay where
-they were, in Play - which is also what keeps this a question rather than a download that begins by itself.
+answer at all. The fetch itself is not started by walking onto the screen - that is still Play's - but the
+screen does offer to start it, once, in the form of one button: *Prepare the files now*, which starts the
+patch server and shows its progress right there (entry 23). Waving that through leaves everything where it
+was, with Play starting it as before, so nothing begins by itself either way.
 
-**The mirror only ever asks this machine's patch server**, because that is the one it has an address for:
+**The sync only ever asks this machine's patch server**, because that is the one it has an address for:
 `GET /revisions` goes to `LocalPatchServerUrl`. With a remote patch server in use the switch therefore has
 nothing to read and does nothing - which is a limit rather than a decision, and is recorded in
 [To be added](#to-be-added).
@@ -727,14 +818,31 @@ update or a hand-edit can put the public address back. Nothing is written while 
 and nothing is written when the two already agree - which is the common case on this machine, where
 `PatchServerInternalUrl` is already `http://127.0.0.1:12369`.
 
-**A patch server can only hold what upstream currently offers, so the revision the server asks for can be
-made to follow it.** This is the other half of a local stack, and it is a config value rather than a
-process: Imlight asks a patch server for `{PatchServerInternalUrl}/V_{GameRevision}` and accepts clients
-whose revision matches the same value, while a server build pins the revision it was published with. The
-moment the game has been patched past that build the two disagree - Imlight asks for a revision the patch
-server does not hold, which is the 404 above, and with `EnforceRevision` on the same client is turned away
-at login. Updating Imlight is the fix when a build exists; when none does, *Make the server accept the
-patch server's revision* is the deliberate act of saying the client that is here now is the one to accept.
+**A patch server can only hold what upstream currently offers, so the two revisions have to be made to agree -
+and the launcher's default is to move the server's side of it.** This is the other half of a local stack, and
+it is a config value rather than a process: Imlight asks a patch server for
+`{PatchServerInternalUrl}/V_{GameRevision}` and accepts clients whose revision matches the same value, while
+a server build pins the revision it was published with. The moment the game has been patched past that build
+the two disagree - Imlight asks for a revision the patch server does not hold, which is the 404 above, and
+with `EnforceRevision` on the same client is turned away at login.
+
+**The direction is forced by which of the two can be told anything.** Aurorium decides what to fetch from one
+place and one place only - the patch host in its config, which it asks for the newest file list - so there is
+no way to ask it for a particular revision, older or newer, and no way to stop it fetching the one Wizard101
+is serving. The server's `GameRevision`, by contrast, is a value in a config file the launcher already writes
+for other reasons. So the sync - on by default - reads the revision the patch server actually holds and
+writes it into `GameRevision`: the server then asks for files the patch server has, and accepts the client
+that has just been updated. Both values saying the same thing is the only state either of them works in.
+
+That is the change of mind in entry 24. An earlier build of this had it the other way round, on the argument
+that moving the server is a decision the launcher cannot check: whether a given server build still runs with a
+newer revision of the game is up to what changed between two releases of somebody else's software. What
+turned it round is which state is *reachable*. Holding the server at its published revision leaves the patch
+server the side that needs something it cannot fetch, and the hand-off below is the only thing that can give
+it - which needs this machine's game to be exactly that revision, which is exactly the thing that stops being
+true as soon as the game is patched. A pinned pair is therefore one that stays broken, while a synced pair
+can only be wrong in ways the two projects themselves decide. Off is kept for a server deliberately held at
+one revision.
 
 Three rules, all pure and all tested, carry it:
 
@@ -744,19 +852,26 @@ Three rules, all pure and all tested, carry it:
 | `PatchServerConfig.NewestGameRevision` | Which of several revisions is newest: ordered by the number each name carries, not by the order they were listed in, because a server that was handed a revision out of turn would otherwise have its first entry read as its newest |
 | `MainWindowViewModel.RevisionToMirror` | The value to write into `GameRevision`, or `null` when there is nothing to write because the config already asks for it |
 
-The mirror has no timer and no button of its own: it rides on `GET /revisions`
+The sync has no timer and no button of its own: it rides on `GET /revisions`
 (`Services/PatchServerRevisions.cs`), which is the only request the launcher makes to a patch server and
-is made for the mirror's sake alone. So it is applied whenever the launcher starts a patch server - Play's
-own start, or the Start button in Settings - and the moment the toggle is turned on while one is already
-running, which is what fills its box in without waiting for Play. A patch server that is not up is not
-asked and nothing is remembered about it: the revision a session asks for is the config's until a patch
-server answers.
+is made for this alone. So it is applied whenever the launcher starts a patch server - Play's
+own start, the Start button in Settings, and the first-run screen's *Prepare the files now* - and the moment
+the toggle is turned on while one is already running, which is what fills its box in without waiting for
+Play. A patch server that is not up is not asked and nothing is remembered about it: the revision a session
+asks for is the config's until a patch server answers.
 
-Turning it off puts back the value the config had when it was turned on, **and only that value**
+**And it is applied again while Play waits, which is where it earns its keep.** A patch server has no
+revision to list until its own first pass has written one into its database, which can be seconds after its
+endpoint answers - so a machine whose first start asks for a revision the patch server has not listed yet
+would wait for a file that is never coming. The wait therefore asks the sync again on every pass (entry 24),
+and a session that started out waiting for the server's published revision is moved onto the patch server's
+the moment it has one.
+
+Turning it off puts back the value the config had when the launcher first wrote one, **and only that value**
 (`RevisionToRestore`): if the config no longer holds what the launcher wrote - a newer server build, an
 edit by hand - the value in it belongs to whoever put it there, and the rule that keeps a patch address the
 launcher did not write from being rewritten keeps this one too. The `GameRevision` box is greyed out
-while the mirror is on rather than taking edits it is about to overwrite, and the line under it says which
+while the sync is on rather than taking edits it is about to overwrite, and the line under it says which
 of the three states it is in: set from the patch server, waiting for one, or moved on since.
 
 ## Warming up the server
@@ -1336,12 +1451,25 @@ call itself ready while nothing is listening, reporting an exit as a fault, bein
 job, stopping a leftover patch server from this install before starting a new one - and the rule that
 decides which patch server a session gets: this machine's address and port while the launcher is running
 one and it is up, and no change at all otherwise, so nothing is written back to the public patch server and
-nothing a user chose is ever rewritten. The revision mirror is covered
+nothing a user chose is ever rewritten. The revision sync is covered
 the same way and from both ends: what a patch server's revision name is worth as a `GameRevision` (and
 that a name which is not one is worth `null`), which of several revisions is newest when the list is not
-in order, that nothing is written when the config already asks for it, that turning the mirror off puts
+in order, that nothing is written when the config already asks for it, that turning the sync off puts
 back only a value the launcher itself wrote, and - through the launcher's own settings and config files -
-that the toggle remembers the value it replaced and restores it on disk.
+that the setting is remembered between runs and defaults to synced.
+
+What entry 24 added is covered the same way, and mostly as rules rather than as processes, because that is
+where the decisions are: that a start waits only for a patch server this session will actually ask and only
+when it cannot answer yet (all four combinations, including the two where it must not wait), that the wait's
+way out is offered only while it is waiting, that a file being downloaded is named with the size the
+revision's own list gives it rather than the size of what has arrived, that the newest of several downloads
+is the one named, and that a fetch of a revision other than the server's says which two disagree - said
+before the progress, because it is not progress. The server's side of that is a parser test: the real
+`Error while downloading file …/V_r803238.Wizard_1_610/Data/GameData/Root.wad … 404 (Not Found)` line is
+read into its revision and its file, an address with no `V_` segment is not a fact at all, and the notice
+it produces says both revisions and names the way out - once per address, because the server retries it.
+The cleanup rules are pinned down from the other end: an older revision the server asks for is kept and an
+older one the client happens to be is not, which is the change entry 24 made.
 
 The profile system is covered the same way: the log parser driven by the exact lines Imlight writes,
 playtime and session counting across polls (including a gap between two of them not being credited), duel
@@ -1447,10 +1575,10 @@ a patch server goes.
 asks.** A fresh Aurorium was watched from the moment it answered: the endpoint was open and accepting
 connections while the process spent a little over five minutes fetching `V_r806919.Wizard_1_610` - the
 revision `patch.us.wizard101.com` currently offers - into its own folder. Two things follow from that. A
-session pointed at it inside that window gets `404` for `Data/GameData/Root.wad` and stops, which is the
-failure the launcher reports rather than works around. And the revision it fetches is upstream's rather
-than the server build's, so a server pinned by `GameRevision` to an older build needs the mirror below to
-be served by it at all.
+session pointed at it inside that window gets `404` for `Data/GameData/Root.wad` and stops - which is the
+failure the launcher now waits out, with a way past it, rather than working around (entry 24). And the
+revision it fetches is upstream's rather than the server build's, so a server pinned by `GameRevision` to an
+older build is the case the hand-off or the sync below exists for.
 
 **The one request the launcher makes was then re-checked against the real thing.** This machine's own
 install - Aurorium `v4.0.2`, started from its folder with the config `PatchServerConfig` wrote, on
@@ -1466,7 +1594,7 @@ content-length: 26
 
 `PatchServerRevisions` reads that as one revision, `PatchServerConfig.NewestGameRevision` turns it into
 `r806919.Wizard_1_610`, and against this machine's `Imlight.ini` - pinned to `r803238.Wizard_1_610` - that
-is exactly what the mirror writes, with nothing written when the config already asks for it. Which is what
+is exactly what the sync writes, with nothing written when the config already asks for it. Which is what
 this machine's `Imlight.ini` now holds: `GameRevision = r806919.Wizard_1_610` and
 `PatchServerInternalUrl = http://127.0.0.1:12369`, the launcher's own address, so the rule above has
 nothing to change. `EnforceRevision` is the switch a refused login turns on, and it is off on this install.
@@ -1527,7 +1655,7 @@ settle it.
 
 ## Not done yet
 
-**The next round of work is [To be added](#to-be-added), at the end of this file** - five changes that came
+**The next round of work is [To be added](#to-be-added), at the end of this file** - the changes that came
 out of using the launcher, each with the reason it exists, in the order they will be done. Anything picked
 up later starts there.
 
@@ -1543,14 +1671,15 @@ up later starts there.
   cause is in Imlight's asset prefetch rather than in anything the launcher controls - see
   [rough edges](#rough-edges-in-imlight-itself).
 - **A local patch server still fetches its first revision from upstream.** It has to - that is where the
-  game's files live. The launcher watches for it to arrive and says so (see
-  [running one instead of visiting one](#running-one-instead-of-visiting-one)), and makes the server ask
-  for that revision once it is there. What it can also do is hand it the files a copy of the game already
-  has - most of the revision, and all of the files too large for the server's own download limit (see
+  game's files live. The launcher watches that fetch and says how far along it is and roughly how long the
+  rest will take, from the revision's own file list counted against the disk (see
+  [watching it fetch](#watching-it-fetch)), it waits for the one file the server's boot asks for before
+  starting the server (entry 24), and it keeps the server's accepted revision in step with what the patch
+  server holds. What it can also do is hand it the files a copy of the game already has, when this machine's
+  client is exactly the revision the server asks for and not one file of it is at another length - most of
+  the revision, and all of the files too large for the patch server's own two-minute download limit (see
   [filling it in from a copy of the game](#filling-it-in-from-a-copy-of-the-game)) - and what is left after
-  that is fetched as before. That fetch is still not shown while it happens: there is no per-file progress
-  to show, only Aurorium's own two lines in the Log, so the card says what is missing rather than how far
-  along the fetch is.
+  that is fetched as before.
 - **Switching a session over mid-flight.** Once the patch server can serve, the *next* Play uses it; the
   running Imlight read its config at boot and is not repointed. Doing so would mean restarting the server
   under the player.
@@ -1622,7 +1751,7 @@ users hit them on a first run and would otherwise read them as the launcher's fa
 | The first boot downloads its assets and can then stop by itself | Nothing in the launcher's own startup path: the Director fetches `Root.wad` (about 281 MB) and dies after the fetch, unreproduced. Pressing **Play** again boots it normally, and it has not been seen to recur after a successful first boot |
 | No boss badge moves, however many duels are won | **`manifests/creature.manifest` never gets written.** The launcher reads it, and would rather read it than guess - it is what says which creatures are bosses - but the file is written by `Imlight.Director`'s `ManifestGenerator`, and **nothing in Imlight ever constructs it**: the class is `internal`, its constructor is `internal`, and there is no `new ManifestGenerator()` anywhere in the source. It is a generator that has to be wired to a call before the file it writes can exist, and until then the launcher's own screen says the list is missing rather than counting nothing quietly (`ProfileBossesText`). Creature kills themselves no longer wait on it: they are counted from the duel's own lines (task 11) |
 | A new zone is slow to load | The zone's assets come from the patch server, and the public one is a community machine rather than KingsIsle's infrastructure. The server is local; the assets are not - running the launcher's own patch server is what fixes this, once it has finished its first fetch |
-| `404 (Not Found)` downloading `Root.wad` from a `127.0.0.1` patch server | One of two things. Either the local patch server has not finished fetching that revision yet - its first minutes, and the honest answer is to leave it running - or it holds the revision Wizard101 currently offers while `GameRevision` pins the server to an older build, which has a fix rather than a wait: **Make the server accept the patch server's revision** - see [running one instead of visiting one](#running-one-instead-of-visiting-one). The launcher does not redirect the session for either of them: the address it was given is the address Imlight keeps |
+| `404 (Not Found)` downloading `Root.wad` from a `127.0.0.1` patch server | One of two things, and the launcher now says which. Either the local patch server has not finished fetching that revision yet - its first minutes, and the honest answer is to leave it running, which is what Play waits for before it starts the server at all - or the server is asking for a revision the patch server does not have, which the launcher reads out of the server's own log and says on Home with both revisions named. That second one is what the sync exists for and it is applied at every start, so the fix is to stop the server and press Play again; if the sync is off it is the reason. See [running one instead of visiting one](#running-one-instead-of-visiting-one). The launcher does not redirect the session for either of them: the address it was given is the address Imlight keeps |
 | `TcpListener for Imlight.Patch on port 12500 failed` | Imlight's **own** patch listener (`PatchServerPort`, the one the *client* talks to) could not bind, which means something else already holds that port: a previous Imlight still running, or the launcher's patch server configured to the same port. The launcher's card warns about the second; the first is a leftover the leftover-server guard normally clears |
 
 A launcher-side difference worth keeping in view: the third one is *reported* rather than detected - the
@@ -1642,7 +1771,9 @@ build is published, and the tag and the release are named after it, so the numbe
 on the release and the commit that produced both agree. `v1.0.0` was the first build; `v1.1.0` adds the
 patch server, the launcher's own database, and the screen that stands down when Imlight or the runtime it
 needs is missing; `v1.2.0` adds the cloud backup, the live profile and achievement updates, and the runtime
-the launcher carries rather than asks for.
+the launcher carries rather than asks for; `v1.3.0` makes the patch server something the launcher manages
+rather than merely runs - the wait for its files before the server starts, the fetch it reports while it
+works, the revision the two are kept on together, and the cleanup of the revisions it has finished with.
 
 **Three accounts of every build, for three different readers.** `CHANGELOG.md` is the plain one - per
 release, what was added, changed, fixed and removed, in the language of somebody who uses the launcher
@@ -1702,7 +1833,7 @@ show rather than after the file names they arrived with.
 
 ## To be added
 
-Twenty-one changes that came out of *using* the launcher rather than out of reading its code, written down
+Twenty-four changes that came out of *using* the launcher rather than out of reading its code, written down
 here in the order they will be done. Each one records the reason as much as the job - they came out of a
 conversation, and a later reader should be able to finish any of them without having it again. The finished
 ones stay in the list and point at the section above that now describes the rule properly, which is the same
@@ -1715,20 +1846,21 @@ It is not optional - Imlight has one or it does not boot - so what is actually b
 machine's, or somebody else's. Settings asks that one question, and everything that follows from the answer
 sits underneath it: the remote address (the public instance, or an address of your own) in one branch, and
 the folder, the port, *start it with the server, stop it with the server*, *fill it in from the game folder
-if it has nothing yet*, and the revision mirror in the other. The patch server address moved out of the
+if it has nothing yet*, and the revision sync in the other. The patch server address moved out of the
 **Network** card, because it is a patch server setting.
 
 **What came out of it.** Two new launcher settings and one rule change. `UseLocalPatchServer` (on by
-default) says which branch is in play, and `PatchServerPreloadAutomatically` (off by default) turns Play's
+default) says which branch is in play, and `PatchServerPreloadAutomatically` (off by default, and since removed - see
+[22](#22-the-launcher-watches-the-patch-server-fetch-and-stops-copying-files-into-it---done)) turned Play's
 offer into something that just happens. The rule for pointing Imlight at this machine's patch server used to
 be *the launcher is running it* - `PatchServerManaged`, which is really "start it with the server" - and is
 now *this machine's patch server is the one that was chosen*. A patch server started by hand from Settings
 is therefore used by the next Play instead of the address being left as it was, and Home's row, the fetch
-report, the copy offer and the mirror all hang off the one answer rather than off three separate switches.
+report, the copy offer and the sync all hang off the one answer rather than off three separate switches.
 Written up under [the patch server](#the-patch-server) and
 [filling it in from a copy of the game](#filling-it-in-from-a-copy-of-the-game).
 
-**One limit carried forward from this.** The revision mirror asks *this machine's* patch server and only
+**One limit carried forward from this.** The revision sync asks *this machine's* patch server and only
 that one (`GET /revisions` goes to `LocalPatchServerUrl`), so with a remote patch server in use the switch
 has nothing to read and does nothing - the case where the game has been patched past the server build being
 much more likely against the public instance than against a local one. It should either be hidden in the
@@ -2671,7 +2803,9 @@ find out from a softlock. Written up under [the patch server](#the-patch-server)
 **One thing deliberately left where it was.** The screen does not start the patch server, or fetch anything
 with it. Its first start is where the revision's file list is written, where the fetch begins, and where the
 offer to hand it the game's files instead is made - and all three of those belong to Play, next to the thing
-they are for, rather than to a first-run screen that would then be a download with a question attached.
+they are for, rather than to a first-run screen that would then be a download with a question attached. The offer it names was removed in
+[22](#22-the-launcher-watches-the-patch-server-fetch-and-stops-copying-files-into-it---done); the fetch itself is
+what Play now reports on.
 
 ### 20. A finished copy is noticed, and the card stops asking - *done*
 
@@ -2721,3 +2855,214 @@ written over. A search that fails is a third answer rather than a second, and it
 being read as an empty drive. Written up under [a cloud backup of the few databases that
 matter](#5-a-cloud-backup-of-the-few-databases-that-matter---done) and in the readme's table of what a sync
 does.
+
+
+### 22. The launcher watches the patch server fetch, and stops copying files into it - *done*
+
+**What was asked for.** Two things that turned out to be one. The first is that a first fetch is invisible:
+the patch server is up, it is downloading eighteen gigabytes, and nothing on screen says how far along it
+is or whether it is moving at all - so the answer to "how long will this take" was a shrug. The patch
+server's own software does not obviously expose that, so the request was to find out whether it can, and to
+show the progress and the finish time if it can. The second is that the launcher filling the patch server
+in from the local game is a shortcut around the way the software is meant to work: the patch server never
+downloaded those files, may never have indexed them, and "the bytes matched when we checked" is not the same
+as "this is the state the patch server expects to be in". The two together point one way - stop standing in
+for the patch server's job, and start reporting it.
+
+**What the patch server actually exposes.** Aurorium's HTTP API is `/revisions`, `/latest` and
+`/{revision}/{file_path}`; there is no progress route, and its `indicatif` bars are drawn on its own console.
+Its database knows which assets a revision *should* have rather than which have arrived, and its log lines
+are `info`-level events rather than a percentage - `Revision {name} has {n} updated or new assets`, `All
+downloads completed` - which are worth having but are not a figure to put a bar under. What it does leave on
+disk is exact: the revision's `LatestFileList.xml`, written before the first asset is fetched, and the files
+themselves. So the launcher measures instead of asking, and the request's own condition - *if the patch
+server exposes that* - is answered as: not over its API, but the disk it is writing to is enough.
+
+**What came out of it.** `PatchServerFetch` counts a revision's file list against the disk, with four rules
+that make the answer honest: a file counts as held only at the length the revision gives it; a file missing
+from the revision's own folder is looked for in the patch server's other revisions, because that is where an
+unchanged asset is served from and counting only the newest folder would report thousands of files missing
+that are being served; `.part` bytes count as progress but never as something the patch server can serve;
+and a preload's `.preloadpart` counts as neither until it is moved into place. `PatchServerFetchPace` turns
+a series of those readings into a rate - a window of at least fifteen seconds, each blended into the last -
+and drops the estimate with a plain sentence when a whole window carries nothing, because Aurorium retries
+what it could not get on its own `fetch_interval` schedule and a countdown through that would be a lie. The
+watch is started and stopped with the patch server process, so a patch server started by hand from Settings
+is watched from there, and the line and bar appear under Home's patch server row and in the patch server
+card. Written up under [watching it fetch](#watching-it-fetch).
+
+**And the copy stops being something Play does.** The offer before a session, the setting that turned it
+into something automated, the dialog it asked in, `LauncherPhase.CopyingGameFiles`, and the two places the
+answer was remembered are all gone. What is left is the button in Settings and the plan behind it, so the
+copy is something asked for about a known obstacle - the files Aurorium's own two-minute request limit means
+it can never finish - rather than the shape of a normal first run. This supersedes the *Play asks* paragraph
+and the *offer before a session* wording in [the patch server](#the-patch-server), and the copy's own row in
+entry 1 above.
+
+### 23. The server's revision is the one that is kept, and the revisions nobody wants are removed - *done*
+
+**Superseded in part by [24](#24-the-two-revisions-are-kept-in-step-and-play-waits-for-the-one-file-the-boot-needs---done).**
+Which way round the two revisions are made to agree was turned around a day later, and the cleanup rule lost
+its third "kept" case with it. Everything else here - the file hand-off and how exact it is, the first-run
+offer to prepare the files, the two cleanup modes and the guards on them - is still what the launcher does.
+
+**What was asked for.** Four things that are one arrangement. Downloading is the default, and copying the
+game's files in is allowed only when the client version matches what the patch server actually wants *and*
+the files it wants are exactly the files the client has. As a safety net the launcher should make the patch
+server keep the revision **the server wants** rather than moving the server to the revision the client is -
+which is what makes a server able to retrieve its own files - with the old way round kept behind a toggle
+that warns first. The first-run screen should offer to prepare the files there and then, with a progress bar.
+And the revisions on disk should be looked after: automatic cleanup that keeps the two in use and removes the
+rest, or a manual list where each one can be kept, deleted, or asked for.
+
+**Why "the server's revision" is the whole of it.** `GameRevision` does two jobs at once: it is the
+`V_{GameRevision}` segment Imlight asks its patch server for, and it is the revision the server accepts
+clients on. So the two halves of this only work together when the patch server holds *that* revision. The
+old arrangement moved the other value - the launcher read the revision the patch server held (whatever
+Wizard101 was serving) and wrote it into `GameRevision`, so the server accepted the newest client instead.
+That is a decision made on the say-so of a file server about a server build, and the launcher cannot check
+whether the build still fits: on this machine the server is `r806919` pinned to `r803238`, and the mirror had
+rewritten `GameRevision` to `r806919`. Sessions where the pair does not fit show up as anomalies - refused
+logins, missing content - so it is now off by default and behind a warning, and the default is the direction
+that has nothing to guess about: the patch server is made to keep the server's revision.
+
+**How little the launcher can do about that, and why it says so.** Aurorium decides which revision to fetch
+from one place only - the patch host in its config, which it asks `MSG_LATEST_FILE_LIST_V2` for and from
+whose answer the revision name falls out. There is no way to ask it for a *particular* revision, old or new,
+and the launcher will not invent one by writing files under a revision name the patch server has never
+heard of. So "make the patch server keep the server's revision" has exactly one mechanism behind it: the
+exact file hand-off above, aimed at the server's revision, and only when this machine's client *is* that
+revision. Where it cannot be done it is reported - a line in the Log, and the same refusal the copy card
+shows - because a session that fails on a 404 and a session that is told why are very different things.
+
+**"Exactly" was measured, and it is the strictest form of it that this machine's data supports.** Against the
+real fetched revision (`r806919`, 3,825 files) and the real Steam install (7,885 files): every file the two
+had in common matched in length, none differed - the whole of `Data\` and `Bin\`, 3,725 files - and the 100
+revision files the install does not have are all `PatchClient\` and `Windows\` launcher files, which a Steam
+install does not ship. Set-for-set equality therefore holds for nothing on a real machine, and a rule written
+that way would have silently disabled the feature. What is enforced instead is: the revision is the server's,
+the source build is that revision, and **no file may be at a wrong length** - which is the condition that
+actually proves whose build this is, since a size mismatch is exactly what a patched-past install looks like.
+Missing files are left to the patch server; extra files in the install (logs, launcher files) are none of the
+revision's business and are ignored.
+
+**Preparing the files now, on the first-run screen.** The screen that asks whose patch server now also asks
+whether to prepare its files immediately: pressing it starts the patch server there and shows the same line
+and bar Home and Settings show, and leaving the screen does not stop the fetch - a fetch only advances while
+the process is alive, and the launcher keeps it alive. "Not now" is an answer and is remembered for the
+screen's lifetime. This is the one place the patch server is started before Play, and it is deliberate: the
+first fetch is the whole of what a patch server costs, and a machine that has just chosen one may as well get
+it started while it is looking at the screen. What is *not* offered is a launcher that prepares files on its
+own - that was removed in entry 22 and has not come back.
+
+**The revisions on disk.** `PatchServerRevisionCatalogue` reads the patch server's data folder (as its own
+config names it, not as its default has it) and gives every `V_*` folder a role. This entry gave it three:
+the revision the server asks for, the revision this machine's game is, or neither - and the middle one is
+the case [entry 24](#24-the-two-revisions-are-kept-in-step-and-play-waits-for-the-one-file-the-boot-needs---done)
+took away, because a client's own revision is a folder in the *game's* install rather than anything a session
+asks a patch server for. Nothing outside that folder, and nothing that is not
+named the way Aurorium names a revision, is ever considered - a folder somebody keeps beside the revisions is
+theirs. Removal is guarded twice over, because the failure is a download that cannot be repeated: a revision
+is only spare if its role says so, **and** the patch server is not writing into it - no `.part` file in it and
+nothing under it written within the last twenty minutes, since a revision Aurorium has just started on has
+its file list on disk before its first asset and otherwise looks exactly like an unused one. The guards are
+re-checked per revision at the moment of removal, so a fetch starting between two deletions is not something
+the batch can get wrong.
+
+**Automatic is the default, and choosing it is the permission.** Each revision is around 18 GB, and the patch
+server fetches a new one whenever Wizard101 publishes one, so the folder only ever grows - and it is the
+patch server's folder, so nobody else will ever tidy it. The card in Settings says all of that before the
+choice is made, the choice can be changed at any time, and every removal is written into the Log with what it
+was and why. The pass runs on the way in, when a patch server stops, and from the button; the pass the
+launcher makes on its own account is deliberately **silent** about it - it runs on a thread of its own while
+the launcher is still coming up, and the Log is a collection the UI thread owns, so the outcome goes on the
+card instead. That was found by a test rather than by reasoning: the first version logged it, and a
+background append racing the constructor's own log lines corrupted the log document.
+
+**Manual is the same cleanup with a person in the middle.** The list shows every revision with what it is and
+what it weighs, a tick that means keep, and a Delete button that removes the unticked ones; the two in use
+start ticked, so the list opens on the answer automatic mode reaches by itself. Manual may delete a revision
+that is in use - that is the point of it, and the user's list *is* the permission - but it may never delete
+one the patch server is writing into, which is the one rule it does not get to overrule. Each row also offers
+**Download**, which is how the honest half of that request is answered: Aurorium fetches what Wizard101 is
+serving when it looks, so an older revision cannot be asked for and the row says so rather than looking like
+something that might work.
+
+| Piece | What it does |
+| --- | --- |
+| `PatchServerPreload.Plan` | the gate, restated as three conditions on the server's revision rather than the client's |
+| `MainWindowViewModel.ServerWantedRevision` | `GameRevision`, read from the config the session will use - the one revision worth having on disk |
+| `PatchServerRevisionCatalogue.List` | every revision on disk with its role, its size, its file count, and whether the patch server is writing into it |
+| `PatchServerRevisionCatalogue.RoleOf` | server's revision, the patch server's newest, or spare - as a rule, so it is testable without a disk (the client's revision was the third case until entry 24) |
+| `PatchServerRevisionCatalogue.Delete` | per-revision re-check, never throws, reports what it kept and why |
+| `PatchServerRevisionSynced` | the toggle, on by default; off pins the server to its own config and leaves the hand-off as the only way its files arrive |
+| `PreparePatchServerFilesNowCommand` / `SkipPreparingPatchServerFilesCommand` | the first-run offer, and taking it or leaving it |
+| `PatchServerRevisionCleanup` | `Automatic` or `Manual`, stored as text so a value from a later build falls back rather than failing to load |
+
+### 24. The two revisions are kept in step, and Play waits for the one file the boot needs - *done*
+
+**What was asked for.** Two faults, reported from playing. The server starts warming up *before* the patch
+server has the files it is going to ask for, so it asks, gets a 404 and sits there. And the Log does not say
+the things worth knowing about a fetch: which file it is downloading, how big that file is, which revision
+is being fetched, and whether that revision is the one the server asks for. Then, from working out what to do
+about the first one: the patch server cannot be told which revision to fetch, so the server should be kept on
+the patch server's instead - the same sync this file had described as the off-by-default fallback, but on by
+default and with no dialog in front of it - and automatic cleanup should stop keeping a revision for the
+client's sake.
+
+**What came out of it.** The toggle is `PatchServerRevisionSynced` and is **on by default**: the launcher
+reads `GET /revisions` and writes the patch server's revision into `GameRevision`, so a server always asks
+for files the patch server has *and* accepts the client that has just updated. It is applied whenever a patch
+server starts, again on every pass while Play waits for its files, and turning it off restores the value the
+config had before the launcher's first write - and only that value, as before. The dialog that used to guard
+the other direction is gone rather than reversed: there is nothing left to warn about, because the direction
+it warned about (a server build running with a revision it was not published with) is now what the launcher
+does by default and cannot check either way. `UndoAMirroredRevisionLeftBehind` went with it - a
+`GameRevision` an older launcher mirrored is now exactly what this build wants, so undoing it on the way in
+would be undoing the arrangement.
+
+**Play waits, for one file, and never without a way out.** `WaitForPatchServerFilesAsync` sits at the top of
+`StartServerAsync`, after Imlight is pointed at the patch server and before anything is spawned: it asks for
+the boot file with a `HEAD`, and if it is not there it waits - re-asking the sync each pass, showing the fetch
+line on Home, and offering **Play anyway** beside it. That button is the part worth being careful about: a
+wait can be a long time on a first run, so it is escape-able, and taking the escape is written into the Log
+with what it is about to cost. The wait ends by itself when the patch server goes away, and the time spent in
+it is added back onto Play's own readiness deadline, because a server that has not been started yet is not a
+server that is being slow.
+
+**The fetch says what it is doing.** `PatchServerDownloadInFlight` is one `.part` file Aurorium is writing,
+named after the file it will become and sized from the revision's own file list - so the line reads
+`Downloading Equipment-WorldData.wad (12.3 MB of 281.4 MB) now (4 files in flight)`. Several are in flight at
+once and the one named is the most recently written, which is why the count goes with it. The same sentence
+is written into the Log when the file changes and once a minute besides. The revision is checked against the
+one the server asks for on every sample, and a mismatch is said by name in the line and written once as a
+warning - that one is not progress, it is the reason a session will fail.
+
+**The server's own log is where that failure exists, so it is read there too.**
+`ServerLogFacts.PatchServerRefusedAFile` reads the server's `Error while downloading file
+http://127.0.0.1:12369/V_r803238.Wizard_1_610/Data/GameData/Root.wad ... 404 (Not Found)` line, pulls the
+revision and the file out of the address, and Home says which two revisions disagree and which of them the
+launcher moves. It is reported once per address - the server retries and restarts its patch actor, so the
+same address comes round again and again - and the notice is cleared at the start of the next attempt. Nothing
+is acted on: the launcher does not restart the server under the player, which is why the sentence it prints
+ends in "stop the server and press Play".
+
+**Cleanup keeps one revision, not two.** With the sync on, the revision the server asks for and the newest the
+patch server has are the same folder - so the third case the catalogue used to keep, *this machine's game is
+this one*, went away. A client's revision is a folder in the game's own install; what a session asks a patch
+server for is the revision the server names, so an older build's folder on the patch server was 18 GB held
+for nothing. `RoleOf` now answers *the server's revision*, *the newest*, or *spare*, and the newest is one of
+the two kept answers because deleting it would be deleting the fetch the folder exists for. Below the newest,
+an older folder **the server asks for** is still kept, which is what makes the sync-off arrangement work at
+all: that revision cannot be fetched again and the server cannot serve its clients without it.
+
+| Piece | What it does |
+| --- | --- |
+| `PatchServerRevisionSynced` | the toggle, on by default; applied at every patch server start, and again on every pass of the wait |
+| `MainWindowViewModel.ShouldWaitForPatchServerFiles` | the rule: a patch server is up, it is the one Imlight will ask, and it cannot serve the boot file |
+| `WaitForPatchServerFilesAsync` / `PlayAnyway` | the wait and its way out, with what it costs written into the Log |
+| `PatchServerFetch.DescribeCurrentFile` | which file it is on, how big it is, and how many are in flight |
+| `PatchServerFetch.DescribeRevisionMismatch` | the two revisions that disagree, named, and what that means for a session |
+| `ServerLogFacts.PatchServerRefusedAFile` | the server's own account of it, read out of its log |
+| `MainWindowViewModel.ReportPatchServerRefusal` | the notice on Home, once per address, with the way out |
+| `PatchServerRevisionCatalogue.RoleOf` | server's revision, the newest, or spare - the client's case removed |

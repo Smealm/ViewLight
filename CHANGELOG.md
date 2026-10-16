@@ -8,6 +8,45 @@ The version number in the window, on the **About** tab, matches the tag and the 
 
 ---
 
+## v1.3.0 - 2026-10-16
+
+### Added
+
+- **The patch server's download is now something you can watch properly.** The line under its row on Home —
+  and in the card in Settings — now names the file it is downloading at that moment and how big that file is
+  (`Equipment-WorldData.wad (12.3 MB of 281.4 MB)`), how many files are arriving at once, which version it is
+  fetching, and whether that version is the one your server asks it for. The Log keeps the same line as it
+  moves from file to file.
+- **A way past the wait: **Play anyway** on Home.** If the patch server has not got the file the server's
+  boot needs yet, ViewLight waits for it rather than starting a server that will 404 — and that wait can be
+  a long time on a first run. One button starts the session immediately, and the Log says what that means.
+- **A server that cannot load its own files now says so instead of sitting at "warming up" forever.** The
+  server asks the patch server for a version, and if the patch server does not have it the answer is a 404
+  that the server writes in its own log and then retries until somebody notices. ViewLight reads it and puts
+  it on Home, naming the version the server asked for and the version the patch server actually has.
+
+### Changed
+
+- **Your patch server and your server are now kept on the same game version by default.** Settings →
+  Patch server → **Sync the patch server's revision with the server's accepted client revision** is on, and
+  it means the server always asks for files the patch server actually has — and accepts the client that has
+  just been updated. It is applied every time a patch server starts, and switching it off puts the version
+  your config had back.
+- **Play waits for the patch server's files before starting the server** — for the one file the server's own
+  boot needs, not for a whole version. A first run used to press on regardless and leave the server unable
+  to fetch its own files; it now says what it is waiting for, and starting anyway is one button away.
+- **Automatic cleanup keeps the newest version and removes the older ones.** It used to also keep whichever
+  version your game happened to be, which on a machine that has not been patched up to the current version
+  was a second 18 GB held for nothing. Nothing your server asks for by name, and nothing being downloaded,
+  can be removed.
+
+### Removed
+
+- **The warning dialog in front of the revision switch** is gone. It guarded the arrangement that is now
+  the default, and the switch says what it does in plain words instead.
+
+---
+
 ## v1.2.0 - 2026-10-15
 
 ### Added
