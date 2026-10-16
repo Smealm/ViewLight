@@ -238,6 +238,14 @@ simply has nothing to hand over. Three things are worth knowing:
   is overwritten and nothing is invented: only files of the right name and the right size go in, each one is
   written aside and moved into place, and running it again copies only what is still missing.
 
+**It is also the one thing here that does something the patch server did not ask for.** A patch server
+normally collects a revision itself, and this hands it the content without it ever having downloaded that
+revision - so it may not be expecting those files to be there yet. When the feature was written, the files
+the game client had cached and the patch server's own copy were compared and looked identical, which is why
+it should be safe; but content delivery is not something this launcher knows deeply, so treat "should" as
+the strong word it is. If the game misbehaves around a file, or the patch server reports something
+unexpected, the safe retreat is to let it download that revision itself rather than trust the copy.
+
 **If a login is refused, these two are usually why.** Your game gets updated by KingsIsle, and your server
 accepts one specific version. **Make the server accept the patch server's revision** - one switch in the
 patch server card - tells the server to accept whatever version your patch server actually holds, which is
@@ -359,6 +367,26 @@ have already repaired an address that was blank or pointing at nothing.
 the files yet. Leave it running and try again later, or hand it the files your game already has - see
 [the patch server](#the-patch-server-in-plain-words).
 
+**Wizard101 cannot connect to the server.** This is the one fault the launcher cannot see or fix, because
+nothing is actually broken: the patch server, the Imlight server and the game are all running, all on this
+machine, and all talking to each other over a local IP address - and something in between is stopping them.
+Two things cause it almost every time.
+
+- **A VPN.** The game reads the server's address from your own machine's network, and a VPN replaces that
+  network with its own. Disconnect it and try again.
+- **A firewall.** The rule that has to exist is **Imlight's Director allowed to talk to Wizard101**, and the
+  same for your patch server. Windows' own firewall asks you the first time and offers to make the rule; say
+  **Allow**. Third-party firewalls count too - this includes software like **PortMaster** - and a firewall
+  that is installed is still filtering when its window is closed: if it runs a background service, that
+  service goes on blocking traffic with nothing in the tray to remind you. So launch it, then either shut it
+  down properly (check its process is really gone) or exempt the Director, the patch server and Wizard101 so
+  they can reach each other.
+
+**The rule of thumb:** a patch server, an Imlight server and a game client all on one machine are expected
+to be outside any VPN and outside any firewall restriction, and to communicate freely over a local address.
+Anything in the way of that shows up as a connection error rather than as a fault, so check what is
+intercepting the traffic before you suspect what is running it.
+
 **A login is refused.** Compare the two versions on Home. Your game has been updated past the version your
 server accepts; turn on **Make the server accept the patch server's revision** in the patch server card.
 
@@ -372,6 +400,24 @@ pinned down: press **Play** again and it starts normally. It has not been seen t
 
 **A new area loads slowly.** That is the public patch server rather than your PC: your server is local, but
 the assets come over the internet from a community machine. Running your own patch server is the fix.
+
+**Something in the game is not right.** The launcher is not the game's author and modifies neither the game
+nor the server - see [What ViewLight never does](#what-viewlight-never-does) - so where the fault sits decides
+who can actually fix it:
+
+- **A bug in Wizard101 itself** - a spell doing the wrong thing, a texture, an animation, a crash in the
+  client - is **KingsIsle's**. They wrote the game, and a private server does not change that. This launcher
+  deliberately leaves the game untouched, so it has no way to patch a game bug out.
+- **Something the server gets wrong** - a quest that will not advance, a creature behaving oddly, a reward
+  that never arrives - is **Imlight's developers'**. The server is where the world's rules live; ViewLight
+  writes one configuration file into it and otherwise leaves it alone. That belongs on Imlight's own project
+  page rather than here.
+- **Files that will not come down, or arrive wrong** is the one of the three that can genuinely be this
+  launcher's, and it is a known weak point of its own - the file hand-off described under
+  [the patch server](#the-patch-server-in-plain-words).
+
+None of that means a bug is not worth reporting - it means it is worth reporting in the right place, where
+somebody can do something about it.
 
 **Anything else.** The **Log** tab has everything all three of them said, in order, and you can copy any of
 it straight out.
@@ -416,6 +462,12 @@ same machine as the client.
 - **Item names in the starter-item picker** come from Imlight's own list rather than from the game. Reading
   the real names out of the game's data is separate work.
 - **Imlight's own first-boot crash** is not worked around; pressing Play again is the way through it.
+- **The file hand-off to a local patch server is the weakest thing in the launcher.** It spares the patch
+  server a download it would otherwise do itself and gives it content for a revision it has not collected,
+  which it may not be written to expect. It was checked by comparing the game client's cached files against
+  the patch server's own and finding them identical, so it is expected to be safe - but expected is not
+  proven, and content delivery is not something this launcher knows deeply. A patch server left to collect
+  its own revision is the path its authors designed, and the one to fall back on if files misbehave.
 - **A local patch server still has to collect its first version from Wizard101.** That is where the game's
   files live. Once they are on your machine, everything is served locally.
 - **ViewLight always takes the newest server build**; choosing an older one is not offered.
