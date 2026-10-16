@@ -71,12 +71,6 @@ public enum LauncherPhase {
     /// <summary>The game is running against the server this launcher started.</summary>
     Playing,
 
-    /// <summary>
-    /// The patch server is being filled in from a copy of the game on this machine, before the server
-    /// this session needs is started.
-    /// </summary>
-    CopyingGameFiles,
-
     /// <summary>Something went wrong, and the user has to know about it.</summary>
     Failed,
 }
@@ -178,6 +172,17 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         _patch.StateChanged += (_, state) => Post(() => {
             PatchServerState = state;
             RefreshDerived();
+
+            // Watching the fetch hangs off the process rather than off Play: a patch server started from
+            // Settings is fetching the same revision, and what it has fetched is worth the same line.
+            SyncFetchWatch();
+
+            // A patch server that has just come up has written the revision's own file list, which is what
+            // a copy into it is planned against - so the card under Settings can say what there is to do
+            // without the user having to change something to make it look.
+            if (PatchServerIsRunning) {
+                _ = RefreshPreloadPlanAsync();
+            }
         });
         _patch.Ready += (_, reason) => Post(() => {
             AppendLog(LogLevel.Success, $"The patch server is ready — {reason}");
@@ -197,6 +202,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         Section = ParseSection(_store.Settings.DefaultSection);
 
         LoadServerConfig();
+
         SeedAccountsFromCache();
         RefreshPatchFolderStatus();
         RefreshPatchInstalledText();
@@ -206,6 +212,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         // than the property: nothing has changed yet, so there is nothing to save or to ask again.
         _preloadSourcePath = _store.Settings.PatchServerPreloadSource;
         _ = RefreshPreloadPlanAsync();
+
+        // And, when the revisions are looked after automatically, the tidy-up that setting is about. It only
+        // touches a revision nothing asks for and nothing is writing into, so the usual answer on the usual
+        // machine is that there is nothing to do - which is why it is safe for it to be here rather than
+        // behind a button.
+        if (CleansUpRevisionsAutomatically) {
+            _ = LookAfterPatchServerRevisionsAsync();
+        }
 
         // Profiles come from the accounts this launcher already knows; what each of them has done is
         // collected while its server runs. Only this server's accounts count: a name remembered from
@@ -1928,8 +1942,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     /// <summary>A step is in progress, so the status animates.</summary>
     public static bool IsPhaseWorking(LauncherPhase phase)
-        => phase is LauncherPhase.StartingServer or LauncherPhase.WarmingServer or LauncherPhase.StartingClient
-            or LauncherPhase.CopyingGameFiles;
+        => phase is LauncherPhase.StartingServer or LauncherPhase.WarmingServer or LauncherPhase.StartingClient;
 
     /// <summary>A step finished well, so the status reads as success.</summary>
     public static bool IsPhaseGood(LauncherPhase phase)
@@ -2039,7 +2052,6 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         => phase switch {
             LauncherPhase.StartingServer => "Getting ready…",
             LauncherPhase.WarmingServer => "Warming up…",
-            LauncherPhase.CopyingGameFiles => "Copying the game's files…",
             LauncherPhase.ServerReady => client == ClientState.Closed
                 ? "Wizard101 was closed"
                 : "Ready to play",
@@ -2057,8 +2069,6 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     public static string DetailFor(LauncherPhase phase, ClientState client, string failureDetail)
         => phase switch {
             LauncherPhase.StartingServer => "Starting the Imlight server. Nothing to do yet.",
-            LauncherPhase.CopyingGameFiles => "Filling the patch server from the copy of Wizard101 on this "
-                                               + "machine. It is a local copy, so minutes rather than hours.",
             LauncherPhase.WarmingServer => "The server is loading world data and opening the game ports. "
                                            + "A first run takes a few minutes.",
             LauncherPhase.ServerReady => client == ClientState.Closed
@@ -2428,24 +2438,27 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     [RelayCommand(CanExecute = nameof(CanStartServer))]
     private async Task StartServerAsync() {
+        // A new attempt, so last session's account of a file the server could not load is not this one's.
+        ForgetPatchServerRefusal();
+
         // The patch server goes first, because Imlight reads it during its own boot: starting it
         // afterwards would only serve the next session. Play comes through here too, so Play inherits the
         // order - patch server, then server, then client.
         await EnsurePatchServerStartedAsync().ConfigureAwait(true);
-
-        // The one moment filling the patch server in is worth offering. Before the server starts, because
-        // Imlight loads Root.wad from the patch server during its own boot - and this is the only chance to
-        // have it there. Nothing is started differently on the answer, so a "no" simply carries on.
-        await OfferPreloadAsync().ConfigureAwait(true);
 
         // Imlight is pointed at this machine's patch server when the launcher is running one and it is
         // up, because its config is read during its boot. Anything else - the public patch server, or one
         // somebody runs elsewhere - is left exactly as the config has it.
         ApplyPatchServerToConfig();
 
-        // ...and the one thing worth saying about it before the server starts: a patch server that is
-        // still on its first fetch does not have Root.wad to serve, which is what the session's first
-        // request asks for. Reported rather than acted on - see the method.
+        // The warm-up's first request is Root.wad from the patch server, so a patch server that has not
+        // fetched it yet is one the server cannot finish warming up against: it asks, gets a 404, and sits
+        // there. Waited for before the server is spawned, for that one file and no more, with a way out on
+        // Home - see the method. Nothing is repointed and nothing is refused.
+        await WaitForPatchServerFilesAsync().ConfigureAwait(true);
+
+        // Still worth saying once the boot file is here: a patch server with Root.wad and little else serves
+        // the boot and then fails the client the first time it asks for a zone that has not arrived.
         await WarnIfPatchServerIsStillFetchingAsync().ConfigureAwait(true);
 
         // The databases are handed over from here, which makes this the last moment a copy of them can be taken:
@@ -3005,8 +3018,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
                 AppendLog(LogLevel.Info, "The server is already running, so the game is starting.");
             }
 
-            // Wait for readiness without blocking the UI thread.
-            var deadline = DateTimeOffset.Now.AddMinutes(10);
+            // Wait for readiness without blocking the UI thread. Time spent waiting for the patch server's
+            // files is added back on, because that is not the server being slow - it had not been started
+            // yet, and counting it here would time out a session that was waiting on a download rather than
+            // on Imlight.
+            var deadline = DateTimeOffset.Now.AddMinutes(10) + _waitedForPatchServerFiles;
             while (ServerState != ServerState.Ready
                    && ServerState is not (ServerState.Faulted or ServerState.Stopped)
                    && DateTimeOffset.Now < deadline) {

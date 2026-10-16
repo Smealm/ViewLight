@@ -20,6 +20,33 @@ public static class LauncherSections {
     public static IReadOnlyList<string> All { get; } = [Home, Profile, Settings, Logs, About];
 }
 
+/// <summary>
+/// How the launcher deals with the revisions a patch server has fetched.
+/// </summary>
+/// <remarks>
+/// Spelled as strings rather than as an enum, because this is written into the settings file and a value a
+/// later build no longer recognises must fall back rather than fail to load - see <see cref="ThemeChoices"/>,
+/// which is here for the same reason.
+/// </remarks>
+public static class PatchServerCleanupChoices {
+
+    /// <summary>
+    /// The launcher keeps the revision that is in use - the newest the patch server has, which is the one
+    /// the server is kept in step with - and deletes every older one. The recommended answer, and the one a
+    /// launcher that has never been asked starts on.
+    /// </summary>
+    public const string Automatic = "Automatic";
+
+    /// <summary>
+    /// The launcher deletes nothing on its own: the revisions on disk are listed in Settings where they can
+    /// be kept or deleted one by one.
+    /// </summary>
+    public const string Manual = "Manual";
+
+    /// <summary>Every choice, in the order the radio buttons list them.</summary>
+    public static IReadOnlyList<string> All { get; } = [Automatic, Manual];
+}
+
 /// <summary>The themes the launcher offers.</summary>
 public static class ThemeChoices {
 
@@ -107,17 +134,6 @@ public sealed class LauncherSettings {
     public bool PatchServerManaged { get; set; } = true;
 
     /// <summary>
-    /// Whether a patch server that holds nothing for the session's revision is filled in from the game
-    /// folder on this machine without being asked.
-    /// </summary>
-    /// <remarks>
-    /// Off by default: the copy is tens of gigabytes read and written, and when to spend that is the user's
-    /// decision - which is what the offer before a session is for. On, the offer stops being a question and
-    /// Play copies what it can, saying so in the Log.
-    /// </remarks>
-    public bool PatchServerPreloadAutomatically { get; set; }
-
-    /// <summary>
     /// The port the patch server listens on, and the port Imlight is pointed at for it.
     /// </summary>
     /// <remarks>
@@ -127,21 +143,36 @@ public sealed class LauncherSettings {
     public int PatchServerPort { get; set; } = 12369;
 
     /// <summary>
-    /// Whether the launcher makes Imlight accept the revision the patch server holds, by writing that
-    /// revision into <c>GameRevision</c>.
+    /// Whether the launcher keeps the revision the server accepts clients on in step with the revision
+    /// the patch server actually holds.
     /// </summary>
     /// <remarks>
-    /// Off by default. A server build pins the revision it was published with, and a patch server can
-    /// only ever hold what Wizard101 currently offers, so the two disagree the moment the game is patched
-    /// past the server build - which shows up as a 404 during boot and a refused login. Turning this on
-    /// is the deliberate act of saying the client that is here now is the one to accept.
+    /// <para>
+    /// On by default, and it is the arrangement the whole stack wants: a patch server fetches whatever
+    /// revision Wizard101 is serving and nothing can ask it for a different one, so the value that has to
+    /// move is the server's. Imlight asks its patch server for <c>V_{GameRevision}</c> and accepts clients
+    /// on that same revision, so writing the patch server's revision into <c>GameRevision</c> is what makes
+    /// the server's own files reachable <i>and</i> what lets the client that just updated get in - both
+    /// values say the same thing, which is the only state either of them works in.
+    /// </para>
+    /// <para>
+    /// Off leaves <c>GameRevision</c> exactly as the server's own config has it, pinned the way Imlight was
+    /// published. That is right for a server whose build is deliberately held at one revision, and it means
+    /// the patch server is the side left needing something it cannot fetch: the launcher can hand it that
+    /// revision's files, and only when this machine's client build is exactly that revision with no file of
+    /// it at the wrong length. See <see cref="Services.PatchServerPreload"/>.
+    /// </para>
     /// </remarks>
-    public bool MirrorPatchServerRevision { get; set; }
+    public bool PatchServerRevisionSynced { get; set; } = true;
 
     /// <summary>
-    /// The <c>GameRevision</c> the config held when mirroring was turned on, so turning it off can put
-    /// the release's own value back. <c>null</c> until the toggle has been used with a config to read.
+    /// The <c>GameRevision</c> the config held before the launcher set it from the patch server, so the
+    /// launcher's own writing can be undone. <c>null</c> until it has written one.
     /// </summary>
+    /// <remarks>
+    /// Only used by the sync above. A launcher that never ran it leaves this alone, and switching the sync
+    /// off uses it to put back the value the release pinned its config to.
+    /// </remarks>
     public string? RevisionBeforeMirror { get; set; }
 
     /// <summary>
@@ -151,19 +182,38 @@ public sealed class LauncherSettings {
     public string? MirroredRevision { get; set; }
 
     /// <summary>
+    /// How the revisions the patch server has fetched are looked after: <see cref="PatchServerCleanupChoices.Automatic"/>
+    /// or <see cref="PatchServerCleanupChoices.Manual"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A revision of this game is around 18 GB, and a patch server fetches a new one whenever Wizard101
+    /// publishes one - so left alone, the folder only ever grows. Automatic keeps the revision that is in
+    /// use - the newest one, which is the one the server's own revision is kept in step with - and deletes
+    /// the older ones; manual leaves every one of them alone for the user to manage.
+    /// </para>
+    /// <para>
+    /// Automatic is the recommended answer and the default, and choosing it <i>is</i> the permission the
+    /// launcher needs to act on the user's behalf: it is stated before anything is downloaded, changeable
+    /// at any time, and every deletion is written to the Log with what was deleted and why. Manual is there
+    /// for a data hoarder, or for somebody running a server arrangement where a second revision is the
+    /// point.
+    /// </para>
+    /// </remarks>
+    public string PatchServerRevisionCleanup { get; set; } = PatchServerCleanupChoices.Automatic;
+
+    /// <summary>
     /// The Wizard101 install the patch server's files are copied from, or empty to use whichever install on
     /// this machine is the revision the patch server holds.
     /// </summary>
-    public string PatchServerPreloadSource { get; set; } = string.Empty;
-
-    /// <summary>
-    /// The revision whose preload offer was turned down with "don't ask again".
-    /// </summary>
     /// <remarks>
-    /// A revision rather than a switch, because a new revision is a new question: the files that cannot be
-    /// downloaded at all are per-revision, and somebody who said no to one has said nothing about the next.
+    /// Used by the button in Settings and by nothing else: Play does not copy anything into a patch server,
+    /// because a patch server is expected to fetch its own revision and the launcher copying files into it
+    /// is a shortcut around the workflow the patch server was built around. It is kept because it is the
+    /// only route there is for the files Aurorium gives up on - they run past its own download limit - and
+    /// pressing it is a deliberate act rather than something Play does on the way past.
     /// </remarks>
-    public string? PatchServerPreloadDeclinedRevision { get; set; }
+    public string PatchServerPreloadSource { get; set; } = string.Empty;
 
     /// <summary>
     /// Whether the launcher has asked whose patch server to use and been answered.

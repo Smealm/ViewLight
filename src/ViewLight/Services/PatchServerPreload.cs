@@ -11,16 +11,25 @@ public sealed record PatchServerPreloadFile(string RelativePath, long Size);
 /// </summary>
 /// <param name="SourceFolder">The client build the files come from.</param>
 /// <param name="RevisionFolder">The patch server's own folder for this revision - what is filled in.</param>
-/// <param name="Revision">The game revision, e.g. <c>r806919.Wizard_1_610</c>.</param>
+/// <param name="Revision">
+/// The game revision being filled in, e.g. <c>r806919.Wizard_1_610</c> - and it is the revision <b>the
+/// server asks for</b>, not the one the client happens to be built at. The two are the same or nothing is
+/// copied at all, which is what makes this a handout rather than the launcher inventing a revision.
+/// </param>
 /// <param name="Files">The files the revision wants and the patch server does not have.</param>
 /// <param name="RevisionFiles">How many files the revision is, all told - the denominator.</param>
 /// <param name="AlreadyHeld">Files the patch server already has, at the size the revision says.</param>
 /// <param name="HeldAtAnotherSize">Files the patch server has at some other size - left alone, not replaced.</param>
-/// <param name="NotInTheBuild">Files the revision wants that this client build does not have at all.</param>
+/// <param name="NotInTheBuild">
+/// Files the revision wants that this client build does not have at all. Not a refusal: they are simply not
+/// this machine's to give, and the patch server fetches them.
+/// </param>
 /// <param name="AtAnotherSizeInTheBuild">
-/// Files the build has at some other size than the revision says. Not copied: a file of the right name
-/// and the wrong length is a different build's file, and copying one in would put it beyond the patch
-/// server's reach - it only ever downloads what is missing, never checks what is there.
+/// Files the build has at some other size than the revision says - and any one of them <b>refuses the whole
+/// copy</b>. A file of the right name at the wrong length is a different build's file, and a machine holding
+/// even one of those is not a machine holding this revision: handing over the rest of it would be filing
+/// some other build's files under this revision's names, where the patch server would serve them forever,
+/// because it only ever downloads what is missing and never checks what is already there.
 /// </param>
 /// <param name="Refusal">Why a preload cannot happen, or <c>null</c> when it can.</param>
 public sealed record PatchServerPreloadPlan(
@@ -48,17 +57,6 @@ public sealed record PatchServerPreloadPlan(
     public bool IsWorthDoing => IsPossible && Files.Count > 0;
 }
 
-/// <summary>
-/// The answer to "should the patch server be filled in from this install before this session's server is
-/// started?"
-/// </summary>
-/// <param name="Preload">Whether to make the copy now.</param>
-/// <param name="DontAskAgain">
-/// Whether to stop asking: remembered as the revision that was turned down, so a later revision asks once
-/// more rather than the question being silenced for good.
-/// </param>
-public readonly record struct PreloadOfferAnswer(bool Preload, bool DontAskAgain);
-
 /// <summary>How far along a preload is, with <see cref="Fraction"/> 0..1.</summary>
 public sealed record PatchServerPreloadProgress(double Fraction, string Detail) {
     public int Percent => (int)Math.Round(Math.Clamp(Fraction, 0, 1) * 100);
@@ -75,17 +73,26 @@ public sealed record PatchServerPreloadResult(
     string? Warning = null);
 
 /// <summary>
-/// Fills a patch server's revision from a Wizard101 install that already holds it.
+/// Fills a patch server's revision from a Wizard101 install that already holds exactly that revision.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Why this is exact rather than hopeful.</b> A patch server mirrors the revision Wizard101's own
-/// patch server is serving, and a client build that was installed from the same channel <i>is</i> that
-/// revision - measured, on a real Steam install against a real fetched revision: 2,700 files compared
-/// byte for byte, none different. So when the two revisions name the same build, a file of the right
-/// name and the right length is the same file, and copying it in cannot be copying in somebody else's
-/// build. That is the whole of the safety argument, and it is why the build has to match: a file of the
-/// right name and the wrong length is refused rather than copied.
+/// <b>The patch server manages itself; this is the one thing the launcher may hand it.</b> Aurorium fetches
+/// its revision its own way - it asks Wizard101's patch server for the file list, downloads what that list
+/// names, and skips whatever is already on disk - and nothing here is a second opinion about how that should
+/// be done. What it is is a source of <i>the same bytes</i> for a machine that already has them:
+/// the launcher may put files where the patch server would have put them, under the names the patch
+/// server's own file list gives, and Aurorium skips them by name exactly as it skips its own downloads.
+/// </para>
+/// <para>
+/// <b>Why this is exact rather than hopeful.</b> Measured on a real Steam install against a real fetched
+/// revision: every one of the 3,725 files the two had in common - the whole of <c>Data\</c> and
+/// <c>Bin\</c> - matched in length exactly. So a file of the right name and the right length is the same
+/// file, and copying it in cannot be copying in somebody else's build. Three conditions make it so, and
+/// all three must hold: the patch server's file list is the one being filled, the client build is the
+/// revision <b>the server asks for</b> rather than the one the client happens to name, and not one file
+/// the list names is present in the build at another length - which is what a different build's copy
+/// looks like. Any of those failing means nothing is copied, and the message says which one it was.
 /// </para>
 /// <para>
 /// <b>What it is for.</b> Aurorium fetches a revision whole - thousands of files, tens of gigabytes -
@@ -96,11 +103,11 @@ public sealed record PatchServerPreloadResult(
 /// fetch can never finish. Those are the files that need this most.
 /// </para>
 /// <para>
-/// <b>Nothing is overwritten.</b> A file the patch server already has is left exactly as it is, however
-/// it got there: what is already in the revision is what the patch server is prepared to serve, and a
-/// launcher that quietly replaced it would be inventing its own revision. A file is written under a
-/// temporary name and moved into place once it is complete, so a preload interrupted halfway is not
-/// mistaken for a downloaded file - Aurorium skips whatever is present, name and all.
+/// <b>Nothing is overwritten, and nothing is invented.</b> A file the patch server already has is left
+/// exactly as it is, however it got there: what is already in the revision is what the patch server is
+/// prepared to serve, and a launcher that quietly replaced it would be inventing its own revision. A file
+/// is written under a temporary name and moved into place once it is complete, so a preload interrupted
+/// halfway is not mistaken for a downloaded file - Aurorium skips whatever is present, name and all.
 /// </para>
 /// </remarks>
 public sealed class PatchServerPreload {
@@ -138,7 +145,6 @@ public sealed class PatchServerPreload {
     /// </summary>
     public static bool IsTheBuild(string? revisionFolderName, string? clientBuild)
         => ClientBuildReader.AreSame(GameRevisionIn(revisionFolderName), GameRevisionIn(clientBuild));
-
     /// <summary>
     /// The game revision a name stands for: a revision name with its <c>V_</c> taken off, or the name as it
     /// already is.
@@ -147,17 +153,24 @@ public sealed class PatchServerPreload {
         => PatchServerConfig.GameRevisionFrom(name) ?? name;
 
     /// <summary>
-    /// The folder a patch server would keep <paramref name="clientBuild"/> in: its own configured data
+    /// The folder a patch server would keep <paramref name="revisionName"/> in: its own configured data
     /// folder and the revision's name under it.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The data folder is read from the patch server's config rather than assumed, because that is where
     /// Aurorium will look: a config that keeps its revisions somewhere else would otherwise have terabytes
     /// copied to a folder nothing ever reads.
+    /// </para>
+    /// <para>
+    /// The parameter takes either the revision's own name (<c>V_r806919.Wizard_1_610</c>) or the game
+    /// revision it stands for, because both spellings turn up: a revision folder is named after one, and the
+    /// server's <c>GameRevision</c> is the other.
+    /// </para>
     /// </remarks>
-    public static string RevisionFolderFor(string? patchServerFolder, string? clientBuild) {
+    public static string RevisionFolderFor(string? patchServerFolder, string? revisionName) {
         var root = (patchServerFolder ?? string.Empty).Trim();
-        var name = RevisionNameFor(clientBuild);
+        var name = RevisionNameFor(revisionName);
 
         if (root.Length == 0 || name is null) {
             return string.Empty;
@@ -186,36 +199,92 @@ public sealed class PatchServerPreload {
         => $"The patch server has not fetched {revision} yet. It writes a revision's file list as soon as "
            + "it starts on one, and there is nothing to fill in until it has.";
 
+    /// <summary>Nothing says which revision the server wants, so there is nothing to fill in.</summary>
+    public const string NoRevisionMessage =
+        "There is no revision for the server to ask the patch server for yet, so there is nothing to fill "
+        + "in. The revision is the one in Imlight's own config (GameRevision), under Settings → Network.";
+
+    /// <summary>
+    /// The client here is a different revision from the one the server asks for, so its files are not this
+    /// revision's files and none of them may be handed over.
+    /// </summary>
+    public static string DifferentBuildMessage(string? clientBuild, string serverRevision)
+        => $"This Wizard101 install is {clientLabel(clientBuild)}, and the server asks the patch server for "
+           + $"{serverRevision}. Only the revision the server asks for is filled in, and only from a client "
+           + "that is the same revision - anything else would be filing another build's files under this "
+           + "revision's names.";
+
+    /// <summary>
+    /// One file of the client build is not the length the revision gives it, which is what a different build
+    /// looks like - and that is the end of it, because the patch server never checks a file it already has.
+    /// </summary>
+    public static string NotThisBuildMessage(int files, string? example)
+        => $"{files:N0} of the revision's files are here at a different length than the revision gives them"
+           + (string.IsNullOrEmpty(example) ? string.Empty : $" ({example}, and others)")
+           + ". That is another build's copy of them, and a file of the right name at the wrong length is "
+           + "one the patch server would never repair - it only ever downloads what is missing. Nothing is "
+           + "copied from it, and those files are left for the patch server to fetch.";
+
+    private static string clientLabel(string? clientBuild)
+        => string.IsNullOrWhiteSpace(clientBuild) ? "of an unreadable revision" : clientBuild;
+
     /// <summary>
     /// Works out what copying <paramref name="sourceFolder"/> into the patch server's revision would do.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Nothing here writes anything, which is what lets the launcher ask before it acts - and what lets it
     /// say how much it is about to copy, since a revision of this game is tens of gigabytes. A refusal is
     /// part of the answer rather than an exception: a machine with no client build to copy from, or a patch
     /// server that has not been started yet, are both ordinary states rather than mistakes.
+    /// </para>
+    /// <para>
+    /// <b>The revision filled in is the server's, not the client's.</b> <paramref name="serverRevision"/> is
+    /// the revision the server asks the patch server for - <c>GameRevision</c> - and the client build has to
+    /// be that same revision or nothing happens. Filling in the client's own revision instead would leave the
+    /// server asking for a folder the patch server does not have, which is the 404 this whole arrangement
+    /// exists to avoid.
+    /// </para>
     /// </remarks>
+    /// <param name="sourceFolder">The Wizard101 install the files would come from.</param>
+    /// <param name="patchServerFolder">The folder the patch server is installed in.</param>
+    /// <param name="serverRevision">The revision the server asks for, e.g. <c>r806919.Wizard_1_610</c>.</param>
+    /// <param name="clientBuild">The revision of the install in <paramref name="sourceFolder"/>.</param>
     public static PatchServerPreloadPlan Plan(
-        string? sourceFolder, string? patchServerFolder, string? clientBuild) {
+        string? sourceFolder, string? patchServerFolder, string? serverRevision, string? clientBuild) {
+
+        var revision = (serverRevision ?? string.Empty).Trim();
+        var build = (clientBuild ?? string.Empty).Trim();
+
+        // Nothing says which revision to fill in, so there is nothing this could be for. Checked before the
+        // source folder, because it is a fact about the server rather than about this machine's game.
+        if (revision.Length == 0) {
+            return Refused(sourceFolder, string.Empty, string.Empty, NoRevisionMessage);
+        }
 
         var source = (sourceFolder ?? string.Empty).Trim();
         if (source.Length == 0 || !Directory.Exists(source)) {
-            return Refused(source, string.Empty, string.Empty, NoSourceFolderMessage);
+            return Refused(source, string.Empty, revision, NoSourceFolderMessage);
         }
 
-        var build = (clientBuild ?? string.Empty).Trim();
         if (build.Length == 0 || !GameFolderLocator.LooksLikeGameFolder(source)) {
-            return Refused(source, string.Empty, build, UnknownBuildMessage(source));
+            return Refused(source, string.Empty, revision, UnknownBuildMessage(source));
         }
 
-        var revisionFolder = RevisionFolderFor(patchServerFolder, build);
+        // The one condition the whole handout rests on: this install is the revision the server asks for.
+        // Not the newest, not a neighbouring one - the one the address Imlight is given resolves to.
+        if (!ClientBuildReader.AreSame(build, revision)) {
+            return Refused(source, string.Empty, revision, DifferentBuildMessage(build, revision));
+        }
+
+        var revisionFolder = RevisionFolderFor(patchServerFolder, revision);
         if (revisionFolder.Length == 0) {
-            return Refused(source, revisionFolder, build, NoPatchServerFolderMessage);
+            return Refused(source, revisionFolder, revision, NoPatchServerFolderMessage);
         }
 
         var manifest = PatchServerManifest.TryRead(revisionFolder);
         if (manifest is null) {
-            return Refused(source, revisionFolder, build, NotFetchedYetMessage(build));
+            return Refused(source, revisionFolder, revision, NotFetchedYetMessage(revision));
         }
 
         var files = new List<PatchServerPreloadFile>();
@@ -223,6 +292,7 @@ public sealed class PatchServerPreload {
         var heldAtAnotherSize = 0;
         var notInTheBuild = 0;
         var atAnotherSizeInTheBuild = 0;
+        string? firstMismatch = null;
 
         foreach (var entry in manifest) {
             var target = Full(revisionFolder, entry.RelativePath);
@@ -243,27 +313,36 @@ public sealed class PatchServerPreload {
             var origin = Full(source, entry.RelativePath);
 
             if (!File.Exists(origin)) {
+                // Not this machine's to give. Left to the patch server, which fetches what it lacks.
                 notInTheBuild++;
                 continue;
             }
 
-            // The right name at the wrong length is another build's file, and there is no repair for a file
-            // copied in wrongly: the patch server only ever fetches what is missing. Left for it to fetch.
+            // The right name at the wrong length is another build's file, and it takes the whole copy with
+            // it. There is no repair for a file copied in wrongly - the patch server only ever fetches what
+            // is missing - so a build that is not this revision is a build nothing may be taken from.
             if (LengthOf(origin) != entry.Size) {
                 atAnotherSizeInTheBuild++;
+                firstMismatch ??= entry.RelativePath;
                 continue;
             }
 
             files.Add(new PatchServerPreloadFile(entry.RelativePath, entry.Size));
         }
 
-        return new PatchServerPreloadPlan(source, revisionFolder, build, files, manifest.Count,
+        if (atAnotherSizeInTheBuild > 0) {
+            return new PatchServerPreloadPlan(source, revisionFolder, revision, [], manifest.Count,
+                alreadyHeld, heldAtAnotherSize, notInTheBuild, atAnotherSizeInTheBuild,
+                NotThisBuildMessage(atAnotherSizeInTheBuild, firstMismatch));
+        }
+
+        return new PatchServerPreloadPlan(source, revisionFolder, revision, files, manifest.Count,
             alreadyHeld, heldAtAnotherSize, notInTheBuild, atAnotherSizeInTheBuild, null);
     }
 
     private static PatchServerPreloadPlan Refused(
-        string source, string revisionFolder, string build, string reason)
-        => new(source, revisionFolder, build, [], 0, 0, 0, 0, 0, reason);
+        string? source, string revisionFolder, string revision, string reason)
+        => new((source ?? string.Empty).Trim(), revisionFolder, revision, [], 0, 0, 0, 0, 0, reason);
 
     /// <summary>A file the revision names, under the folder it lives in.</summary>
     private static string Full(string folder, string relativePath)

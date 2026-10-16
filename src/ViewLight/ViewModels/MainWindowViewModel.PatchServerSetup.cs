@@ -28,7 +28,8 @@ namespace ViewLight.ViewModels;
 /// <para>
 /// <b>Nothing is started from here.</b> The step installs a patch server if the local answer was chosen
 /// and downloads nothing otherwise: starting it, and pointing Imlight at it, is what Play does, and the
-/// first start is where its own fetch - or the offer to be handed the game's files instead - belongs.
+/// first start is where its own fetch belongs - which is what Play then reports on, and the one place the
+/// launcher watches a download it is not itself making.
 /// </para>
 /// </remarks>
 public sealed partial class MainWindowViewModel {
@@ -105,8 +106,9 @@ public sealed partial class MainWindowViewModel {
         if (PatchServerIsThisMachines) {
             AppendLog(LogLevel.Info,
                 $"Its first start fetches the revision Wizard101 is serving into {PatchServerSetupFolder}, "
-                + "which is thousands of files - or it can be handed the ones your game already has. "
-                + "ViewLight offers that before the first session.");
+                + "which is thousands of files and tens of gigabytes. Play starts it and reports how far "
+                + "along it is while it works; the ones your game already has can be copied in from Settings "
+                + "if the download cannot finish them.");
         }
 
         if (_store.Settings.CheckForUpdatesOnStartup) {

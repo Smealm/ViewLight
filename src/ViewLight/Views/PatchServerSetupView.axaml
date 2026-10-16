@@ -44,7 +44,7 @@
           <TextBlock Classes="cardTitle" Text="The patch server on this machine" />
 
           <TextBlock Classes="muted" TextWrapping="Wrap"
-                     Text="Downloading it is one executable of about 9 MB and no setup. Its first start then fetches the revision Wizard101 is serving — thousands of files, around 18 GB — or it can be handed the ones your game already has, which is what the offer before your first session is for." />
+                     Text="Downloading it is one executable of about 9 MB and no setup. Its first start then fetches the revision Wizard101 is serving — thousands of files, around 18 GB — and the launcher says how far along that is and roughly how long the rest will take, on Home and in Settings. If your own copy of the game is exactly the revision your server asks the patch server for, Settings can hand those files over instead of waiting; that is the patch server's own workflow with the bytes supplied from here, and it happens only when it can be verified as exact." />
 
           <StackPanel Spacing="4">
             <TextBlock Classes="label" Text="It goes in" />
@@ -71,6 +71,30 @@
               <ProgressBar Value="{Binding PatchInstallProgress}" Maximum="100" />
             </StackPanel>
           </Border>
+
+          <!-- ============================================ preparing it now
+               Asked here rather than left to Play, because the first fetch is the whole of what a patch
+               server costs: a machine that has just chosen one may as well get it started while it is
+               looking at this screen, and a machine that would rather not gets to say so once. -->
+          <StackPanel Spacing="10" IsVisible="{Binding ShouldOfferToPreparePatchServerFiles}">
+            <TextBlock Classes="label" Text="Prepare its files now?" />
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="Starting it here begins its first fetch, which is thousands of files and around 18 GB from Wizard101's own patch server. The line above fills in while it works, and you can carry on and leave this screen whenever you like — the fetch keeps running for as long as ViewLight is open, and Play picks it up from wherever it got to." />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Classes="accent" Content="Prepare the files now"
+                      Command="{Binding PreparePatchServerFilesNowCommand}" />
+              <Button Content="Not now" Command="{Binding SkipPreparingPatchServerFilesCommand}" />
+            </StackPanel>
+          </StackPanel>
+
+          <!-- What it is fetching, for as long as this screen is up - the same line and bar Home and
+               Settings show, so "preparing" is something being watched rather than something to take on
+               trust. -->
+          <StackPanel Spacing="6" IsVisible="{Binding HasFetchStatus}">
+            <TextBlock Classes="status" TextWrapping="Wrap" Text="{Binding FetchStatus}" />
+            <ProgressBar Value="{Binding FetchProgress}" Maximum="100" Height="4" />
+          </StackPanel>
 
           <TextBlock Classes="error" TextWrapping="Wrap" Text="{Binding PatchCheckError}"
                      IsVisible="{Binding HasPatchCheckError}" />

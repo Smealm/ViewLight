@@ -209,6 +209,15 @@
             </StackPanel>
           </Border>
 
+          <!-- What it has fetched, while it is fetching it. The patch server's own row says what the
+               process is doing; this says what the process is doing it for, which is the one thing the row
+               cannot: Aurorium fetches a revision of thousands of files, and how far along that is decides
+               whether a session will find its files here or fall back to Imlight's own cache. -->
+          <StackPanel Spacing="6" IsVisible="{Binding HasFetchStatus}">
+            <TextBlock Classes="status" TextWrapping="Wrap" Text="{Binding FetchStatus}" />
+            <ProgressBar Value="{Binding FetchProgress}" Maximum="100" Height="4" />
+          </StackPanel>
+
           <TextBlock Classes="error" Text="{Binding PatchCheckError}"
                      IsVisible="{Binding HasPatchCheckError}" />
 
@@ -239,7 +248,7 @@
               <TextBlock Classes="label" Text="Filling it in from a copy of the game" />
 
               <TextBlock Classes="muted" TextWrapping="Wrap"
-                         Text="The patch server fetches a revision whole, and it fetches only what it is missing: it never looks again at a file it already has. So a machine that already holds the game's files can hand them to it instead of waiting for the download - which matters most for the files that are too large to arrive at all, since Aurorium gives up on a download that runs past its own two-minute limit. Nothing is overwritten and nothing is invented: only files of the right name and the right length go in, so an install of any other revision is left alone." />
+                         Text="The patch server fetches a revision whole, and it fetches only what it is missing: it never looks again at a file it already has. So a machine that already holds the game's files can hand them to it instead of waiting for the download - which matters most for the files that are too large to arrive at all, since Aurorium gives up on a download that runs past its own two-minute limit.\n\nThis is a handout and not a second opinion about how the patch server should work, so it is exact by construction: the revision filled in is the one your server asks for, the copy it is filled from has to be that same revision, and not one file of it may be at a different length - because a file of the right name at the wrong size is another build's file, and the patch server never checks one it already has. Files the revision wants that this install does not have are left for the patch server to fetch. If any of that does not hold, nothing is copied and the line below says which condition failed." />
 
               <StackPanel Spacing="4">
                 <TextBlock Classes="label" Text="Copy from" />
@@ -275,18 +284,97 @@
           <TextBlock Classes="muted" TextWrapping="Wrap"
                      Text="With this on, Play starts the patch server first, then the server, then Wizard101, and Imlight is given this machine's address so it loads its files from here. Both go down together when the server stops - unless the patch server is still fetching its files, when it is left running, because stopping it would stop the download. Turn this off to start and stop Aurorium yourself and be left alone." />
 
-          <!-- The copy, without the question: the offer before a session asks, this does it. -->
-          <CheckBox Content="Fill it in from the game folder if it has nothing yet, without asking"
-                    IsChecked="{Binding PatchServerPreloadAutomatically, Mode=TwoWay}" />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Play does not copy anything into the patch server. Downloading is the patch server's own job, done its own way - it writes the revision's file list, fetches what that list names, and skips whatever it already has - and the launcher's part is to watch that and say how far along it is, so a session started before the revision has arrived says so in a line rather than sending the client off to find out. Copying the game's files in is a button rather than something Play does on the way past: it is the same files, it takes minutes rather than hours, and it is the only route there is for the files Aurorium's own two-minute download limit means it can never finish." />
+
+          <!-- The two arrangements, stated from the side that is on, because they are not a feature and its
+               absence: one makes the patch server keep the revision the server wants, the other makes the
+               server accept whatever the patch server holds. The first is the default because it is the one
+               that cannot invent anything. -->
+          <CheckBox Content="Sync the patch server's revision with the server's accepted client revision"
+                    IsChecked="{Binding PatchServerRevisionSynced, Mode=TwoWay}" />
 
           <TextBlock Classes="muted" TextWrapping="Wrap"
-                     Text="A patch server that has not fetched the session's revision yet is one Imlight falls back to its own Root.wad cache for, or stops on. With this on, Play fills it in from the Wizard101 install on this machine before the server starts - the same copy the offer asks about and the button above starts: tens of gigabytes read and written, minutes rather than the hour a download takes, and the only route there is for the files too large for the patch server's own download limit. Leave it off to be asked once per revision instead." />
+                     Text="{Binding PatchServerRevisionModeText}"
+                     IsVisible="{Binding PatchServerRevisionSynced}" />
 
-          <CheckBox Content="Make the server accept the patch server's revision (GameRevision)"
-                    IsChecked="{Binding MirrorPatchServerRevision, Mode=TwoWay}" />
+          <TextBlock Classes="warning" TextWrapping="Wrap"
+                     Text="{Binding PatchServerRevisionFallbackWarningText}"
+                     IsVisible="{Binding !PatchServerRevisionSynced}" />
 
-          <TextBlock Classes="muted" TextWrapping="Wrap"
-                     Text="Imlight asks its patch server for V_{GameRevision}, and that same revision is the one the server accepts clients on. Your server build pins the revision it was published with, while a patch server can only ever hold what Wizard101 currently offers - so a game that has been patched past the server build is one the server turns away. With this on, the launcher reads the revision the patch server actually holds and writes it into GameRevision, so the two match and the client is accepted. It is applied every time the launcher starts the patch server - Play's own start included - and when it is turned on while one is already running; turning it off puts the value the config had before back. Only this machine's patch server is asked, so the switch does nothing while a remote one is in use. The GameRevision box in Network is greyed out while this is on." />
+          <!-- ==================================================== the revisions on disk
+               What the patch server has fetched, and who decides what stays. Automatic is the recommendation,
+               and choosing it is the permission it needs; manual is the same cleanup with a person in the
+               middle of it. -->
+          <Border Classes="glass">
+            <StackPanel Spacing="12">
+              <TextBlock Classes="label" Text="The revisions it has fetched" />
+
+              <TextBlock Classes="muted" TextWrapping="Wrap"
+                         Text="{Binding PatchServerCleanupRecommendationText}" />
+
+              <StackPanel Spacing="4">
+                <RadioButton GroupName="PatchServerCleanup"
+                             Content="Clean up automatically (recommended)"
+                             IsChecked="{Binding CleansUpRevisionsAutomatically, Mode=TwoWay}" />
+                <RadioButton GroupName="PatchServerCleanup"
+                             Content="Manage them myself"
+                             IsChecked="{Binding ManagesRevisionsByHand, Mode=TwoWay}" />
+              </StackPanel>
+
+              <TextBlock Classes="status" TextWrapping="Wrap"
+                         Text="{Binding PatchServerRevisionsStatus}"
+                         IsVisible="{Binding HasPatchServerRevisionsStatus}" />
+
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Look again" Command="{Binding RefreshPatchServerRevisionsCommand}" />
+                <Button Classes="accent" Content="Clean up unused revisions now"
+                        Command="{Binding CleanUpUnusedPatchServerRevisionsCommand}"
+                        IsVisible="{Binding CleansUpRevisionsAutomatically}" />
+                <Button Classes="accent" Content="Delete the unticked ones"
+                        Command="{Binding DeleteUnkeptRevisionsCommand}"
+                        IsVisible="{Binding ManagesRevisionsByHand}" />
+              </StackPanel>
+
+              <!-- The list itself. Ticked means keep: the two revisions in use start ticked, everything else
+                   starts unticked, so the list opens on the answer automatic mode reaches by itself. Each row
+                   can also be asked for, which is how the one thing the launcher cannot do - fetch an older
+                   revision - gets said rather than silently not happening. -->
+              <Border Classes="list" IsVisible="{Binding HasPatchServerRevisions}">
+                <ItemsControl ItemsSource="{Binding PatchServerRevisions}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PatchServerRevisionRow">
+                      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="0,4">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding Keep, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanBeDeleted}" VerticalAlignment="Center" />
+
+                        <StackPanel Grid.Column="1" Spacing="1">
+                          <TextBlock Text="{Binding Name}" FontFamily="Consolas, monospace" FontSize="12" />
+                          <TextBlock Classes="muted" FontSize="11"
+                                     Text="{Binding RoleText}" />
+                          <TextBlock Classes="muted" FontSize="11"
+                                     Text="{Binding FilesText}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
+                                    VerticalAlignment="Center">
+                          <TextBlock Classes="value" Text="{Binding SizeText}" VerticalAlignment="Center" />
+                          <Button Content="Download" Command="{Binding RequestDownloadCommand}" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </Border>
+
+              <TextBlock Classes="muted" TextWrapping="Wrap"
+                         Text="{Binding PatchServerRevisionsEmptyText}"
+                         IsVisible="{Binding !HasPatchServerRevisions}" />
+
+              <TextBlock Classes="muted" TextWrapping="Wrap"
+                         Text="Removing a revision deletes its folder under the patch server's own data directory. Nothing that is being downloaded, nothing your server asks for, and nothing your game is can be removed while automatic cleanup is doing it - the manual list refuses only a revision the patch server is writing into, because the rest of it is your decision." />
+            </StackPanel>
+          </Border>
           </StackPanel>
         </StackPanel>
       </Border>

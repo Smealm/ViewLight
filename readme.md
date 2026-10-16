@@ -1,4 +1,4 @@
-# ViewLight
+﻿# ViewLight
 
 **A launcher that makes playing Wizard101 on your own private server as easy as pressing Play.**
 
@@ -101,10 +101,11 @@ before it will even start. So a patch server is never optional. The only questio
 
 The question is asked once, on a machine that does not already have a patch server, and you can change your
 answer later under **Settings**. A local patch server does have one drawback - its very first run has to
-collect the game's files from Wizard101, thousands of them, around 18 GB - and ViewLight can fill it in from
-the copy of the game you already have, which is most of that and the only way the largest files ever arrive
-at all. It offers to do that before your first session. See
-[the patch server](#the-patch-server-in-plain-words).
+collect the game's files from Wizard101, thousands of them, around 18 GB - so picking it then offers to
+**prepare those files right there**, while you are still on that screen: it starts the patch server and the
+bar underneath says how far along it is. You can also wave it through and let Play get it started. Either
+way it downloads the files itself, which is the workflow Aurorium was built around; ViewLight's part is to
+say how far along it is. See [the patch server](#the-patch-server-in-plain-words).
 
 ## Playing
 
@@ -224,32 +225,98 @@ else follows from the answer.
 
 **Its first run is the long one.** Aurorium starts answering within seconds, but it then has to download the
 game's current version from Wizard101 - thousands of files, around 18 GB - and until a file arrives it
-simply has nothing to hand over. Three things are worth knowing:
+simply has nothing to hand over. Four things are worth knowing:
 
 - **Leave it running.** It only makes progress while it is alive, so ViewLight deliberately does **not** stop
   a patch server that has not finished. It stays until you close the launcher or stop it under Settings.
-- **ViewLight tells you where it stands.** Before the server starts, it asks the patch server for the first
-  file the game needs and writes a line in the Log when the answer is "not yet", so a patch server that is
-  merely waiting does not look like one that is broken.
-- **Your own game can hand it the files instead.** The version a patch server collects is the same version
-  installed on your PC, so ViewLight can copy those files straight in and skip most of the wait - and the
-  largest files, which the download cannot finish at all, arrive only that way. **Copy the game's files in**
-  is under the patch server card, and Play offers it once per version just before the server starts. Nothing
-  is overwritten and nothing is invented: only files of the right name and the right size go in, each one is
-  written aside and moved into place, and running it again copies only what is still missing.
+- **ViewLight shows you how far along it is.** While the patch server is up, a line and a bar under Home's
+  patch server row - and in the patch server card in Settings - say how many of the version's files are
+  here, how much of it that is, how much is left, and roughly how long the rest should take at the rate it
+  is going. It says so plainly when nothing is arriving, too, which is what a retry after a failed download
+  looks like from outside. The figure is measured, not guessed: the patch server does not publish its
+  progress, so ViewLight counts the version's own file list against the files that are on disk - the folder
+  the patch server is writing to. Nothing is put into that folder to read it, and the patch server is not
+  asked for anything it does not already serve.
+- **It tells you which file it is on, and which version.** The line names the version the patch server is
+  fetching and the file it is downloading right now with how far into it it is - `Equipment-WorldData.wad
+  (12.3 MB of 281.4 MB)` - and how many other files are arriving alongside it. When it is fetching a
+  version other than the one your server asks for, it says that too, by name, because that is the one
+  thing about a download that a session cannot work through. The Log keeps the same line as it moves from
+  file to file, so you can see what a fetch that ran for hours actually did.
+- **Play waits for the file the server's boot needs, rather than starting into a 404.** The first thing
+  Imlight asks its patch server for is `Root.wad`, and a patch server that has not fetched it answers 404 -
+  which leaves the server at "warming up" forever with nothing to show for it. So when ViewLight is about to
+  start the server and the patch server cannot serve that one file yet, it waits: Home says what it is
+  waiting for and where the download has got to, and starting the server anyway is one click away on the
+  **Play anyway** button. Nothing is blocked and nothing is repointed - a patch server that has the file
+  starts the server as it always did.
+- **Your own game can still hand it the files, if you ask it to.** A download is not always enough on its
+  own: the patch server gives up on any single file that takes more than two minutes, and the largest ones
+  take longer than that on most connections, so it can fetch for hours and never finish. A Wizard101 install
+  that is **exactly the version your server asks the patch server for** can supply those files directly -
+  **Copy the game's files in**, under the patch server card in Settings. Nothing is overwritten and nothing
+  is invented: only files of the right name and the right size go in, each one is written aside and moved
+  into place, and running it again copies only what is still missing. It is a button rather than something
+  Play does, because downloading is the patch server's own job.
 
-**It is also the one thing here that does something the patch server did not ask for.** A patch server
-normally collects a revision itself, and this hands it the content without it ever having downloaded that
-revision - so it may not be expecting those files to be there yet. When the feature was written, the files
-the game client had cached and the patch server's own copy were compared and looked identical, which is why
-it should be safe; but content delivery is not something this launcher knows deeply, so treat "should" as
-the strong word it is. If the game misbehaves around a file, or the patch server reports something
-unexpected, the safe retreat is to let it download that revision itself rather than trust the copy.
+**The copy knows exactly what "exactly" means.** It is a hand-off into a workflow that is not yours to
+change, so it happens only when three things hold, and it says which one failed when they do not:
 
-**If a login is refused, these two are usually why.** Your game gets updated by KingsIsle, and your server
-accepts one specific version. **Make the server accept the patch server's revision** - one switch in the
-patch server card - tells the server to accept whatever version your patch server actually holds, which is
-the version your game was just updated to. It is off by default, and turning it off puts the old value back.
+1. the revision being filled is the one **your server asks for** - not the one your game happens to be;
+2. the copy it comes from **is that same revision**, read from the game itself;
+3. **not one file of it is a different length** from what the revision's own file list says.
+
+That third one is what makes it a hand-off rather than a guess: a file of the right name at the wrong size
+is another build's file, and the patch server never looks at a file it already has, so a wrong one in there
+would be wrong for good. Measured on a real install against a real fetched revision, every file the two had
+in common - the whole of `Data\` and `Bin\`, 3,725 of them - matched in length exactly, so where the three
+conditions hold, what goes in is what would have come down. Files the revision wants that your install does
+not have are left for the patch server to fetch, and downloading stays the default: this is a shortcut for
+one machine with the right game on it, not a second way to collect a revision.
+
+**Your server and your patch server are kept on the same version - that is the switch at the bottom of the
+card, on by default: Sync the patch server's revision with the server's accepted client revision.** A patch
+server fetches whatever version Wizard101 is serving, and there is no way to ask it for a different one - so
+the value that has to move is the server's. Imlight asks its patch server for `V_{GameRevision}` and accepts
+clients on that same revision, so every time ViewLight starts a patch server it writes the version that
+patch server actually holds into `GameRevision`. Both then say the same thing: the server asks for files
+the patch server has, and the client that has just been updated is the version the server accepts. The
+`GameRevision` box under **Settings → Network** is greyed out while this is on, because the value is the
+patch server's rather than yours.
+
+**Switching it off is for a server deliberately held at one version.** Your server build pins the version
+it was published with, and the patch server is then the side left needing something it cannot fetch: the
+hand-off above is the only way it gets those files, and it needs your game to be exactly that version.
+Turning the sync off puts the value your config had before the launcher wrote one back, and
+only that value: a newer server build, or an edit by hand, is left alone.
+
+**If your server cannot load its own files, ViewLight says so instead of waiting forever.** The one failure
+with no other symptom: the server is running, its ports are open, and it never finishes warming up. What it
+is doing is asking the patch server for a version that is not there, over and over - and it writes that in
+its own log. ViewLight reads it and says which two versions disagree and which of the two it is that moves,
+rather than leaving you to wait for a server that will never arrive.
+
+**Old versions pile up unless somebody tidies them.** Each revision is around 18 GB, and the patch server
+fetches a new one whenever Wizard101 publishes one - it writes it beside the ones it already has and never
+removes anything, which is the right behaviour for it and the reason a long-running patch server ends up
+holding every version it has ever seen. **The revisions it has fetched**, in the same card, is where that is
+handled:
+
+- **Clean up automatically** is the default and what ViewLight recommends: the newest version your patch
+  server has - which, with the sync on, is the one your server asks for and the one your game is - is kept,
+  and the older ones are removed. Choosing it *is* the permission it needs to do that on your behalf: it is
+  stated before anything is downloaded, it can be changed here at any time, and every removal is written
+  into the Log with what it was and why. Nothing that is being downloaded, and nothing your server asks for
+  by name, can ever be removed by it. Keeping several versions is useful to a data hoarder, or to a server
+  arrangement where a second version is the point - that is what **Manage them myself** is for.
+- **Manage them myself** removes nothing on its own and gives you the list instead: each revision with what
+  it is and how much of your disk it is using, a tick to keep it, **Look again**, and **Delete the unticked
+  ones**. A revision can also be **Download**ed by request - which cannot be done, and says so: Aurorium
+  fetches whatever version Wizard101 is serving when it looks, and there is no way to ask it for an older
+  one. So an old version can be kept or removed, and once removed it cannot be fetched back.
+
+That list is also the honest answer to "why is my disk full": it is the one place the launcher tells you
+what the patch server is holding.
 
 ## Playing on another server
 
@@ -367,19 +434,23 @@ have already repaired an address that was blank or pointing at nothing.
 the files yet. Leave it running and try again later, or hand it the files your game already has - see
 [the patch server](#the-patch-server-in-plain-words).
 
-**You run a patch server on this machine and the server will not start.** Turn on **Make the server accept the
-patch server's revision** in the patch server card. Imlight and the patch server are separate projects on
-their own schedules, and Imlight can be a few updates behind the patch server - which is usually fine, but it
-means the server can be asked for a revision it was not built expecting and refuse to boot instead of failing
-in a way that reads clearly.
+**A download of a specific file fails with "404", and the file is one your patch server should be serving.**
+Your patch server has not collected that version yet. The line under its row on Home says which file it is
+on and how far along it is, and leaving it running is all that is needed - see
+[the patch server](#the-patch-server-in-plain-words).
 
-That switch is **off by default for a reason: it should not be needed.** Run both from their latest builds and
-they are the same version, which is the state they are meant to be in, and leaving the switch alone is the way
-to keep them there. Turn it on when they have drifted apart, and turn it **back off once either one has been
-updated** - it covers a gap rather than being a setting to live with. If you would rather not take the chance
-at all, the other way through is to wait for whichever one is behind to catch up, because an out-of-date patch
-server - or an up-to-date one serving an out-of-date server - is exactly the combination the switch is willing
-to accept the consequences of.
+**The server says something like `Error while downloading file http://127.0.0.1:12369/V_r803238.../Root.wad`
+and then sits at "warming up" forever.** Your server is asking the patch server for a version it does not
+have - a build pinned to an older version than the one Wizard101 is serving. ViewLight reads that line out
+of the server's own log and says so on Home, with both versions named. Normally this fixes itself: the
+launcher writes the patch server's version into `GameRevision` every time it starts one, so stopping the
+server and pressing Play again is enough. If the sync at the bottom of the patch server card is off, that is
+the reason - turning it back on is the fix.
+
+**You run a patch server on this machine and the server will not start.** Then the two have drifted apart,
+and the honest answer is that one of the builds is behind: update the server, or wait for whichever one it is.
+What ViewLight does about it is the sync at the bottom of the patch server card, and it is on by default -
+see [the patch server](#the-patch-server-in-plain-words).
 
 **Wizard101 cannot connect to the server.** This is the one fault the launcher cannot see or fix, because
 nothing is actually broken: the patch server, the Imlight server and the game are all running, all on this
@@ -402,8 +473,8 @@ Anything in the way of that shows up as a connection error rather than as a faul
 intercepting the traffic before you suspect what is running it.
 
 **A login is refused.** Compare the two versions on Home. Your game has been updated past the version your
-server accepts; turn on **Make the server accept the patch server's revision** in the patch server card -
-the same switch as above, and the same rule: turn it back off once one of the two has been updated.
+server accepts; the switch above is the same one, and the same rule - turn it back off once one of the two
+has been updated.
 
 **An update says a file in the server folder is in use.** Something is running the server's files. Stop the
 server under **Settings → Stop the server** and try again. The message names the file, and nothing is
@@ -477,17 +548,34 @@ same machine as the client.
 - **Item names in the starter-item picker** come from Imlight's own list rather than from the game. Reading
   the real names out of the game's data is separate work.
 - **Imlight's own first-boot crash** is not worked around; pressing Play again is the way through it.
-- **The file hand-off to a local patch server is the weakest thing in the launcher.** It spares the patch
-  server a download it would otherwise do itself and gives it content for a revision it has not collected,
-  which it may not be written to expect. It was checked by comparing the game client's cached files against
-  the patch server's own and finding them identical, so it is expected to be safe - but expected is not
-  proven, and content delivery is not something this launcher knows deeply. A patch server left to collect
-  its own revision is the path its authors designed, and the one to fall back on if files misbehave.
+- **The file hand-off to a local patch server is the narrowest thing in the launcher.** It spares the patch
+  server a download it would otherwise do itself, and it is deliberately the only way the launcher touches
+  the patch server's storage: nothing else is ever written there, and nothing is ever replaced. It happens
+  only when the revision, the source build and every file's length can all be checked, so what goes in is
+  what would have come down - but content delivery is not something this launcher knows deeply, and files
+  that do not match are refused rather than repaired. That is why it is a button under Settings rather than
+  something Play does on the way past: a patch server left to collect its own revision is the path its
+  authors designed, and it is the one a session takes unless somebody decides otherwise.
+- **Removing a revision cannot be undone.** Aurorium fetches the version Wizard101 is serving when it looks
+  and nothing can ask it for an older one, so a version that has been removed is gone until it comes round
+  again - which it will not, once the game has moved on. Automatic cleanup is on by default, it only ever
+  removes an older revision nothing is asking for and nothing is writing into, and it says what it removed
+  in the Log - and the list in the patch server card is where to see what is there before that happens.
 - **A local patch server still has to collect its first version from Wizard101.** That is where the game's
-  files live. Once they are on your machine, everything is served locally.
+  files live. Once they are on your machine, everything is served locally - and while it is collecting them,
+  the line under its row on Home says which file it is on, how far along it is and roughly how long the rest
+  will take.
+- **Waiting for the patch server is one file deep, not a whole version.** Play waits for the `Root.wad` the
+  server's own boot asks for, and nothing more: the rest of the version arrives while you play, so a zone or
+  an asset the patch server has not fetched yet is a 404 in the game rather than something the launcher
+  holds the session back for. Waiting for all 18 GB before the first session would be the honest version of
+  "finished", and it is not what a first run can afford.
+- **The first Play after a fresh patch server can wait a long time.** The wait ends the moment `Root.wad` is
+  on disk - which for a patch server that has just started fetching a whole version can be a while - and
+  **Play anyway** on Home starts the session immediately if you would rather not wait.
 - **ViewLight always takes the newest server build**; choosing an older one is not offered.
-- **The revision switch only reads your own patch server.** With a remote one chosen it has nothing to read
-  and does nothing.
+- **The revision sync only applies to your own patch server.** With a remote one chosen there is nothing to
+  read or hand files to, and it does nothing; `GameRevision` is then whatever your config says.
 - **A Linux build.** The server has one, but the game client is a Windows program, so this is a bigger
   question than it looks.
 

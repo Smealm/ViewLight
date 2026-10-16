@@ -84,24 +84,58 @@ public class PatchServerWiringTests {
 
         var first = new MainWindowViewModel(new LauncherSettingsStore(file), fetchArt: false);
 
-        // A patch server on this machine is what the launcher is for, so that is the default; the copy the
-        // setting above it controls is the one that asks, so doing it unasked is off.
+        // A patch server on this machine is what the launcher is for, so that is the default; and a patch
+        // server the launcher runs is started and stopped with the server rather than left to the user.
         Assert.True(first.UseLocalPatchServer);
         Assert.False(first.UsesRemotePatchServer);
         Assert.True(first.PatchServerManaged);
-        Assert.False(first.PatchServerPreloadAutomatically);
 
         // The two radio buttons are one setting, so writing either side of it settles both.
         first.UsesRemotePatchServer = true;
         Assert.False(first.UseLocalPatchServer);
 
-        first.PatchServerPreloadAutomatically = true;
-
         var reopened = new MainWindowViewModel(new LauncherSettingsStore(file), fetchArt: false);
 
         Assert.False(reopened.UseLocalPatchServer);
         Assert.True(reopened.UsesRemotePatchServer);
-        Assert.True(reopened.PatchServerPreloadAutomatically);
+    }
+
+    [Fact]
+    public void ASettingsFileFromBeforeTheCopyWasTakenOffPlayStillLoads() {
+        using var workspace = new TempWorkspace();
+        var file = workspace.Path("launcher.json");
+
+        // What a launcher that has been run before left behind: keys on this file that no longer exist,
+        // because Play does not copy anything into the patch server any more and because the toggle has been
+        // renamed to say which way round the two revisions are kept in step. An unknown key has to be ignored
+        // rather than make the file unreadable - a file that will not read is replaced with the defaults,
+        // which would quietly lose every other setting on it - so this is written out here rather than
+        // produced by saving the current shape.
+        File.WriteAllText(file, """
+            {
+              "PatchServerPath": "C:\\Users\\Nobody\\patchserver",
+              "PatchServerPreloadAutomatically": true,
+              "PatchServerPreloadDeclinedRevision": "r806919.Wizard_1_610",
+              "PatchServerPort": 12400,
+              "UseLocalPatchServer": false,
+              "MirrorPatchServerRevision": true
+            }
+            """);
+
+        var store = new LauncherSettingsStore(file);
+
+        Assert.Null(store.LoadProblem);
+
+        var launcher = new MainWindowViewModel(store, fetchArt: false);
+
+        // The settings that are still settings are all there; the ones that are not are simply gone - and a
+        // file that still carries the old mirror flag lands on the default this build has, which is the two
+        // revisions kept in step.
+        Assert.Equal(@"C:\Users\Nobody\patchserver", launcher.PatchServerPath);
+        Assert.Equal(12400, launcher.PatchServerPort);
+        Assert.True(launcher.UsesRemotePatchServer);
+        Assert.True(launcher.PatchServerRevisionSynced);
+        Assert.False(launcher.CanEditGameRevision);
     }
 
     [Fact]
@@ -230,6 +264,50 @@ public class PatchServerWiringTests {
     }
 
     [Fact]
+    public void TheFirstRunScreenOffersToPrepareTheFilesNowAndTakesNoForAnAnswer() {
+        using var workspace = new TempWorkspace();
+        var launcher = new MainWindowViewModel(StoreWithImlight(workspace), fetchArt: false);
+
+        // Nothing installed: there is nothing to start, so there is nothing to ask about.
+        Assert.False(launcher.ShouldOfferToPreparePatchServerFiles);
+        Assert.False(launcher.CanPreparePatchServerFilesNow);
+
+        var folder = workspace.CreateDirectory("patchserver");
+        File.WriteAllBytes(PatchServerRunner.ExecutablePathFor(folder), [0]);
+        launcher.PatchServerPath = folder;
+
+        // Installed and not running, which is the state this offer exists for.
+        Assert.True(launcher.ShouldOfferToPreparePatchServerFiles);
+        Assert.True(launcher.CanPreparePatchServerFilesNow);
+        Assert.True(launcher.PreparePatchServerFilesNowCommand.CanExecute(null));
+
+        // "Not now" is an answer, and it is kept: the offer does not come back and the screen can still be
+        // left, which is what the Continue button does.
+        launcher.SkipPreparingPatchServerFilesCommand.Execute(null);
+
+        Assert.True(launcher.PatchServerPrepareAnswered);
+        Assert.False(launcher.ShouldOfferToPreparePatchServerFiles);
+        Assert.False(launcher.CanPreparePatchServerFilesNow);
+        Assert.True(launcher.CanCompletePatchServerSetup);
+
+        // A patch server somebody started themselves is already preparing its files, so the offer is not
+        // made. The same settings are read again rather than written again, because the first launcher is
+        // holding the server's own files open by now.
+        var running = new MainWindowViewModel(
+            new LauncherSettingsStore(workspace.Path("launcher.json")), fetchArt: false);
+        running.PatchServerPath = folder;
+        running.PatchServerState = ServerState.Ready;
+
+        Assert.False(running.ShouldOfferToPreparePatchServerFiles);
+
+        // And a launcher pointed at somebody else's patch server has nothing of its own to prepare.
+        running.PatchServerState = ServerState.Stopped;
+        running.UsesRemotePatchServer = true;
+
+        Assert.False(running.ShouldOfferToPreparePatchServerFiles);
+    }
+
+    [Fact]
     public void TheFolderItWouldUseIsShownBeforeAnythingIsDownloaded() {
         using var workspace = new TempWorkspace();
 
@@ -327,6 +405,102 @@ public class PatchServerWiringTests {
         Assert.False(MainWindowViewModel.IsTheLocalPatchServerAddress("http://127.0.0.1:12370", local));
         Assert.False(MainWindowViewModel.IsTheLocalPatchServerAddress(string.Empty, local));
         Assert.False(MainWindowViewModel.IsTheLocalPatchServerAddress(null, local));
+    }
+
+    // ---------------------------------------------------------------- waiting, and being told why not
+
+    [Fact]
+    public void AStartWaitsOnlyForAPatchServerThisSessionWillAskAndThatCannotAnswerYet() {
+        // The case the wait exists for: this machine's patch server is up, Imlight is pointed at it, and it
+        // has not fetched the file the boot asks for.
+        Assert.True(MainWindowViewModel.ShouldWaitForPatchServerFiles(
+            patchServerIsRunning: true, imlightAsksThisOne: true, canServeTheBootFile: false));
+
+        // It can answer: nothing to wait for, and Play goes straight on.
+        Assert.False(MainWindowViewModel.ShouldWaitForPatchServerFiles(
+            patchServerIsRunning: true, imlightAsksThisOne: true, canServeTheBootFile: true));
+
+        // A session pointed somewhere else is not one this machine's patch server can hold up.
+        Assert.False(MainWindowViewModel.ShouldWaitForPatchServerFiles(
+            patchServerIsRunning: true, imlightAsksThisOne: false, canServeTheBootFile: false));
+
+        // And with nothing running there is nothing to wait for: the session uses whatever its config says,
+        // which is exactly what it did before this existed.
+        Assert.False(MainWindowViewModel.ShouldWaitForPatchServerFiles(
+            patchServerIsRunning: false, imlightAsksThisOne: true, canServeTheBootFile: false));
+    }
+
+    [Fact]
+    public void PlayAnywayIsOfferedWhileTheWaitIsOnAndNeverOnItsOwn() {
+        using var workspace = new TempWorkspace();
+
+        var launcher = new MainWindowViewModel(
+            new LauncherSettingsStore(workspace.Path("launcher.json")), fetchArt: false);
+
+        // Nothing is being waited for, so there is no way out to offer - a button that starts a session
+        // already starting is not an escape from anything.
+        Assert.False(launcher.IsWaitingForPatchServerFiles);
+        Assert.False(launcher.CanPlayAnyway);
+        Assert.False(launcher.PlayAnywayCommand.CanExecute(null));
+        Assert.Equal(string.Empty, launcher.WaitingForPatchServerFilesText);
+        Assert.False(launcher.HasWaitingForPatchServerFilesText);
+    }
+
+    [Fact]
+    public void TheServerFailingToLoadItsFilesFromThePatchServerIsSaidWithTheReasonAndTheWayOut() {
+        using var workspace = new TempWorkspace();
+
+        var launcher = new MainWindowViewModel(StoreWithImlight(workspace), fetchArt: false);
+
+        // The line Imlight writes, taken from a real log, with the addresses the launcher itself writes.
+        var line = $"2026-10-15 23:06:01.428 -04:00 [ERR] Imlight.CoreLib : Error while downloading file "
+                   + "http://127.0.0.1:12369/V_r803238.Wizard_1_610/Data/GameData/Root.wad from patch server "
+                   + "endpoint: Response status code does not indicate success: 404 (Not Found). ";
+
+        var refusal = Assert.IsType<PatchServerRefusedAFile>(Assert.Single(ServerLogFacts.Parse(line)));
+
+        Assert.Equal("V_r803238.Wizard_1_610", refusal.Revision);
+        Assert.Equal("r803238.Wizard_1_610", refusal.GameRevision);
+        Assert.Equal("Data/GameData/Root.wad", refusal.File);
+
+        launcher.ReportPatchServerRefusal(refusal);
+
+        // Both revisions, the file that was asked for, and which of the two the launcher moves.
+        Assert.True(launcher.HasPatchServerRefusalNotice);
+        Assert.Contains("V_r803238.Wizard_1_610", launcher.PatchServerRefusalNotice);
+        Assert.Contains("404", launcher.PatchServerRefusalNotice);
+        Assert.Contains("stop the server and press Play", launcher.PatchServerRefusalNotice);
+
+        // The same failure is not reported twice: the server retries and restarts its patch actor, so the
+        // same address comes round again and again.
+        launcher.ReportPatchServerRefusal(refusal);
+
+        Assert.Equal(1, launcher.Log.Blocks
+            .SelectMany(block => block.Lines)
+            .Count(line => line.Message.Contains("cannot finish warming up")));
+
+        // With the sync off the sentence names the other way out, because the launcher is not the side that
+        // would move.
+        launcher.PatchServerRevisionSynced = false;
+        launcher.ReportPatchServerRefusal(refusal with { Url = refusal.Url + "?again" });
+
+        Assert.Contains("hand-off", launcher.PatchServerRefusalNotice);
+    }
+
+    [Fact]
+    public void ALineAboutSomethingElseIsNotAFileTheServerCouldNotLoad() {
+        // A patch server address with no revision in it says nothing about a revision, and a line about
+        // another failure entirely says nothing at all.
+        Assert.Empty(ServerLogFacts.Parse(
+            "2026-10-15 23:06:01.428 -04:00 [ERR] Error while downloading file http://127.0.0.1:12369/"
+            + "Data/GameData/Root.wad from patch server endpoint: 404 (Not Found)."));
+
+        Assert.Empty(ServerLogFacts.Parse(
+            "2026-10-15 23:06:01.428 -04:00 [ERR] Error while downloading file http://127.0.0.1:12369/"
+            + "V_r803238.Wizard_1_610 from patch server endpoint: 404 (Not Found)."));
+
+        Assert.Empty(ServerLogFacts.Parse(
+            "2026-10-15 23:06:01.428 -04:00 [ERR] Error while opening the database."));
     }
 
     // ---------------------------------------------------------------- helpers

@@ -1,3 +1,4 @@
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ViewLight.Models;
@@ -42,11 +43,31 @@ public sealed partial class MainWindowViewModel {
 
     private CancellationTokenSource? _preloadCancellation;
 
+    /// <summary>How fast the patch server's own fetch is going, worked out from what has landed.</summary>
+    private readonly PatchServerFetchPace _fetchPace = new();
+
+    private CancellationTokenSource? _fetchWatchCancellation;
+
+    /// <summary>The file the fetch was last reported as being on, so a line is written when it moves on.</summary>
+    private string? _fetchFileReported;
+
+    /// <summary>The revision the fetch was last reported as being on, for the same reason.</summary>
+    private string? _fetchRevisionReported;
+
+    /// <summary>Whether the mismatch between the two revisions has already been said in the Log.</summary>
+    private bool _fetchMismatchReported;
+
+    /// <summary>When the fetch was last written into the Log, so a long download is not a wall of lines.</summary>
+    private DateTimeOffset _fetchLoggedAt = DateTimeOffset.MinValue;
+
     /// <summary>
-    /// Asks whether the patch server should be filled in from a local install before this session's server
-    /// is started. Set by the window, which is the only thing that can put a dialog up.
+    /// How often a running fetch is described in the Log, when nothing about it has changed.
     /// </summary>
-    public Func<PatchServerPreloadPlan, Task<PreloadOfferAnswer>>? AskAboutPreloadAsync { get; set; }
+    /// <remarks>
+    /// Once a minute, and on every change besides: the figures move constantly, and a line per sample would
+    /// bury everything else the launcher has to say about a session that is mostly an hours-long download.
+    /// </remarks>
+    private static readonly TimeSpan FetchLogInterval = TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// Whether the running patch server could answer for the revision <c>GameRevision</c> asks for the
@@ -65,10 +86,14 @@ public sealed partial class MainWindowViewModel {
     private static readonly TimeSpan PatchServerStartTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// How long to wait for the patch server to write the revision's own file list, which is what a copy
-    /// into it is planned against.
+    /// How often the revision is counted while the patch server is fetching, and how often the two ways of
+    /// working out what to copy are looked at again.
     /// </summary>
-    private static readonly TimeSpan PatchServerFileListWait = TimeSpan.FromSeconds(20);
+    /// <remarks>
+    /// Five seconds: fine enough that the figure moves while a large file is being written, coarse enough
+    /// that walking a revision of thousands of files is a rounding error next to the download itself.
+    /// </remarks>
+    private static readonly TimeSpan FetchSampleInterval = TimeSpan.FromSeconds(5);
 
     // ---------------------------------------------------------------- state
 
@@ -133,11 +158,12 @@ public sealed partial class MainWindowViewModel {
     public bool HasPatchServerRevisionStatus => PatchServerRevisionStatus.Length > 0;
 
     /// <summary>
-    /// Whether the <c>GameRevision</c> box in Settings can be typed in. It cannot while the mirror is on,
-    /// because the value is the patch server's rather than the user's, and a box that takes edits it is
-    /// about to overwrite is worse than one that says so.
+    /// Whether the <c>GameRevision</c> box in Settings can be typed in. It can while the sync is off, which
+    /// is when the revision is the server's own and nothing but the user moves it. While the sync is on the
+    /// box is dead, because the value is the patch server's rather than the user's, and a box that takes
+    /// edits it is about to overwrite is worse than one that says so.
     /// </summary>
-    public bool CanEditGameRevision => !MirrorPatchServerRevision;
+    public bool CanEditGameRevision => !PatchServerRevisionSynced;
 
     /// <summary>
     /// The port Imlight's <b>own</b> patch server listens on, read from its config.
@@ -179,6 +205,46 @@ public sealed partial class MainWindowViewModel {
                                           && PatchServerInstalled
                                           && !string.Equals(_store.Settings.PatchServerInstalledTag,
                                               _latestPatchRelease.Tag, StringComparison.Ordinal);
+
+    // ---------------------------------------------------------------- what it has fetched so far
+
+    /// <summary>
+    /// What the patch server has of the revision it holds, in one line: how much of the revision is on disk
+    /// and how long the rest should take at the rate it is going.
+    /// </summary>
+    /// <remarks>
+    /// Empty until the patch server is running with a revision to count. It is the launcher <i>watching</i>
+    /// the patch server fetch, which is the workflow the patch server was built for - nothing is written
+    /// into its folders to hurry it along, and nothing else is asked of it: the figure comes from the
+    /// revision's own file list against the files that are there.
+    /// </remarks>
+    [ObservableProperty] private string _fetchStatus = string.Empty;
+
+    public bool HasFetchStatus => FetchStatus.Length > 0;
+
+    /// <summary>How far along that fetch is, 0..100.</summary>
+    [ObservableProperty] private double _fetchProgress;
+
+    /// <summary>
+    /// Whether the revision the patch server holds is still arriving.
+    /// </summary>
+    /// <remarks>
+    /// The patch server's own state says nothing about this: it is <c>Running</c> from the moment its
+    /// endpoint answers, which is before the first asset is asked for. This is what the second line on
+    /// screen hangs off, and it is why that line can say more than the row above it does.
+    /// </remarks>
+    [ObservableProperty] private bool _isFetchingGameFiles;
+
+    /// <summary>
+    /// Whether the revision the patch server is fetching is the one the server asks it for.
+    /// </summary>
+    /// <remarks>
+    /// The question the whole arrangement turns on, and one the launcher can answer for itself: the revision
+    /// the patch server lists against the revision in Imlight's own config. False means a session that will
+    /// get a <c>404</c> for its files whatever else is right - so it is worth a line on its own rather than
+    /// being left inside a sentence about how the download is going.
+    /// </remarks>
+    [ObservableProperty] private bool _fetchingRevisionIsTheServers = true;
 
     // ---------------------------------------------------------------- settings
 
@@ -257,93 +323,78 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// Whether a patch server with nothing in it is filled in from a copy of the game without being asked.
+    /// Whether the launcher keeps the revision the server accepts clients on in step with the revision
+    /// the patch server actually holds.
     /// </summary>
     /// <remarks>
-    /// Off by default: the copy is tens of gigabytes read and written, and when to spend that is the user's
-    /// decision - which is what the offer before a session is for. On, the offer stops being a question and
-    /// Play just does it, saying so in the Log.
+    /// <para>
+    /// On by default, and it is what makes the two agree without either piece of software being changed: a
+    /// patch server fetches whatever revision Wizard101 is serving and cannot be asked for a different one,
+    /// so the value that has to move is the server's <c>GameRevision</c>. Imlight asks its patch server for
+    /// <c>V_{GameRevision}</c> and accepts clients on that same revision, so writing the patch server's
+    /// revision there is what makes the server's own files reachable <i>and</i> what lets the client that
+    /// has just updated get in - both values saying the same thing is the only state either of them works
+    /// in.
+    /// </para>
+    /// <para>
+    /// Off leaves <c>GameRevision</c> exactly as the server's own config has it, pinned the way Imlight was
+    /// published, which is right for a server whose build is deliberately held at one revision. The patch
+    /// server is then the side left needing something it cannot fetch, and the launcher's part is the file
+    /// hand-off - see <see cref="PatchServerPreload"/> - which needs this machine's client to be exactly
+    /// the revision the server asks for. Turning the sync back on puts back the value the config had before
+    /// the launcher wrote one, and only that value: a config that has moved on since is somebody else's to
+    /// keep.
+    /// </para>
     /// </remarks>
-    public bool PatchServerPreloadAutomatically {
-        get => _store.Settings.PatchServerPreloadAutomatically;
+    public bool PatchServerRevisionSynced {
+        get => _store.Settings.PatchServerRevisionSynced;
         set {
-            if (_store.Settings.PatchServerPreloadAutomatically == value) {
+            if (_store.Settings.PatchServerRevisionSynced == value) {
                 return;
             }
 
-            _store.Settings.PatchServerPreloadAutomatically = value;
-            _store.Save();
-
-            AppendLog(LogLevel.Info, value
-                ? "A patch server that holds nothing for the session's revision will be filled in from the "
-                  + "game folder on this machine as part of Play."
-                : "The copy into the patch server is offered before a session again rather than done by "
-                  + "itself.");
-
-            OnPropertyChanged();
-            RefreshDerived();
+            ApplyPatchServerRevisionMode(value);
         }
     }
 
     /// <summary>
-    /// Whether the launcher makes the server accept the revision the patch server holds.
+    /// Moves the launcher between the two arrangements, writing whatever the move makes true.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// The two disagree in the case this exists for. A server build pins the revision it was published
-    /// with, and a patch server can only hold what Wizard101 currently offers, so a client that has been
-    /// patched past the server build is asking for a revision the patch server has and the server does
-    /// not: Imlight requests <c>V_{GameRevision}</c>, gets a 404, and - with the revision check on - turns
-    /// the same client away at login. With this on, the revision the patch server actually holds is
-    /// written into <c>GameRevision</c>, so the address Imlight asks for exists and the client that was
-    /// patched into it is the one the server accepts.
-    /// </para>
-    /// <para>
-    /// Applied whenever this machine's patch server answers with the revisions it holds - on Play, and
-    /// when a patch server is started from Settings. Turning it off puts back the value the config had
-    /// when it was turned on, and only that value: a config that has moved on since is somebody else's
-    /// to keep.
-    /// </para>
+    /// One method for both directions because they are each other's undo, and because each has the same
+    /// second half: the setting is saved, the box's editability follows it, and a patch server that is
+    /// already running is asked so the new arrangement takes hold without waiting for Play.
     /// </remarks>
-    public bool MirrorPatchServerRevision {
-        get => _store.Settings.MirrorPatchServerRevision;
-        set {
-            if (_store.Settings.MirrorPatchServerRevision == value) {
-                return;
-            }
+    private void ApplyPatchServerRevisionMode(bool synced) {
+        _store.Settings.PatchServerRevisionSynced = synced;
 
-            _store.Settings.MirrorPatchServerRevision = value;
+        if (synced) {
+            AppendLog(LogLevel.Info,
+                "The server's accepted revision is kept in step with the patch server's from now on: "
+                + "GameRevision is set to the revision the patch server holds, so the server asks for files "
+                + "it actually has.");
 
-            if (value) {
-                // Read before anything is written, so turning it off has the release's own value to put
-                // back rather than the launcher's.
-                _store.Settings.RevisionBeforeMirror =
-                    (_config ?? ImlightConfig.TryLoad(ServerPath))?.GameRevision;
-                _store.Settings.MirroredRevision = null;
-
-                AppendLog(LogLevel.Info,
-                    "The revision the server accepts (GameRevision) is taken from the patch server from "
-                    + "now on.");
-            }
-            else {
-                var restored = RestoreMirroredRevision();
-
-                AppendLog(LogLevel.Info, restored is null
-                    ? "The launcher no longer sets GameRevision; it is left as the config has it."
-                    : $"GameRevision is back to {restored}, the value it had before it was set from the "
-                      + "patch server.");
-            }
-
-            _store.Save();
-            OnPropertyChanged();
-            RefreshDerived();
-
-            // A patch server that is already up can answer straight away, so the box fills in without
+            // A patch server that is already up can answer straight away, so the value is written without
             // waiting for Play. One that is not is asked the next time it is started.
-            if (value && PatchServerIsRunning) {
+            if (PatchServerIsRunning) {
                 _ = ApplyPatchServerRevisionAsync();
             }
         }
+        else {
+            var restored = RestoreMirroredRevision();
+
+            AppendLog(LogLevel.Info, restored is null
+                ? "GameRevision is left as the server's own config has it from now on, and the patch server "
+                  + "is not being kept in step with it: its files can only come from the hand-off in "
+                  + "Settings, and only while this machine's client is the revision the server asks for."
+                : $"GameRevision is back to {restored}, the value it had before the launcher set it from the "
+                  + "patch server. It is left as the server's own from now on.");
+        }
+
+        _store.Save();
+        OnPropertyChanged(nameof(PatchServerRevisionSynced));
+        OnPropertyChanged(nameof(CanEditGameRevision));
+        RefreshDerived();
     }
 
     /// <summary>
@@ -583,9 +634,10 @@ public sealed partial class MainWindowViewModel {
         var patchServer = PatchServerPath;
         var configured = PreloadSourcePath;
         var ownGameFolder = ClientPath;
+        var revision = ServerWantedRevision;
 
         var (plan, source) = await Task
-            .Run(() => PlanPreload(patchServer, configured, ownGameFolder))
+            .Run(() => PlanPreload(patchServer, revision, configured, ownGameFolder))
             .ConfigureAwait(true);
 
         _preloadPlan = plan;
@@ -603,21 +655,41 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
+    /// The revision the server asks the patch server for - <c>GameRevision</c> - which is also the revision
+    /// the server accepts clients on, and therefore the one revision worth having on disk.
+    /// </summary>
+    /// <remarks>
+    /// Read from the config when the launcher has one, and from the box on screen when it has not, so the
+    /// answer is the same one the session will use rather than a second opinion about it.
+    /// </remarks>
+    public string? ServerWantedRevision
+        => (_config ?? ImlightConfig.TryLoad(ServerPath))?.GameRevision ?? GameRevision;
+
+    /// <summary>
     /// The plan for the best install on this machine: the one that is set, and failing that the launcher's
     /// own game folder, and failing that whatever install can be found.
     /// </summary>
     /// <remarks>
-    /// A folder only counts as a source when the plan built from it is possible - which means the patch
-    /// server is holding that build's revision and has the file list to prove it. An install of a different
-    /// revision is skipped rather than refused, because that is the ordinary state of a machine with an
-    /// out-of-date game on it: there is simply nothing here to copy from, which is not worth a sentence.
+    /// <para>
+    /// A folder only counts as a source when the plan built from it is possible - which means its build is
+    /// the revision the server asks for, and the patch server has that revision's file list to prove what
+    /// belongs in it. An install of a different revision is skipped rather than refused, because that is the
+    /// ordinary state of a machine with a game that has patched itself past this server: there is simply
+    /// nothing here to give, which is not worth a sentence.
+    /// </para>
+    /// <para>
+    /// The revision is a parameter rather than read here, because it is a fact about the server - and a
+    /// machine with no server installed has no revision to ask about, which is a state these tests need to
+    /// be able to describe.
+    /// </para>
     /// </remarks>
+    /// <param name="serverRevision">The revision the server asks the patch server for.</param>
     /// <param name="alsoConsider">
     /// The installs found on this machine, or <c>null</c> to look for them. Given rather than found by the
     /// caller so that what a machine happens to have installed is not what this rule is about.
     /// </param>
     public static (PatchServerPreloadPlan? Plan, string Source) PlanPreload(
-        string? patchServerFolder, string? configuredSource, string? ownGameFolder,
+        string? patchServerFolder, string? serverRevision, string? configuredSource, string? ownGameFolder,
         IEnumerable<string>? alsoConsider = null) {
 
         PatchServerPreloadPlan? first = null;
@@ -630,7 +702,8 @@ public sealed partial class MainWindowViewModel {
 
             PatchServerPreloadPlan plan;
             try {
-                plan = PatchServerPreload.Plan(folder, patchServerFolder, ClientBuildReader.Read(folder));
+                plan = PatchServerPreload.Plan(
+                    folder, patchServerFolder, serverRevision, ClientBuildReader.Read(folder));
             }
             catch (Exception) {
                 // A path that cannot be used - too long, or not a path at all - is not a source. Another
@@ -652,7 +725,7 @@ public sealed partial class MainWindowViewModel {
         }
 
         return first is null
-            ? (PatchServerPreload.Plan(null, patchServerFolder, null), string.Empty)
+            ? (PatchServerPreload.Plan(null, patchServerFolder, serverRevision, null), string.Empty)
             : (first, firstSource);
     }
 
@@ -802,141 +875,489 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// Offers to fill the patch server in from a local install, before the server this session needs is
-    /// started.
+    /// Counts the revision the patch server holds, and keeps counting it while it fetches.
     /// </summary>
     /// <remarks>
-    /// Asked rather than done: it is tens of gigabytes read and written, and only the user knows whether
-    /// this is the moment for it. It is asked before the server starts because that is the whole point - a
-    /// patch server that holds the revision is one Imlight loads <c>Root.wad</c> from instead of falling
-    /// back to its own cache - and it is asked once per revision, so a "no" is an answer rather than
-    /// something to argue with every time Play is pressed. The one exception is
-    /// <see cref="PatchServerPreloadAutomatically"/>, which does it unasked; the asking is the setting, not
-    /// the rule.
+    /// <para>
+    /// <b>This is the launcher using the patch server rather than helping it.</b> Aurorium fetches a
+    /// revision exactly once and in its own way - it writes the revision's file list, asks Wizard101's patch
+    /// server for what that list names, and skips anything it already has - and the launcher's part is to
+    /// say how far along that is and roughly when it will be done. Nothing is written into the patch
+    /// server's folders, nothing is repointed, and nothing is asked of it: the whole figure comes from the
+    /// revision's own file list against the files that are on disk, which is why watching cannot perturb a
+    /// fetch that is running.
+    /// </para>
+    /// <para>
+    /// <b>Started when the patch server is, and it stops when that is.</b> A patch server only fetches while
+    /// it is alive, so there is nothing to watch the rest of the time. It is left running after a fetch is
+    /// over, because a finished revision is worth saying once and a revision that is merely paused will
+    /// start again on its own.
+    /// </para>
     /// </remarks>
-    public async Task OfferPreloadAsync() {
-        // Nothing here is about somebody else's patch server, and that is checked before the wait below
-        // rather than after: a launcher pointed at a remote one should not stall Play for a file list it is
-        // never going to copy into.
-        if (!PatchServerIsThisMachines) {
+    private void SyncFetchWatch() {
+        if (PatchServerIsRunning) {
+            StartFetchWatch();
+        }
+        else {
+            StopFetchWatch();
+        }
+    }
+
+    private void StartFetchWatch() {
+        if (_fetchWatchCancellation is not null) {
             return;
         }
 
-        var plan = await RefreshPreloadPlanAsync().ConfigureAwait(true);
+        // A rate measured over a fetch that has ended has nothing to do with the one starting now, and the
+        // gap between the two would be read as an impossibly long window.
+        _fetchPace.Reset();
 
-        // The endpoint answers before the revision's file list has been written - the patch server binds its
-        // port first and works out what to fetch second - so a session started straight after it comes up
-        // can be one where there is nothing to plan against yet. It arrives within seconds; the wait is
-        // bounded, and only for the first start after a patch server is installed.
-        if (plan is { IsPossible: false } && PreloadSourceInUse.Length > 0) {
-            var folder = PatchServerPreload.RevisionFolderFor(
-                PatchServerPath, ClientBuildReader.Read(PreloadSourceInUse));
+        var cancellation = new CancellationTokenSource();
+        _fetchWatchCancellation = cancellation;
 
-            var deadline = DateTimeOffset.Now.Add(PatchServerFileListWait);
-            while (!PatchServerManifest.Exists(folder) && DateTimeOffset.Now < deadline) {
-                await Task.Delay(500).ConfigureAwait(true);
-            }
-
-            plan = await RefreshPreloadPlanAsync().ConfigureAwait(true);
-        }
-
-        // Done rather than offered, for the setting that says so. No dialog and no remembered refusal,
-        // because a patch server that holds nothing is exactly the case the setting is about.
-        if (plan is not null && ShouldPreloadWithoutAsking(PatchServerPreloadAutomatically, plan)) {
-            AppendLog(LogLevel.Info, PreloadAutomaticMessage(plan));
-            await CopyForPlayAsync(plan).ConfigureAwait(true);
-            return;
-        }
-
-        if (plan is null || !ShouldOfferPreload(PatchServerIsThisMachines, plan,
-                _store.Settings.PatchServerPreloadDeclinedRevision)) {
-            return;
-        }
-
-        if (AskAboutPreloadAsync is null) {
-            // No window to ask in: said in the Log, which is all this can do without one.
-            AppendLog(LogLevel.Info, PreloadOfferDetail(plan));
-            return;
-        }
-
-        var answer = await AskAboutPreloadAsync(plan).ConfigureAwait(true);
-
-        if (answer.DontAskAgain) {
-            _store.Settings.PatchServerPreloadDeclinedRevision = plan.Revision;
-            _store.Save();
-        }
-
-        if (!answer.Preload) {
-            AppendLog(LogLevel.Info, PreloadDeclinedMessage(plan));
-            return;
-        }
-
-        await CopyForPlayAsync(plan).ConfigureAwait(true);
+        _ = WatchFetchAsync(cancellation);
     }
 
     /// <summary>
-    /// Copies a plan in as part of starting a session, with Home saying so while it happens.
+    /// Stops watching, if anything is.
     /// </summary>
     /// <remarks>
-    /// The phase is set and put back around the copy rather than left to the caller, because both ways of
-    /// getting here - the offer answered yes, and the setting that does not ask - spend the same minutes of
-    /// a session in the same place.
+    /// The source is cancelled here and disposed by the loop itself, which is the only thing that knows when
+    /// it has finished with it: disposing it out from under a delay that is already waiting on its token
+    /// would be a use-after-free rather than a stop.
     /// </remarks>
-    private async Task CopyForPlayAsync(PatchServerPreloadPlan plan) {
-        var before = Phase;
-        Phase = LauncherPhase.CopyingGameFiles;
+    private void StopFetchWatch() {
+        _fetchWatchCancellation?.Cancel();
+        ClearFetchStatus();
+    }
+
+    /// <summary>
+    /// Samples the disk every few seconds and puts the answer on screen, for as long as the patch server is
+    /// running.
+    /// </summary>
+    /// <remarks>
+    /// The revision is asked of the patch server's own API rather than assumed, and asked again until it
+    /// answers: its endpoint is up before its first pass has put a revision in its database, so a watch that
+    /// starts with the process has nothing to count for the first few seconds. A revision folder that is
+    /// being written is read as no measurement at all, which is why a sample that comes back empty leaves
+    /// the line as it was rather than clearing it.
+    /// </remarks>
+    private async Task WatchFetchAsync(CancellationTokenSource cancellation) {
+        var cancellationToken = cancellation.Token;
+        string? revision = null;
 
         try {
-            await CopyCacheInAsync(plan).ConfigureAwait(true);
+            while (!cancellationToken.IsCancellationRequested && PatchServerIsRunning) {
+                revision ??= await LatestPatchRevisionAsync(cancellationToken).ConfigureAwait(true);
+
+                if (revision is not null) {
+                    var patchServer = PatchServerPath;
+                    var state = await Task
+                        .Run(() => PatchServerFetch.Measure(patchServer, revision), cancellationToken)
+                        .ConfigureAwait(true);
+
+                    // Checked rather than assumed: a stop that lands while this sample is being taken
+                    // clears the line, and a sample arriving afterwards would put it back on a patch
+                    // server that is no longer running - with nothing left to take it down again.
+                    if (state is not null && !cancellationToken.IsCancellationRequested) {
+                        ApplyFetchState(state);
+                    }
+                }
+
+                await Task.Delay(FetchSampleInterval, cancellationToken).ConfigureAwait(true);
+            }
+        }
+        catch (OperationCanceledException) {
+            // A stop, which is what a stopped patch server is. Nothing to report.
+        }
+        catch (Exception ex) {
+            // Never a failed session: a figure the launcher could not work out is not something the patch
+            // server is doing wrong, and the fetch itself is unaffected either way.
+            AppendLog(LogLevel.Warning, $"Could not keep up with the patch server's fetch: {ex.Message}");
         }
         finally {
-            Phase = before == LauncherPhase.CopyingGameFiles ? LauncherPhase.Idle : before;
+            // The loop can also end by itself - the process went away - and the field must not be left
+            // holding a watch that is no longer running, or the next start would think one was already on.
+            if (ReferenceEquals(_fetchWatchCancellation, cancellation)) {
+                _fetchWatchCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
     }
 
     /// <summary>
-    /// Whether Play should offer a copy at all.
+    /// The name of the newest revision the patch server holds, or <c>null</c> while it holds none - which
+    /// is the state it is in between its endpoint answering and its first pass finishing.
     /// </summary>
-    /// <remarks>
-    /// Three conditions, and each of them is somebody's decision rather than a nicety. It is only asked
-    /// about this machine's own patch server - the one the user pointed the launcher at - because writing
-    /// into the folder of somebody else's is not the launcher's to do, however much good it would do. There
-    /// has to be something to copy that this install can supply, or the question is nothing. And it is asked
-    /// once per revision, because a "no" about one revision says nothing about the next.
-    /// </remarks>
-    public static bool ShouldOfferPreload(
-        bool patchServerIsThisMachines, PatchServerPreloadPlan? plan, string? declinedRevision)
-        => patchServerIsThisMachines && plan is { IsWorthDoing: true }
-           && !ClientBuildReader.AreSame(declinedRevision, plan.Revision);
+    private async Task<string?> LatestPatchRevisionAsync(CancellationToken cancellationToken) {
+        var revisions = await _patchRevisions
+            .ListAsync(LocalPatchServerUrl, cancellationToken)
+            .ConfigureAwait(true);
+
+        var newest = PatchServerConfig.NewestGameRevision(revisions);
+
+        return newest is null ? null : PatchServerPreload.RevisionNameFor(newest);
+    }
+
+    private void ApplyFetchState(PatchServerFetchState state) {
+        var estimate = _fetchPace.Observe(state, DateTimeOffset.Now);
+
+        // The revision the server asks for is handed to the description rather than read by it, because it
+        // is a fact about Imlight's config and the description is about the disk - and because the mismatch
+        // between the two is the one thing on that line a session cannot work through.
+        var revision = ServerWantedRevision;
+
+        FetchProgress = state.IsComplete ? 100 : state.Percent;
+        IsFetchingGameFiles = !state.IsComplete;
+        FetchingRevisionIsTheServers = PatchServerFetch.DescribeRevisionMismatch(state, revision).Length == 0;
+
+        FetchStatus = PatchServerFetch.Describe(state, estimate, revision);
+
+        OnPropertyChanged(nameof(HasFetchStatus));
+        OnPropertyChanged(nameof(FetchingRevisionIsTheServers));
+
+        ReportFetchInTheLog(state, estimate, revision);
+    }
+
+    private void ClearFetchStatus() {
+        FetchStatus = string.Empty;
+        FetchProgress = 0;
+        IsFetchingGameFiles = false;
+        _fetchPace.Reset();
+        _fetchFileReported = null;
+        _fetchRevisionReported = null;
+        _fetchMismatchReported = false;
+        _fetchLoggedAt = DateTimeOffset.MinValue;
+
+        OnPropertyChanged(nameof(HasFetchStatus));
+    }
 
     /// <summary>
-    /// Whether Play fills the patch server in without asking - the setting, and something worth doing.
+    /// Writes the fetch into the Log when there is something new to say about it.
     /// </summary>
-    public static bool ShouldPreloadWithoutAsking(bool preloadAutomatically, PatchServerPreloadPlan? plan)
-        => preloadAutomatically && plan is { IsWorthDoing: true };
+    /// <remarks>
+    /// <para>
+    /// Three things make it worth a line: the file it is downloading has moved on, the revision it is
+    /// fetching has changed, or a minute has passed since the last one - plus the revision mismatch, which is
+    /// said the first time it is seen whatever else is going on, because that one is not progress but an
+    /// answer to why a session will fail.
+    /// </para>
+    /// <para>
+    /// The line is the same sentence the card shows, which is the point: the Log keeps what the line on a
+    /// screen cannot - how far along this was at each point of a download that takes hours.
+    /// </para>
+    /// </remarks>
+    private void ReportFetchInTheLog(
+        PatchServerFetchState state, PatchServerFetchEstimate estimate, string? serverRevision) {
 
-    /// <summary>What the Log says when the copy is made without being asked.</summary>
-    public static string PreloadAutomaticMessage(PatchServerPreloadPlan plan)
-        => $"Filling the patch server in from {plan.SourceFolder}: {plan.FilesToCopy:N0} files "
-           + $"({ServerInstallService.FormatBytes(plan.BytesToCopy)}) of {plan.Revision}, because Settings "
-           + "says to do that without asking. Files it already holds are left alone.";
+        var file = state.CurrentFile?.RelativePath;
+        var revisionChanged = !string.Equals(state.Revision, _fetchRevisionReported, StringComparison.OrdinalIgnoreCase);
+        var fileChanged = !string.Equals(file, _fetchFileReported, StringComparison.OrdinalIgnoreCase);
+        var due = DateTimeOffset.Now - _fetchLoggedAt >= FetchLogInterval;
+        var mismatch = PatchServerFetch.DescribeRevisionMismatch(state, serverRevision);
+        var mismatchIsNew = mismatch.Length > 0 && !_fetchMismatchReported;
 
-    /// <summary>What the offer asks.</summary>
-    public static string PreloadOfferHeadline(PatchServerPreloadPlan plan)
-        => $"Copy {plan.FilesToCopy:N0} files ({ServerInstallService.FormatBytes(plan.BytesToCopy)}) into the "
-           + "patch server?";
+        if (!revisionChanged && !fileChanged && !due) {
+            return;
+        }
 
-    /// <summary>What the offer explains: why these files, and why a copy rather than a download.</summary>
-    public static string PreloadOfferDetail(PatchServerPreloadPlan plan)
-        => $"{plan.SourceFolder} already holds {plan.Revision}, so these are the same files the patch server "
-           + "would download for itself. A copy is local, so it is minutes rather than hours - and the files "
-           + "large enough to run past the patch server's own download limit are ones only a copy can supply.";
+        _fetchRevisionReported = state.Revision;
+        _fetchFileReported = file;
+        _fetchLoggedAt = DateTimeOffset.Now;
 
-    /// <summary>What the Log says when the offer is turned down.</summary>
-    public static string PreloadDeclinedMessage(PatchServerPreloadPlan plan)
-        => $"Playing without filling the patch server in. It is still missing {plan.FilesToCopy:N0} files "
-           + $"({ServerInstallService.FormatBytes(plan.BytesToCopy)}) and will fetch what it can; the copy is "
-           + "under Settings whenever it is wanted.";
+        // The file's own path is worth a line of its own: which file of a revision of thousands it is on is
+        // exactly the detail a percentage leaves out.
+        AppendLog(LogLevel.Info,
+            state.CurrentFile is { } currentFile && (fileChanged || revisionChanged)
+                ? $"Fetching {currentFile.RelativePath}: "
+                  + $"{ServerInstallService.FormatBytes(currentFile.BytesSoFar)}"
+                  + (currentFile.HasASize
+                      ? $" of {ServerInstallService.FormatBytes(currentFile.TotalBytes)}"
+                      : string.Empty)
+                  + $". {PatchServerFetch.Describe(state, estimate, serverRevision)}"
+                : PatchServerFetch.Describe(state, estimate, serverRevision));
+
+        if (!mismatchIsNew) {
+            return;
+        }
+
+        _fetchMismatchReported = true;
+        AppendLog(LogLevel.Warning, mismatch);
+        AppendLog(LogLevel.Warning,
+            "Play waits for the patch server to have "
+            + $"{PatchServerServing.BootFile} before it starts the server, and it can be sent on without "
+            + "one with the button on Home.");
+    }
+    // ---------------------------------------------------------------- when the server cannot load its files
+
+    /// <summary>The address the last refusal was for, so one failure is reported once.</summary>
+    private string? _patchServerRefusalReported;
+
+    /// <summary>
+    /// What the server said about a file it could not load from the patch server, in the launcher's own
+    /// words, or empty while it has said nothing.
+    /// </summary>
+    /// <remarks>
+    /// The failure that has no other symptom: the server is alive, its ports are open, and it sits at
+    /// "warming up" forever because the first file it asked its patch server for was not there. The
+    /// launcher reads it out of the server's own log - the only place it exists - and puts it on Home with
+    /// the reason and the way out, rather than leaving the user to wait for a server that is never going to
+    /// finish.
+    /// </remarks>
+    [ObservableProperty] private string _patchServerRefusalNotice = string.Empty;
+
+    public bool HasPatchServerRefusalNotice => PatchServerRefusalNotice.Length > 0;
+
+    /// <summary>
+    /// Reports a file the server could not load from its patch server, once per address.
+    /// </summary>
+    /// <remarks>
+    /// A session that fails this way fails over and over - the server restarts the patch actor and asks
+    /// again - so the address asked for is what tells a new failure from the same one being retried. Nothing
+    /// is acted on: the launcher does not repoint anything and does not restart the server under the player.
+    /// What it does is say which two revisions have to agree and which of the two is the launcher's to move.
+    /// </remarks>
+    public void ReportPatchServerRefusal(PatchServerRefusedAFile refusal) {
+        if (string.Equals(refusal.Url, _patchServerRefusalReported, StringComparison.OrdinalIgnoreCase)) {
+            return;
+        }
+
+        _patchServerRefusalReported = refusal.Url;
+
+        var holding = _store.Settings.MirroredRevision;
+        var patchServerHas = holding is { Length: > 0 }
+            ? $"The patch server is holding {holding}"
+            : "A patch server fetches whatever revision Wizard101 is serving and cannot be asked for another";
+
+        PatchServerRefusalNotice =
+            $"The server asked the patch server for {refusal.Revision}/{refusal.File} and was told 404, so it "
+            + $"cannot finish warming up. {patchServerHas}, and your server's own revision is the one it asks "
+            + "for: the two have to be the same revision for either of them to work."
+            + (PatchServerRevisionSynced
+                ? " The launcher keeps them in step when it starts the patch server, so stop the server and "
+                  + "press Play to pick up the patch server's revision."
+                : " The level of sync under Settings → Patch server is off, so the server is pinned to the "
+                  + "revision its own config has - and a pinned revision can only be filled in by the hand-off "
+                  + "on that card.");
+
+        AppendLog(LogLevel.Error, PatchServerRefusalNotice);
+        OnPropertyChanged(nameof(HasPatchServerRefusalNotice));
+    }
+
+    /// <summary>Reports, once each, every file the server said it could not load from its patch server.</summary>
+    private void ReportPatchServerRefusals(IReadOnlyList<string> lines) {
+        foreach (var line in lines) {
+            foreach (var fact in ServerLogFacts.Parse(line)) {
+                if (fact is PatchServerRefusedAFile refusal) {
+                    ReportPatchServerRefusal(refusal);
+                }
+            }
+        }
+    }
+
+    /// <summary>Forgets the last refusal, for a session that is starting over.</summary>
+    private void ForgetPatchServerRefusal() {
+        _patchServerRefusalReported = null;
+        PatchServerRefusalNotice = string.Empty;
+        OnPropertyChanged(nameof(HasPatchServerRefusalNotice));
+    }
+
+    // ---------------------------------------------------------------- waiting for the files it needs
+
+    /// <summary>
+    /// How often the file Imlight's boot asks for is asked of the patch server while Play waits for it.
+    /// </summary>
+    private static readonly TimeSpan PatchServerBootFilePollInterval = TimeSpan.FromSeconds(5);
+
+    private CancellationTokenSource? _waitingForBootFile;
+
+    /// <summary>How long the last start spent waiting for the patch server's files.</summary>
+    private TimeSpan _waitedForPatchServerFiles;
+
+    /// <summary>
+    /// Whether Play is holding the server back because the patch server does not have the file its boot asks
+    /// for yet.
+    /// </summary>
+    /// <remarks>
+    /// A line on Home rather than a phase, because it is not the server doing anything: the server has not
+    /// been started, and the thing making progress is the patch server's own download - which is why what it
+    /// says is the fetch's own line.
+    /// </remarks>
+    [ObservableProperty] private bool _isWaitingForPatchServerFiles;
+
+    /// <summary>What that wait says, including where the download has got to.</summary>
+    [ObservableProperty] private string _waitingForPatchServerFilesText = string.Empty;
+
+    public bool HasWaitingForPatchServerFilesText => WaitingForPatchServerFilesText.Length > 0;
+
+    /// <summary>
+    /// Whether a start should wait for the patch server rather than go ahead.
+    /// </summary>
+    /// <remarks>
+    /// Stated as a rule so it can be tested without a patch server: the patch server has to be up, it has to
+    /// be the one Imlight is about to ask, and it has to be unable to answer for the file Imlight's boot
+    /// needs first. Anything else is nothing to wait for. This is the bug it exists for - a server whose
+    /// warm-up starts before the patch server has fetched anything reaches its first request, gets a
+    /// <c>404</c> for its own <c>Root.wad</c>, and never finishes warming up.
+    /// </remarks>
+    public static bool ShouldWaitForPatchServerFiles(
+        bool patchServerIsRunning, bool imlightAsksThisOne, bool canServeTheBootFile)
+        => patchServerIsRunning && imlightAsksThisOne && !canServeTheBootFile;
+
+    public bool CanPlayAnyway => IsWaitingForPatchServerFiles;
+
+    /// <summary>
+    /// Starts the server now, without waiting any longer for the patch server's files.
+    /// </summary>
+    /// <remarks>
+    /// The wait is a real cost - a first fetch is hours - so it is always something the user can end, and
+    /// ending it is said out loud: a session started against a patch server that is still fetching is one
+    /// that fails on the <c>404</c> rather than finding its files, and nothing else would connect the two.
+    /// </remarks>
+    [RelayCommand(CanExecute = nameof(CanPlayAnyway))]
+    private void PlayAnyway() {
+        var waiting = _waitingForBootFile;
+
+        if (waiting is null) {
+            return;
+        }
+
+        AppendLog(LogLevel.Warning,
+            "Playing without waiting for the patch server's files. Imlight asks for "
+            + $"{PatchServerServing.BootFile} during its own boot, and a patch server that does not have it "
+            + "yet answers 404 - the session loads Root.wad from Imlight's own cache if it has one, and stops "
+            + "on it if it does not. The fetch keeps running while ViewLight is open."
+            + (FetchStatus.Length > 0 ? $" {FetchStatus}" : string.Empty));
+
+        waiting.Cancel();
+    }
+
+    /// <summary>
+    /// Waits for the patch server to be able to serve the file Imlight's boot asks for, or for the user to
+    /// send the session on without it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The one file, not the whole revision.</b> Imlight's warm-up asks the patch server for
+    /// <c>Data/GameData/Root.wad</c> and caches it; the rest of the revision is asked for by the client as it
+    /// plays. So what is waited for is the file the boot cannot start without - minutes rather than the hours
+    /// a whole revision takes - and a session can still find a zone file missing later, which is the honest
+    /// limit of this and is why the fetch line stays on screen afterwards.
+    /// </para>
+    /// <para>
+    /// Asked rather than assumed: a <c>HEAD</c> for the boot file is the same request Imlight makes first,
+    /// so an answer means the boot that is about to start will get its files. Nothing is repointed and
+    /// nothing is refused - a patch server that goes away, or a user who would rather play now, both end the
+    /// wait and the session goes ahead exactly as it used to.
+    /// </para>
+    /// </remarks>
+    private async Task WaitForPatchServerFilesAsync() {
+        _waitedForPatchServerFiles = TimeSpan.Zero;
+
+        if (!PatchServerIsRunning) {
+            return;
+        }
+
+        // Nothing to wait for when the session is not going to ask this machine's patch server: the wait is
+        // about the address Imlight reads, and a remote one is reached whether this is up or not.
+        var config = _config ?? ImlightConfig.TryLoad(ServerPath);
+
+        if (!ShouldWaitForPatchServerFiles(
+                PatchServerIsRunning,
+                IsTheLocalPatchServerAddress(config?.PatchServerUrl, LocalPatchServerUrl),
+                await PatchServerServingAsync().ConfigureAwait(true))) {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _waitingForBootFile = cancellation;
+
+        var revision = RevisionThisSessionAsks();
+        var started = DateTimeOffset.Now;
+
+        IsWaitingForPatchServerFiles = true;
+        WaitingForPatchServerFilesText = DescribeWaitingForBootFile(revision);
+        RefreshDerived();
+        OnPropertyChanged(nameof(HasWaitingForPatchServerFilesText));
+
+        AppendLog(LogLevel.Info,
+            $"The patch server at {LocalPatchServerUrl} does not have {revision}'s "
+            + $"{PatchServerServing.BootFile} yet, which is the first thing Imlight asks it for when it "
+            + "starts. Waiting for it rather than starting a server that cannot fetch its own files - press "
+            + "Play anyway on Home to start it now.");
+
+        try {
+            while (!cancellation.IsCancellationRequested) {
+                // Asked again while it waits, and this is the request that makes the wait worth having: a
+                // patch server has no revision to list until its own first pass has written one into its
+                // database, which can be seconds after its endpoint answers - so a session that started out
+                // waiting for the revision the server shipped with is moved onto the one the patch server
+                // has, and then it is waiting for the right file. With the sync off this does nothing.
+                await ApplyPatchServerRevisionAsync().ConfigureAwait(true);
+
+                revision = RevisionThisSessionAsks();
+
+                await Task.Delay(PatchServerBootFilePollInterval, cancellation.Token).ConfigureAwait(true);
+
+                if (await PatchServerServingAsync().ConfigureAwait(true)) {
+                    AppendLog(LogLevel.Success,
+                        $"The patch server has {revision}'s {PatchServerServing.BootFile} now, so the server "
+                        + "is being started.");
+                    return;
+                }
+
+                // A patch server that has gone away cannot be waited for, and one that is being written into
+                // is still worth waiting on - so only the first of those ends the wait.
+                if (!PatchServerIsRunning) {
+                    AppendLog(LogLevel.Warning,
+                        "The patch server stopped while the launcher was waiting for its files, so the "
+                        + "server is being started without them.");
+                    return;
+                }
+
+                WaitingForPatchServerFilesText = DescribeWaitingForBootFile(revision);
+                OnPropertyChanged(nameof(HasWaitingForPatchServerFilesText));
+            }
+        }
+        catch (OperationCanceledException) {
+            // Play anyway, which has already said so.
+        }
+        finally {
+            _waitedForPatchServerFiles = DateTimeOffset.Now - started;
+            _waitingForBootFile = null;
+            IsWaitingForPatchServerFiles = false;
+            WaitingForPatchServerFilesText = string.Empty;
+
+            cancellation.Dispose();
+            RefreshDerived();
+            OnPropertyChanged(nameof(HasWaitingForPatchServerFilesText));
+        }
+    }
+
+    /// <summary>
+    /// The revision this session is going to ask the patch server for, as Imlight's config now has it.
+    /// </summary>
+    /// <remarks>
+    /// Read every time round the wait rather than once, because the sync may have moved it in between - the
+    /// wait is about the revision the server asks for, and that answer changes while it is being waited on.
+    /// </remarks>
+    private string? RevisionThisSessionAsks()
+        => (_config ?? ImlightConfig.TryLoad(ServerPath))?.GameRevision ?? GameRevision;
+
+    /// <summary>
+    /// What the wait says on Home: what is being waited for, and where the fetch has got to.
+    /// </summary>
+    private string DescribeWaitingForBootFile(string? revision) {
+        var what = $"Waiting for the patch server to have {revision}'s {PatchServerServing.BootFile}, which "
+                   + "is the first file Imlight asks it for when its own warm-up starts, before starting the "
+                   + "server.";
+
+        return FetchStatus.Length == 0
+            ? $"{what} The patch server has not said how far along it is yet. Play anyway starts the server "
+              + "now."
+            : $"{what} {FetchStatus} Play anyway starts the server now.";
+    }
 
     // ---------------------------------------------------------------- running it
 
@@ -1043,17 +1464,17 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// Asks the patch server which revision it holds, and writes it into Imlight's config when the mirror
-    /// is on.
+    /// Asks the patch server which revision it holds, and keeps the server's own revision in step with it.
     /// </summary>
     /// <remarks>
-    /// The one request the launcher makes to a patch server, and it is only made when the mirror is on -
-    /// nothing else needs an answer from it. Whether the files behind that revision have finished arriving
-    /// is not asked, and not acted on: the patch server serves what it has, and a fetch still in flight is
-    /// the patch server's business rather than a reason for the launcher to point Imlight somewhere else.
+    /// The one request the launcher makes to a patch server, and it is only made while the sync is on.
+    /// Nothing else needs an answer from it: what the launcher does with the answer is write it into
+    /// <c>GameRevision</c>, and that is the whole of the arrangement. Whether the files behind that revision
+    /// have finished arriving is a separate question with a separate answer - Play waits for the one file the
+    /// server's boot asks for, and the fetch line says what the rest of it is doing.
     /// </remarks>
     private async Task ApplyPatchServerRevisionAsync() {
-        if (!MirrorPatchServerRevision || !PatchServerIsRunning) {
+        if (!PatchServerRevisionSynced || !PatchServerIsRunning) {
             return;
         }
 
@@ -1191,16 +1612,52 @@ public sealed partial class MainWindowViewModel {
         }
 
         if (await PatchServerServingAsync().ConfigureAwait(true)) {
+            var fetch = await PatchServerFetchProgressAsync().ConfigureAwait(true);
+
+            if (fetch is { IsComplete: false } unfinished) {
+                var revision = config?.GameRevision ?? GameRevision;
+
+                AppendLog(LogLevel.Warning,
+                    $"The patch server at {LocalPatchServerUrl} is still fetching {revision}'s files: it "
+                    + $"has {unfinished.HeldFiles:N0} of {unfinished.TotalFiles:N0} "
+                    + $"({ServerInstallService.FormatBytes(unfinished.FetchedBytes)} of "
+                    + $"{ServerInstallService.FormatBytes(unfinished.TotalBytes)}). It can serve what it "
+                    + "has, and the game asks for the rest as it plays - a zone or an asset that has not "
+                    + "arrived yet is a 404 in the client rather than a launcher problem. The fetch keeps "
+                    + "running while this launcher is open.");
+            }
+
             return;
         }
 
-        var revision = config?.GameRevision ?? GameRevision;
+        var wanted = config?.GameRevision ?? GameRevision;
 
         AppendLog(LogLevel.Warning,
-            $"The patch server at {LocalPatchServerUrl} has not fetched {revision}'s files yet, so it does "
+            $"The patch server at {LocalPatchServerUrl} has not fetched {wanted}'s files yet, so it does "
             + $"not have {PatchServerServing.BootFile} to serve. This session loads Root.wad from "
             + "Imlight's own cache, or stops on it if it has none - and while this launcher is open the "
             + "fetch keeps running, so pressing Play again once it has finished gets its files from here.");
+    }
+
+    /// <summary>
+    /// What the patch server has of the revision Imlight is pointed at, or <c>null</c> when there is nothing
+    /// to count.
+    /// </summary>
+    /// <remarks>
+    /// Read for the sentence about a fetch that is still running rather than for the line on screen - the
+    /// watch owns that one - and read off the disk, so it is the same answer whether the launcher has been
+    /// watching or not.
+    /// </remarks>
+    private async Task<PatchServerFetchState?> PatchServerFetchProgressAsync() {
+        var revision = ServerWantedRevision;
+        var patchServer = PatchServerPath;
+        var name = PatchServerPreload.RevisionNameFor(revision);
+
+        if (name is null) {
+            return null;
+        }
+
+        return await Task.Run(() => PatchServerFetch.Measure(patchServer, name)).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -1255,6 +1712,13 @@ public sealed partial class MainWindowViewModel {
             ? "The patch server stopped on its own."
             : $"The patch server stopped on its own (exit code {exitCode}).");
 
+        // A fetch that has just finished is usually too recent to be removed yet, so this normally finds
+        // nothing to do - but a patch server that was stopped is a good moment to look, and either way the
+        // list on screen becomes a list of what is actually there.
+        if (CleansUpRevisionsAutomatically) {
+            _ = CleanUpUnusedPatchServerRevisionsAsync();
+        }
+
         RefreshDerived();
     }
 
@@ -1266,7 +1730,7 @@ public sealed partial class MainWindowViewModel {
     /// ask again - the answer it holds is about the revision the server was asking for before this.
     /// </returns>
     private bool ApplyMirroredRevision(IReadOnlyList<string> revisions) {
-        if (!MirrorPatchServerRevision) {
+        if (!PatchServerRevisionSynced) {
             return false;
         }
 
@@ -1276,6 +1740,10 @@ public sealed partial class MainWindowViewModel {
         if (config is null || wanted is null) {
             return false;
         }
+
+        // The value the config held before the launcher's first write, recorded once and only then, so
+        // turning the sync off later puts the server's own revision back rather than the launcher's last one.
+        _store.Settings.RevisionBeforeMirror ??= config.GameRevision;
 
         try {
             config.GameRevision = wanted;
@@ -1324,6 +1792,10 @@ public sealed partial class MainWindowViewModel {
             config.Save(ServerPath);
             _config = config;
             GameRevision = wanted;
+
+            // Nothing is left to undo once the launcher's own value is out of the config.
+            settings.RevisionBeforeMirror = null;
+
             return wanted;
         }
         catch (Exception ex) {
@@ -1368,7 +1840,7 @@ public sealed partial class MainWindowViewModel {
 
     /// <summary>What the line under the <c>GameRevision</c> box says.</summary>
     private void RefreshMirrorStatus() {
-        if (!MirrorPatchServerRevision) {
+        if (!PatchServerRevisionSynced) {
             PatchServerRevisionStatus = string.Empty;
             return;
         }
@@ -1383,6 +1855,421 @@ public sealed partial class MainWindowViewModel {
             _ => $"The config has moved on from {mirrored} since; it is set from the patch server again the "
                  + "next time it is asked.",
         };
+    }
+
+    // ---------------------------------------------------------------- the revisions on disk
+
+    /// <summary>
+    /// How the revisions the patch server has fetched are looked after - see
+    /// <see cref="PatchServerCleanupChoices"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Automatic is the recommended answer and the default, and choosing it <i>is</i> the permission the
+    /// launcher needs to remove a revision on the user's behalf: it is stated before anything is downloaded,
+    /// it can be changed at any time, and nothing is ever removed that the server asks for or that this
+    /// machine's game is. Manual is the same cleanup with a person in the middle of it - the list below, and
+    /// nothing happens until they press something.
+    /// </para>
+    /// <para>
+    /// Switching to automatic cleans up on the spot rather than waiting for the next start, because a
+    /// setting that says one thing while the disk says another is worse than either.
+    /// </para>
+    /// </remarks>
+    public string PatchServerRevisionCleanup {
+        get => _store.Settings.PatchServerRevisionCleanup;
+        set {
+            var chosen = PatchServerCleanupChoices.All.Contains(value)
+                ? value
+                : PatchServerCleanupChoices.Automatic;
+
+            if (_store.Settings.PatchServerRevisionCleanup == chosen) {
+                return;
+            }
+
+            _store.Settings.PatchServerRevisionCleanup = chosen;
+            _store.Save();
+
+            AppendLog(LogLevel.Info, chosen == PatchServerCleanupChoices.Automatic
+                ? "The patch server's revisions are looked after automatically from now on: the revision the "
+                  + "server asks for and the one your game is are kept, and any other is removed."
+                : "The patch server's revisions are yours to manage from now on: ViewLight will not remove "
+                  + "one unless you say so in Settings.");
+
+            OnPropertyChanged();
+            RefreshDerived();
+
+            if (chosen == PatchServerCleanupChoices.Automatic) {
+                _ = CleanUpUnusedPatchServerRevisionsAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The arrangement, as Settings states it while the sync is on: which value moves, and why that one.
+    /// </summary>
+    public const string PatchServerRevisionModeExplanation =
+        "Imlight asks the patch server for V_{GameRevision}, and that same revision is the one the server "
+        + "accepts clients on. A patch server fetches whatever revision Wizard101 is serving and there is no "
+        + "way to ask it for a different one, so the value that has to move is the server's: GameRevision is "
+        + "set to the revision the patch server actually holds, every time the launcher starts one. Both "
+        + "values then say the same thing - the server asks for files the patch server has, and the client "
+        + "that has just been updated is the revision the server accepts.\n\n"
+        + "The GameRevision box in Network is greyed out while this is on, because the value is the patch "
+        + "server's rather than yours. Only this machine's patch server is asked, so with a remote one in "
+        + "use this does nothing at all.";
+
+    /// <summary>
+    /// What the other arrangement is, in the words Settings shows while the sync is off.
+    /// </summary>
+    public const string PatchServerRevisionFallbackText =
+        "GameRevision is left exactly as your server's own config has it, pinned the way Imlight was "
+        + "published. That is right for a server build deliberately held at one revision - and it means the "
+        + "patch server is the side left needing something it cannot fetch, because it can only ever hold "
+        + "what Wizard101 is serving.\n\n"
+        + "The one way round it is the hand-off in this card: the files of the revision your server asks for "
+        + "are copied in from a copy of the game that is exactly that revision. That is the only way a server "
+        + "pinned to an older revision gets its files, and it needs this machine's game to be the same "
+        + "revision - if it is not, nothing can be copied and the server cannot serve its own clients.\n\n"
+        + "Turning this back on puts the value your config had before the launcher wrote one back.";
+
+    // The three texts above, as instance members: a XAML binding resolves a property and not a field, so the
+    // words live in a constant - where a test can read them and where they cannot drift from what the code
+    // says - and the view reads them through these. Named apart from the constants so the two are never
+    // mistaken for one another.
+    public string PatchServerRevisionModeText => PatchServerRevisionModeExplanation;
+
+    public string PatchServerRevisionFallbackWarningText => PatchServerRevisionFallbackText;
+
+    public string PatchServerCleanupRecommendationText => PatchServerCleanupRecommendation;
+
+    /// <summary>The two answers, for the radio buttons that offer them.</summary>
+    public IReadOnlyList<string> PatchServerCleanupModes => PatchServerCleanupChoices.All;
+
+    public bool CleansUpRevisionsAutomatically
+        => PatchServerRevisionCleanup == PatchServerCleanupChoices.Automatic;
+
+    public bool ManagesRevisionsByHand => !CleansUpRevisionsAutomatically;
+
+    /// <summary>
+    /// Why automatic is what the launcher recommends, said before it is chosen rather than after.
+    /// </summary>
+    public const string PatchServerCleanupRecommendation =
+        "Each revision is about 18 GB, and the patch server fetches a new one every time Wizard101 "
+        + "publishes one - it writes it beside the ones it already has and never removes anything, so a "
+        + "machine that has been running one for a while is holding all of them. Keeping several is useful "
+        + "to a data hoarder or to an advanced server arrangement, and for everybody else it is a disk that "
+        + "only ever fills up.\n\n"
+        + "Automatic keeps the two revisions that are actually in use - the one your server asks the patch "
+        + "server for, and the one your game is - and removes the others. Choosing it is you giving "
+        + "ViewLight permission to do that on your behalf: it is asked once, before anything is downloaded, "
+        + "you can change your mind here at any time, and every revision it removes is written into the Log "
+        + "with what it was and why. Nothing that is being downloaded, nothing your server asks for, and "
+        + "nothing your game is can ever be removed.\n\n"
+        + "Manual leaves every revision where it is and gives you the list below instead: keep what you "
+        + "want, remove what you do not.";
+
+    /// <summary>The revisions the patch server has fetched, for the manual list.</summary>
+    public ObservableCollection<PatchServerRevisionRow> PatchServerRevisions { get; } = [];
+
+    public bool HasPatchServerRevisions => PatchServerRevisions.Count > 0;
+
+    /// <summary>
+    /// What the list says when there is nothing in it, which is the answer on a patch server that has not
+    /// started yet rather than a mistake.
+    /// </summary>
+    public string PatchServerRevisionsEmptyText => string.IsNullOrWhiteSpace(PatchServerPath)
+        ? "No patch server folder is set."
+        : "The patch server has not fetched a revision yet, so there is nothing to manage.";
+
+    /// <summary>What the last look at the revisions found, in one line.</summary>
+    [ObservableProperty] private string _patchServerRevisionsStatus = string.Empty;
+
+    public bool HasPatchServerRevisionsStatus => PatchServerRevisionsStatus.Length > 0;
+
+    /// <summary>Whether a cleanup or a look is going on, so the buttons know to keep still.</summary>
+    [ObservableProperty] private bool _isManagingPatchServerRevisions;
+
+    /// <summary>Whether anything in the list is marked for removal.</summary>
+    public bool CanDeleteUnkeptRevisions
+        => !IsManagingPatchServerRevisions && PatchServerRevisions.Any(row => !row.Keep && row.CanBeDeleted);
+
+    /// <summary>
+    /// Reads the revisions off the disk and fills the list in.
+    /// </summary>
+    /// <remarks>
+    /// Off the UI thread: this walks a folder holding tens of gigabytes of files to count and weigh them, and
+    /// nothing on screen is waiting for the answer. The rows keep whatever was ticked before a refresh only
+    /// for the revisions that are still there, which is the behaviour a list of files should have.
+    /// </remarks>
+    [RelayCommand]
+    private async Task RefreshPatchServerRevisionsAsync() {
+        var patchServer = PatchServerPath;
+        var serverRevision = ServerWantedRevision;
+        var ticked = PatchServerRevisions.Where(row => row.Keep).Select(row => row.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hadAny = PatchServerRevisions.Count > 0;
+
+        var revisions = await Task
+            .Run(() => PatchServerRevisionCatalogue.List(patchServer, serverRevision))
+            .ConfigureAwait(true);
+
+        PatchServerRevisions.Clear();
+
+        foreach (var revision in revisions) {
+            // Ticked if it was ticked before, and otherwise if it is one of the ones in use - so a list opened
+            // for the first time opens on the answer automatic mode would have arrived at by itself.
+            var keep = hadAny
+                ? ticked.Contains(revision.Name) || revision.Role != PatchServerRevisionRole.Unused
+                : revision.Role != PatchServerRevisionRole.Unused;
+
+            PatchServerRevisions.Add(new PatchServerRevisionRow(revision, keep, RequestRevisionDownloadAsync));
+        }
+
+        PatchServerRevisionsStatus = DescribeRevisions(revisions);
+
+        OnPropertyChanged(nameof(HasPatchServerRevisions));
+        OnPropertyChanged(nameof(PatchServerRevisionsEmptyText));
+        OnPropertyChanged(nameof(HasPatchServerRevisionsStatus));
+        OnPropertyChanged(nameof(CanDeleteUnkeptRevisions));
+        DeleteUnkeptRevisionsCommand.NotifyCanExecuteChanged();
+        CleanUpUnusedPatchServerRevisionsCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// What the revisions on disk add up to, in one line: how many there are, what is in use, and what is
+    /// only taking up room.
+    /// </summary>
+    public static string DescribeRevisions(IReadOnlyList<PatchServerRevisionOnDisk>? revisions) {
+        if (revisions is null || revisions.Count == 0) {
+            return string.Empty;
+        }
+
+        var spare = PatchServerRevisionCatalogue.Spare(revisions);
+        var total = revisions.Sum(revision => revision.Bytes);
+
+        var head = revisions.Count == 1
+            ? $"The patch server holds 1 revision ({ServerInstallService.FormatBytes(total)})."
+            : $"The patch server holds {revisions.Count} revisions ({ServerInstallService.FormatBytes(total)} "
+              + "altogether).";
+
+        return spare.Count == 0
+            ? $"{head} They are all in use."
+            : $"{head} {spare.Count} of them "
+              + $"({ServerInstallService.FormatBytes(spare.Sum(r => r.Bytes))}) "
+              + (spare.Count == 1 ? "is not in use" : "are not in use")
+              + ".";
+    }
+
+    /// <summary>
+    /// Removes every revision nobody is using - the automatic mode's whole job, and the button in its card.
+    /// </summary>
+    /// <remarks>
+    /// Given the spare revisions and nothing else: the catalogue re-checks each one immediately before it
+    /// goes, so a fetch that starts in between is not something this can get wrong.
+    /// </remarks>
+    /// <summary>
+    /// The pass the launcher makes on its own account, on the way in and when a patch server stops.
+    /// </summary>
+    /// <remarks>
+    /// Quiet on purpose. Nobody asked for this one, it runs on a thread of its own while the launcher is
+    /// still coming up, and the Log is a collection the UI thread owns - so the outcome is reported on the
+    /// card in Settings, which is where somebody would look for it, rather than written into a Log that is
+    /// being built at the same time. The button in that card is a person asking, and that one is written.
+    /// </remarks>
+    private Task LookAfterPatchServerRevisionsAsync() => CleanUpUnusedPatchServerRevisionsCoreAsync(log: false);
+
+    [RelayCommand(CanExecute = nameof(CanManagePatchServerRevisions))]
+    private Task CleanUpUnusedPatchServerRevisionsAsync()
+        => CleanUpUnusedPatchServerRevisionsCoreAsync(log: true);
+
+    private async Task CleanUpUnusedPatchServerRevisionsCoreAsync(bool log) {
+        var patchServer = PatchServerPath;
+
+        // Nothing to look at and nobody to say it to: a launcher with no patch server folder has no
+        // revisions, and this runs on startup when the mode is automatic.
+        if (string.IsNullOrWhiteSpace(patchServer) || !Directory.Exists(patchServer)) {
+            return;
+        }
+
+        var serverRevision = ServerWantedRevision;
+
+        await RemovePatchServerRevisionsAsync(
+            () => PatchServerRevisionCatalogue.Spare(
+                PatchServerRevisionCatalogue.List(patchServer, serverRevision)),
+            onlySpare: true, log: log).ConfigureAwait(true);
+    }
+
+    private bool CanManagePatchServerRevisions => !IsManagingPatchServerRevisions;
+
+    /// <summary>
+    /// Removes the revisions the manual list has left unticked - the user's own decision, taken as given.
+    /// </summary>
+    /// <remarks>
+    /// The one thing it does not take as given is a revision the patch server is writing into, which is
+    /// re-checked at the moment of removal and refused either way.
+    /// </remarks>
+    [RelayCommand(CanExecute = nameof(CanDeleteUnkeptRevisions))]
+    private async Task DeleteUnkeptRevisionsAsync() {
+        var unticked = PatchServerRevisions
+            .Where(row => !row.Keep && row.CanBeDeleted)
+            .Select(row => row.Revision)
+            .ToList();
+
+        if (unticked.Count == 0) {
+            return;
+        }
+
+        await RemovePatchServerRevisionsAsync(() => unticked, onlySpare: false, log: true).ConfigureAwait(true);
+    }
+
+    private async Task RemovePatchServerRevisionsAsync(
+        Func<IReadOnlyList<PatchServerRevisionOnDisk>> choose, bool onlySpare, bool log) {
+
+        if (IsManagingPatchServerRevisions) {
+            return;
+        }
+
+        IsManagingPatchServerRevisions = true;
+        RefreshPatchDerived();
+
+        try {
+            var result = await Task
+                .Run(() => PatchServerRevisionCatalogue.Delete(choose(), onlySpare))
+                .ConfigureAwait(true);
+
+            if (log && result.RemovedAnything) {
+                AppendLog(LogLevel.Success, result.Describe());
+            }
+            else if (log && result.Kept.Count > 0) {
+                AppendLog(LogLevel.Info, result.Describe());
+            }
+
+            // A revision that has just gone changes what is left, so the list is read again. The refresh
+            // describes what is left; what just happened outranks it, because after pressing Delete the
+            // question is what it did - and the list underneath already shows what is there now.
+            await RefreshPatchServerRevisionsAsync().ConfigureAwait(true);
+
+            if (result.RemovedAnything || result.Kept.Count > 0) {
+                PatchServerRevisionsStatus = result.Describe();
+                OnPropertyChanged(nameof(HasPatchServerRevisionsStatus));
+            }
+        }
+        catch (Exception ex) {
+            // Never a failed session: a folder that would not go is a folder that stays.
+            if (log) {
+                AppendLog(LogLevel.Warning, $"Could not clean up the patch server's revisions: {ex.Message}");
+            }
+        }
+        finally {
+            IsManagingPatchServerRevisions = false;
+            RefreshPatchDerived();
+        }
+    }
+
+    /// <summary>
+    /// Asks for one specific revision to be downloaded - and says why it cannot be, which is what it is for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aurorium fetches the revision Wizard101's own patch server is serving <i>at that moment</i>, and there
+    /// is no way to ask it for an older one: its configuration says which patch host to talk to and nothing
+    /// about which revision to want. So the launcher cannot promise a download of a revision named in a list,
+    /// and it does not pretend to. What it can do is tell the difference between the two reasons somebody
+    /// would ask - the newest one, which is already here or already on its way, and an older one, which can
+    /// never be asked for - and say which it is.
+    /// </para>
+    /// <para>
+    /// This is the rule the launcher works under everywhere else in this card, said out loud rather than
+    /// implied: the patch server manages what it fetches, and the launcher's part is to say what is going on.
+    /// </para>
+    /// </remarks>
+    private async Task RequestRevisionDownloadAsync(PatchServerRevisionRow row) {
+
+        var newest = PatchServerIsRunning
+            ? PatchServerConfig.NewestGameRevision(
+                await _patchRevisions.ListAsync(LocalPatchServerUrl).ConfigureAwait(true))
+            : null;
+
+        if (ClientBuildReader.AreSame(row.GameRevision, newest)) {
+            PatchServerRevisionsStatus =
+                $"{row.GameRevision} is the newest revision the patch server has, and it is already on disk. "
+                + "It is the revision Wizard101 was serving when it was fetched, so there is nothing left to "
+                + "download for it.";
+        }
+        else {
+            PatchServerRevisionsStatus =
+                $"{row.GameRevision} cannot be asked for. The patch server fetches whatever revision Wizard101 "
+                + "is serving when it looks - it is told which patch host to talk to and not which revision "
+                + "to want - so an older one can be kept or removed here, but it cannot be fetched again once "
+                + "it is gone.";
+        }
+
+        AppendLog(LogLevel.Info, PatchServerRevisionsStatus);
+        OnPropertyChanged(nameof(HasPatchServerRevisionsStatus));
+    }
+
+    // ---------------------------------------------------------------- first run: preparing the files now
+
+    /// <summary>
+    /// Whether the setup screen's offer to prepare the patch server's files has been answered.
+    /// </summary>
+    /// <remarks>
+    /// The screen is left as soon as the choice is confirmed, so this is per screen rather than persisted: it
+    /// is what stops the offer sitting there after somebody has said "not now" and gone on.
+    /// </remarks>
+    [ObservableProperty] private bool _patchServerPrepareAnswered;
+
+    /// <summary>
+    /// Whether the setup screen should be asking about preparing the files.
+    /// </summary>
+    /// <remarks>
+    /// Only where there is something to prepare and somewhere to put it: a patch server that is not
+    /// installed has nothing to start, and one that is already up - because it was started from Settings,
+    /// or by hand - is already fetching. Its own <i>state</i> rather than its process, because a patch server
+    /// the launcher did not start has a state of "stopped" and is still one there is nothing to offer.
+    /// </remarks>
+    public bool ShouldOfferToPreparePatchServerFiles
+        => UseLocalPatchServer && PatchServerInstalled && !PatchServerPrepareAnswered
+           && !PatchServerIsRunning
+           && PatchServerState is ServerState.Stopped or ServerState.Faulted;
+
+    public bool CanPreparePatchServerFilesNow => ShouldOfferToPreparePatchServerFiles && !IsPatchBusy;
+
+    /// <summary>
+    /// Starts the patch server from the setup screen, so its first fetch is under way before the first
+    /// session rather than after it.
+    /// </summary>
+    /// <remarks>
+    /// The fetch is the patch server's own, done its own way; what this adds is the moment it starts. The
+    /// screen stays where it is and the line and bar under it fill in while it works - the same two the Log
+    /// and Settings show - so "preparing" is something being watched rather than something to take on trust.
+    /// Leaving the screen does not stop it: the fetch only ever advances while the process is alive, and the
+    /// launcher keeps it alive until the session is over.
+    /// </remarks>
+    [RelayCommand(CanExecute = nameof(CanPreparePatchServerFilesNow))]
+    private async Task PreparePatchServerFilesNowAsync() {
+        PatchServerPrepareAnswered = true;
+        RefreshDerived();
+
+        AppendLog(LogLevel.Info,
+            $"Starting the patch server now so it can fetch the revision Wizard101 is serving into "
+            + $"{PatchServerSetupFolder}. It is thousands of files, and the line below says how far along "
+            + "it is.");
+
+        await StartPatchServerCoreAsync().ConfigureAwait(true);
+        RefreshDerived();
+    }
+
+    /// <summary>Leaves the fetch for Play, which is where it would otherwise have started.</summary>
+    [RelayCommand]
+    private void SkipPreparingPatchServerFiles() {
+        PatchServerPrepareAnswered = true;
+        RefreshDerived();
+
+        AppendLog(LogLevel.Info,
+            "The patch server's first fetch is left for Play: it starts the patch server before the server, "
+            + "and the fetch runs while the launcher is open.");
     }
 
     /// <summary>Everything on screen that is derived from the patch server's own state.</summary>
@@ -1406,8 +2293,14 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(UseLocalPatchServer));
         OnPropertyChanged(nameof(UsesRemotePatchServer));
         OnPropertyChanged(nameof(PatchServerIsThisMachines));
-        OnPropertyChanged(nameof(PatchServerPreloadAutomatically));
         OnPropertyChanged(nameof(PatchServerPort));
+        OnPropertyChanged(nameof(FetchStatus));
+        OnPropertyChanged(nameof(HasFetchStatus));
+        OnPropertyChanged(nameof(FetchProgress));
+        OnPropertyChanged(nameof(IsFetchingGameFiles));
+        OnPropertyChanged(nameof(FetchingRevisionIsTheServers));
+        OnPropertyChanged(nameof(HasWaitingForPatchServerFilesText));
+        OnPropertyChanged(nameof(CanPlayAnyway));
         OnPropertyChanged(nameof(CanStartPatchServer));
         OnPropertyChanged(nameof(CanStopPatchServer));
         OnPropertyChanged(nameof(CanDownloadPatchServer));
@@ -1416,7 +2309,7 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(ImlightPatchServerPort));
         OnPropertyChanged(nameof(PatchServerPortClashes));
         OnPropertyChanged(nameof(PatchServerPortClashWarning));
-        OnPropertyChanged(nameof(MirrorPatchServerRevision));
+        OnPropertyChanged(nameof(PatchServerRevisionSynced));
         OnPropertyChanged(nameof(CanEditGameRevision));
 
         // The first-run question hangs off the same state: whether one is installed is half of whether it
@@ -1434,10 +2327,32 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(PatchServerRevisionStatus));
         OnPropertyChanged(nameof(HasPatchServerRevisionStatus));
 
+        // The revision list and the setup screen's offer hang off the same state as everything else: whether
+        // one is installed, what the server asks for, and whether the patch server is already running.
+        OnPropertyChanged(nameof(PatchServerRevisionCleanup));
+        OnPropertyChanged(nameof(PatchServerCleanupModes));
+        OnPropertyChanged(nameof(PatchServerRevisionModeText));
+        OnPropertyChanged(nameof(PatchServerRevisionFallbackWarningText));
+        OnPropertyChanged(nameof(PatchServerCleanupRecommendationText));
+        OnPropertyChanged(nameof(CleansUpRevisionsAutomatically));
+        OnPropertyChanged(nameof(ManagesRevisionsByHand));
+        OnPropertyChanged(nameof(HasPatchServerRevisions));
+        OnPropertyChanged(nameof(PatchServerRevisionsEmptyText));
+        OnPropertyChanged(nameof(HasPatchServerRevisionsStatus));
+        OnPropertyChanged(nameof(CanDeleteUnkeptRevisions));
+        OnPropertyChanged(nameof(PatchServerPrepareAnswered));
+        OnPropertyChanged(nameof(ShouldOfferToPreparePatchServerFiles));
+        OnPropertyChanged(nameof(CanPreparePatchServerFilesNow));
+        OnPropertyChanged(nameof(ServerWantedRevision));
+
         StartPatchServerCommand.NotifyCanExecuteChanged();
         StopPatchServerCommand.NotifyCanExecuteChanged();
         DownloadPatchServerCommand.NotifyCanExecuteChanged();
         CompletePatchServerSetupCommand.NotifyCanExecuteChanged();
         GetPatchServerForSetupCommand.NotifyCanExecuteChanged();
+        DeleteUnkeptRevisionsCommand.NotifyCanExecuteChanged();
+        CleanUpUnusedPatchServerRevisionsCommand.NotifyCanExecuteChanged();
+        PreparePatchServerFilesNowCommand.NotifyCanExecuteChanged();
+        PlayAnywayCommand.NotifyCanExecuteChanged();
     }
 }
