@@ -43,6 +43,38 @@ public sealed record ServerConnectionLost(DateTimeOffset At, string Raw, bool Ga
 public sealed record DuelFinished(DateTimeOffset At, string Raw, string DuelId, bool PlayersWon) : ServerLogFact(At, Raw);
 
 /// <summary>
+/// A duel began, under the id the server gives it.
+/// </summary>
+/// <remarks>
+/// The id is the sigil's own rather than the battle's: fighting twice at one sigil writes the same id both
+/// times, which is exactly why this line is read. Every other line about a duel is keyed by that id and
+/// comes with no way to tell one battle from the next, so the second fight at a sigil would otherwise
+/// inherit the first one's slots - and credit a creature that was not in it. This is what says the state
+/// under an id is the state of a new fight. See <see cref="ProfileLedger"/>.
+/// </remarks>
+public sealed record DuelStarted(DateTimeOffset At, string Raw, string DuelId) : ServerLogFact(At, Raw);
+
+/// <summary>
+/// A creature planned a turn on a slot, which is the server saying outright that the slot holds one.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The line is <c>Duel 5348490766442470254 | Slot 1 | Smart: true | Aggressive: true | Selfish: false</c>,
+/// and only a creature writes it: it comes from the AI that decides a creature's move, and no human
+/// player's slot writes one.
+/// </para>
+/// <para>
+/// It is read because nothing else about a duel says which slots held creatures. The spell's line names
+/// the slots it reached and never what was on them, and the participant line names its participant by a
+/// debug name rather than by anything the launcher can look up - see <see cref="DuelParticipant"/>. A slot
+/// a creature was seen planning on is what makes a slot a creature, and it is why a duel the players won
+/// leaves a count of creatures behind.
+/// </para>
+/// </remarks>
+public sealed record DuelCreatureTurn(DateTimeOffset At, string Raw, string DuelId, int Slot)
+    : ServerLogFact(At, Raw);
+
+/// <summary>
 /// A creature took part in a duel, named by the template it was spawned from.
 /// </summary>
 /// <remarks>
@@ -81,6 +113,41 @@ public sealed record DuelFinished(DateTimeOffset At, string Raw, string DuelId, 
 /// </remarks>
 public sealed record DuelCreature(
     DateTimeOffset At, string Raw, string DuelId, int Slot, uint TemplateId, string Name)
+    : ServerLogFact(At, Raw);
+
+/// <summary>
+/// Something took part in a duel, on a slot, under the server's own debug name for it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The line the server writes is <c>Duel 4854107232535182118 | Slot 1 | Participant 140DD joined</c>, and
+/// the name on it is the participant object's <c>m_debugName</c>: for a creature the zone tag it was spawned
+/// under, for anything else whatever its own object carries. It is <b>not</b> a template ID and not the name
+/// a creature list carries, which is why this line is not what tells a creature from a player - see
+/// <see cref="DuelCreatureTurn"/> for the line that does. Nor does every participant write one: the
+/// creature and the player a duel is created between are put on their circles without a word, so a duel
+/// with two creatures in it can name only the one that walked in afterwards.
+/// </para>
+/// <para>
+/// Kept as the duel's own record of who was on a slot, and as evidence for a badge that wants to quote the
+/// server naming somebody. Nothing is counted from it.
+/// </para>
+/// </remarks>
+public sealed record DuelParticipant(DateTimeOffset At, string Raw, string DuelId, int Slot, string Name)
+    : ServerLogFact(At, Raw);
+
+/// <summary>
+/// A spell hit the slots it names, cast from the slot it names.
+/// </summary>
+/// <remarks>
+/// The line the server writes is <c>Duel 5348490766442470254 | Slot 0 | Spell 1234567 hits targets [1, 2, 4]
+/// (Crits!)</c>, and its targets are <b>slot numbers</b> rather than creature ids. Together with
+/// <see cref="DuelCreatureTurn"/> - which is what says a slot holds a creature - it is the server's own
+/// record that a player's side reached a creature, which is half of what a counted creature kill is made of.
+/// The other half is the duel's ending. See <see cref="ProfileLedger"/>.
+/// </remarks>
+public sealed record DuelSpellHit(
+    DateTimeOffset At, string Raw, string DuelId, int CasterSlot, uint SpellTemplateId, IReadOnlyList<int> Slots)
     : ServerLogFact(At, Raw);
 
 /// <summary>A wizard entered a zone, named the way the server names its zones.</summary>
@@ -170,6 +237,13 @@ public static class ServerLogFacts {
             facts.Add(new ServerConnectionLost(at, text, logger.Contains(".Game", StringComparison.Ordinal), host));
         }
 
+        // "Duel 4854107232535182118 | Created. Grace period over in 3.75" - a duel begins. The id is the
+        // sigil's, so the same one comes round again for the next fight there; this is what tells the two
+        // apart. See DuelStarted.
+        if (text.Contains("| Created. Grace period over in ", StringComparison.Ordinal)) {
+            facts.Add(new DuelStarted(at, text, DuelIdOf(text)));
+        }
+
         // "Duel 4972210732661112830 | Duel ended. Players win."
         if (text.Contains("Duel ended. Players win.", StringComparison.Ordinal)) {
             facts.Add(new DuelFinished(at, text, DuelIdOf(text), PlayersWon: true));
@@ -182,6 +256,28 @@ public static class ServerLogFacts {
         // server does not write yet. Read the moment it does; see DuelCreature for why it is needed.
         if (CreatureOf(text, out var creatureSlot, out var creatureId, out var creatureName)) {
             facts.Add(new DuelCreature(at, text, DuelIdOf(text), creatureSlot, creatureId, creatureName));
+        }
+
+        // "Duel 4854107232535182118 | Slot 1 | Participant 140DD joined" - who is on a slot, under the
+        // server's own debug name for them. A name that is not there says nothing about who joined, so it
+        // is not a fact about anybody.
+        if (Between(text, "| Participant ", " joined") is { Length: > 0 } participant) {
+            facts.Add(new DuelParticipant(at, text, DuelIdOf(text), SlotOf(text), participant));
+        }
+
+        // "Duel 4854107232535182118 | Slot 1 | Smart: true | Aggressive: true | Selfish: false" - a creature
+        // planning a turn, which is the server saying the slot holds one. A line that names no slot as a
+        // number cannot be matched to a participant, so it is not a fact about a slot.
+        var attitudeSlot = text.Contains("| Smart: ", StringComparison.Ordinal) ? SlotOf(text) : -1;
+        if (attitudeSlot >= 0) {
+            facts.Add(new DuelCreatureTurn(at, text, DuelIdOf(text), attitudeSlot));
+        }
+
+        // "Duel 5348490766442470254 | Slot 0 | Spell 1234567 hits targets [1, 2, 4]" - what a spell reached.
+        // The spell has to be a spell id, and the targets have to be slot numbers: a line that says neither
+        // is a line this launcher cannot act on.
+        if (SpellOf(text, out var spellId, out var casterSlot, out var hitSlots)) {
+            facts.Add(new DuelSpellHit(at, text, DuelIdOf(text), casterSlot, spellId, hitSlots));
         }
 
         // "Jordan DeathBane added to zone WizardZone_UnicornWay." An empty zone name is a zone with none
@@ -268,9 +364,7 @@ public static class ServerLogFacts {
             return false;
         }
 
-        if (int.TryParse(Between(text, "| Slot ", " |"), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)) {
-            slot = parsed;
-        }
+        slot = SlotOf(text);
 
         // Everything up to the trailing verb, which is what the name sits in front of.
         var named = new List<string>();
@@ -285,6 +379,51 @@ public static class ServerLogFacts {
         name = string.Join(' ', named);
         return true;
     }
+
+    /// <summary>
+    /// Reads a spell line into the spell, the slot it was cast from, and the slots it hit.
+    /// </summary>
+    /// <remarks>
+    /// The suffix after the target list - <c> (Crits!)</c>, when the resolver crit - is not part of the
+    /// slots and is simply past the closing bracket. An empty target list is not a hit on anybody, and a
+    /// target that is not a number cannot be matched to a slot, so either one ends the reading.
+    /// </remarks>
+    private static bool SpellOf(string text, out uint spellId, out int casterSlot, out IReadOnlyList<int> slots) {
+        spellId = 0;
+        casterSlot = -1;
+        slots = [];
+
+        var spell = Between(text, "| Spell ", " hits targets [");
+        if (spell.Length == 0
+            || !uint.TryParse(spell, NumberStyles.None, CultureInfo.InvariantCulture, out spellId)) {
+            return false;
+        }
+
+        var targets = Between(text, " hits targets [", "]");
+        if (targets.Length == 0) {
+            return false;
+        }
+
+        var hit = new List<int>();
+
+        foreach (var target in targets.Split(',', StringSplitOptions.RemoveEmptyEntries)) {
+            if (!int.TryParse(target.Trim(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var slot)) {
+                return false;
+            }
+
+            hit.Add(slot);
+        }
+
+        casterSlot = SlotOf(text);
+        slots = hit;
+        return hit.Count > 0;
+    }
+
+    /// <summary>The slot a duel line is about, or -1 for one that does not name a slot as a number.</summary>
+    private static int SlotOf(string text)
+        => int.TryParse(Between(text, "| Slot ", " |"), NumberStyles.None, CultureInfo.InvariantCulture, out var slot)
+            ? slot
+            : -1;
 
     private static string DuelIdOf(string text) {
         // "Duel <id> | ..." - the id is what makes two duels tellable apart in a badge's evidence.

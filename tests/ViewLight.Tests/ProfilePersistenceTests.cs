@@ -112,12 +112,82 @@ public class ProfilePersistenceTests {
 
         var picture = await Database(handler).ReadImageAsync(42, "avatar.png");
 
-        Assert.Equal(new byte[] { 1, 2, 3 }, picture);
+        Assert.Equal(new byte[] { 1, 2, 3 }, picture.Bytes);
+        Assert.Null(picture.Problem);
 
         var request = Assert.Single(handler.Requests);
         Assert.Equal($"/databases/{LauncherDatabase.DatabaseName}/attachments", new Uri(request.Url).AbsolutePath);
         Assert.Equal("Profiles/42", request.Query("id"));
         Assert.Equal("avatar.png", request.Query("name"));
+    }
+
+    [Fact]
+    public async Task APictureThatCouldNotBeReadIsNotAProfileWithNoPicture() {
+        // The two are different answers, and the screen does different things with them: a profile with no
+        // picture is the initial-letter circle and that is that, while one the database would not hand back is
+        // looked at again. Reading the second as the first is what left a picture blank until a restart.
+        var refused = await Database(Answer(_ => Json(HttpStatusCode.InternalServerError, "no")))
+            .ReadImageAsync(42, "avatar.png");
+
+        Assert.Null(refused.Bytes);
+        Assert.NotNull(refused.Problem);
+        Assert.False(refused.IsMissing);
+
+        var absent = await Database(Answer(_ => Json(HttpStatusCode.NotFound, string.Empty)))
+            .ReadImageAsync(42, "avatar.png");
+
+        Assert.Null(absent.Bytes);
+        Assert.True(absent.IsMissing);
+    }
+
+    [Fact]
+    public void AProfileThatHasNotChangedIsNotWrittenAgain() {
+        var handler = Answer(_ => Json(HttpStatusCode.Created, "{}"));
+        var persistence = Database(handler);
+
+        var notes = new LauncherProfiles {
+            Profiles = [Profile(42, "jordan"), Profile(7, "sam")],
+            ZoneWorlds = { ["WizardCity/WC_Hub"] = "WizardCity" },
+        };
+
+        Assert.True(persistence.Save(notes, out _));
+        Assert.Equal(3, handler.Requests.Count);
+
+        // Playtime ticks while the server runs, and every tick saves the whole set of notes - which is what used
+        // to mean a write of every profile there is because one of them had changed.
+        notes.Profiles[0].PlaytimeSeconds = 60;
+
+        Assert.True(persistence.Save(notes, out _));
+        Assert.Equal(4, handler.Requests.Count);
+        Assert.Equal("Profiles/42", handler.Requests[3].Query("id"));
+
+        // And a save that learned nothing new writes nothing at all, which is the ordinary look at the server.
+        Assert.True(persistence.Save(notes, out _));
+        Assert.Equal(4, handler.Requests.Count);
+    }
+
+    [Fact]
+    public void AReadStartsTheRememberingOver() {
+        var handler = Answer(request => request.Method == "GET"
+            ? Json(HttpStatusCode.OK, """
+                {"Results":[{"AccountId":42,"Username":"jordan","@metadata":{"@collection":"Profiles"}}]}
+                """)
+            : Json(HttpStatusCode.Created, "{}"));
+
+        var persistence = Database(handler);
+        var notes = new LauncherProfiles { Profiles = [Profile(42, "jordan")] };
+
+        Assert.True(persistence.Save(notes, out _));
+        Assert.True(persistence.Save(notes, out _));
+
+        Assert.Equal(2, handler.Requests.Count(request => request.Method == "PUT"));
+
+        // A restore from the cloud replaces documents this launcher never wrote, so what it remembers writing is
+        // no longer evidence about what the database holds.
+        Assert.NotNull(persistence.Load(out _));
+        Assert.True(persistence.Save(notes, out _));
+
+        Assert.Equal(4, handler.Requests.Count(request => request.Method == "PUT"));
     }
 
     // ------------------------------------------------------------------ the store above it
@@ -188,8 +258,8 @@ public class ProfilePersistenceTests {
 
         var store = new ProfileStore(workspace.Path("profiles.json"));
 
-        Assert.Null(await store.ReadImageAsync(42, null));
-        Assert.Null(await store.ReadImageAsync(42, "  "));
+        Assert.True((await store.ReadImageAsync(42, null)).IsMissing);
+        Assert.True((await store.ReadImageAsync(42, "  ")).IsMissing);
     }
 
     // ------------------------------------------------------------------ helpers
@@ -219,8 +289,8 @@ public class ProfilePersistenceTests {
             return false;
         }
 
-        public Task<byte[]?> ReadImageAsync(ulong accountId, string fileName, CancellationToken token = default)
-            => Task.FromResult<byte[]?>(null);
+        public Task<ProfilePicture> ReadImageAsync(ulong accountId, string fileName, CancellationToken token = default)
+            => Task.FromResult(new ProfilePicture(null, "nowhere to read a picture from"));
 
         public Task<bool> WriteImageAsync(
             ulong accountId, string fileName, byte[] content, CancellationToken token = default)

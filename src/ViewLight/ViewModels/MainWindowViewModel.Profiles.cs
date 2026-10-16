@@ -47,10 +47,47 @@ public sealed partial class MainWindowViewModel {
     private CancellationTokenSource? _profileWatch;
 
     /// <summary>
-    /// The picture and banner currently decoded, by the names the profile shows, so they are not read out of
-    /// the launcher's database again on every refresh.
+    /// The profile and picture names the screen is showing, and the revisions they were read at.
     /// </summary>
-    private (ulong AccountId, string? Avatar, string? Banner) _profileImages;
+    /// <remarks>
+    /// The names alone cannot say whether what is on screen is current, which is the bug this key exists to
+    /// fix: replacing a picture keeps its name - it is <c>avatar.png</c> either way - so a replaced picture
+    /// read as "nothing has changed" and the old one stayed on screen until the launcher was restarted. The
+    /// two revisions are what say otherwise: the notes' own moves when the launcher's database is read again,
+    /// and the run's own when a picture is replaced or removed here.
+    /// </remarks>
+    private ProfilePictureKey _profilePictures;
+
+    /// <summary>
+    /// The profile and pictures the screen is showing, and the revisions they were read at.
+    /// </summary>
+    /// <param name="AccountId">Whose pictures they are.</param>
+    /// <param name="Avatar">The name the picture is kept under, or null for the initial-letter circle.</param>
+    /// <param name="Banner">The same for the banner.</param>
+    /// <param name="Notes">The revision of the launcher's own notes when they were read.</param>
+    /// <param name="Pictures">How many times a picture has been replaced or removed in this run.</param>
+    public readonly record struct ProfilePictureKey(
+        ulong AccountId, string? Avatar, string? Banner, int Notes, int Pictures);
+
+    /// <summary>Raised when a picture is replaced or removed, so the read is not kept.</summary>
+    private int _pictureRevision;
+
+    /// <summary>Whether the last look at the screen's pictures could not read them, and when to look again.</summary>
+    private bool _picturesFailed;
+    private DateTimeOffset _picturesRetryAt;
+
+    /// <summary>
+    /// The pictures already decoded, by the profile they belong to and the name they are kept under.
+    /// </summary>
+    /// <remarks>
+    /// The launcher's own database answers in milliseconds, but each picture is a round trip and a decode, and
+    /// a profile picked, put down and picked again should not pay for the same two pictures twice. A picture
+    /// that is replaced is forgotten here rather than read over - see <see cref="ForgetPicture"/>.
+    /// </remarks>
+    private readonly Dictionary<(ulong AccountId, string File), Bitmap?> _decodedPictures = [];
+
+    /// <summary>Set while every profile's pictures are being read into the cache.</summary>
+    private bool _warmingPictures;
 
     /// <summary>The log the watch is reading, or null when nothing is being watched.</summary>
     private string? _profileLogPath;
@@ -238,13 +275,22 @@ public sealed partial class MainWindowViewModel {
     /// <summary>Whether anything about this profile does not count as clean.</summary>
     public bool ProfileIsNotClean => SelectedProfile is { IsClean: false };
 
-    public IReadOnlyList<ProfileWizard> ProfileWizards => SelectedProfile?.Wizards ?? [];
+    /// <summary>
+    /// The selected profile's wizards, as the screen shows them.
+    /// </summary>
+    /// <remarks>
+    /// A row per wizard rather than the wizard objects themselves, and refilled in place when one of them
+    /// moves: a binding to the profile's own list is a binding to an instance that never changes, so a level
+    /// reached or a wizard made while the server runs was invisible until the launcher was restarted. See
+    /// <see cref="ProfileWizardRow"/> for why the row is a value.
+    /// </remarks>
+    public ObservableCollection<ProfileWizardRow> ProfileWizards { get; } = [];
 
     public bool HasProfileWizards => ProfileWizards.Count > 0;
 
-    public string ProfileWizardsSummary => SelectedProfile is null || SelectedProfile.Wizards.Count == 0
-        ? "No wizards have been read yet — they come from the player database while the server runs."
-        : string.Empty;
+    public string ProfileWizardsSummary => HasProfileWizards
+        ? string.Empty
+        : "No wizards have been read yet — they come from the player database while the server runs.";
 
     // ---------------------------------------------------------------- the profile's two pages
 
@@ -724,6 +770,11 @@ public sealed partial class MainWindowViewModel {
             foreach (var profile in offered) {
                 Profiles.Add(profile);
             }
+
+            // Which profiles there are has just changed - the notes arrived, or this server's accounts did -
+            // and their pictures are read now rather than when each one is picked: the card in the corner of
+            // the window is drawn from the selected one, and a switch to another is drawn at once.
+            _ = WarmProfilePicturesAsync();
         }
 
         // Put back only when there is a reason for it: the profile already on screen, the account Play would
@@ -805,6 +856,11 @@ public sealed partial class MainWindowViewModel {
             }
         }
 
+        // The wizards are their own comparison, because a wizard moves in ways the badges above do not know
+        // about: a level, a school, a purse, a finished quest, or a whole new character the server has just
+        // reported. See RefreshWizards.
+        RefreshWizards(profile);
+
         // And when something has changed, the groups that are already on screen are kept and refilled, so
         // the ones that are open stay open.
         ProfileBadgeGroup.Sync(
@@ -838,7 +894,6 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(ProfileStandingText));
         OnPropertyChanged(nameof(ProfileStandingDetail));
         OnPropertyChanged(nameof(ProfileIsNotClean));
-        OnPropertyChanged(nameof(ProfileWizards));
         OnPropertyChanged(nameof(HasProfileWizards));
         OnPropertyChanged(nameof(ProfileWizardsSummary));
         OnPropertyChanged(nameof(ProfileBadgeCountText));
@@ -864,45 +919,174 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// Decodes a profile's picture and banner, once per pair of pictures.
+    /// Makes the wizards on screen the ones the selected profile now holds.
     /// </summary>
     /// <remarks>
-    /// The names are the cache key, so a screen refresh that changes nothing does not read the pictures out of
-    /// the launcher's own database again - which matters because this is called from every derived-state
-    /// refresh.
+    /// <para>
+    /// The rows are refilled in place only when one of them has actually moved, which is the same rule the
+    /// badges follow and for the same reason: the player database is read every ten seconds, and almost
+    /// every look learns nothing.
+    /// </para>
+    /// <para>
+    /// One of the things that moves here is a wizard's <i>name</i>, which does not come from the database at
+    /// all - it comes from the server's log, and is matched to a character a poll or two after it was first
+    /// seen. So the comparison is over the rows rather than over the profile, and the name arriving is a
+    /// wizard that changed like any other.
+    /// </para>
     /// </remarks>
-    private void LoadProfileImages(LauncherProfile? profile) {
-        var key = (profile?.AccountId ?? 0, profile?.AvatarFile, profile?.BannerFile);
+    private void RefreshWizards(LauncherProfile? profile) {
+        var wizards = ProfileWizardRow.For(profile);
 
-        if (key == _profileImages) {
+        if (ProfileWizards.SequenceEqual(wizards)) {
             return;
         }
 
-        _profileImages = key;
-        _ = DecodeProfileImagesAsync(key).ConfigureAwait(true);
-    }
+        ProfileWizards.Clear();
 
-    private async Task DecodeProfileImagesAsync((ulong AccountId, string? Avatar, string? Banner) key) {
-        var avatar = await DecodeAsync(await ReadImageAsync(key.AccountId, key.Avatar).ConfigureAwait(true))
-            .ConfigureAwait(true);
-
-        var banner = await DecodeAsync(await ReadImageAsync(key.AccountId, key.Banner).ConfigureAwait(true))
-            .ConfigureAwait(true);
-
-        // Only if nothing has been picked since the pictures were read.
-        if (_profileImages == key) {
-            ProfileAvatar = avatar;
-            ProfileBanner = banner;
+        foreach (var wizard in wizards) {
+            ProfileWizards.Add(wizard);
         }
     }
 
-    /// <summary>A profile's picture, or null when it has none - or when it cannot be read just now.</summary>
-    private async Task<byte[]?> ReadImageAsync(ulong accountId, string? fileName) {
+    /// <summary>
+    /// Decodes a profile's picture and banner, once per profile and pair of names at one pair of revisions.
+    /// </summary>
+    /// <remarks>
+    /// This is called from every derived-state refresh, so what is already on screen is not read again - and a
+    /// read that <i>failed</i> is not on screen, so it is tried again after
+    /// <see cref="ProfilePollInterval"/> rather than being remembered as a profile with no picture.
+    /// </remarks>
+    private void LoadProfileImages(LauncherProfile? profile) {
+        var wanted = PictureKeyFor(profile);
+
+        if (!PicturesNeedReading(
+                _profilePictures, wanted, _picturesFailed,
+                DateTimeOffset.UtcNow >= _picturesRetryAt)) {
+            return;
+        }
+
+        _profilePictures = wanted;
+        _picturesFailed = false;
+        _ = DecodeProfileImagesAsync(wanted);
+    }
+
+    /// <summary>
+    /// Whether the screen's pictures have to be read again: they are not the ones wanted, or the last look at
+    /// them did not work and the wait before trying again has passed.
+    /// </summary>
+    /// <remarks>
+    /// Pure, so the two things that used to go wrong can be pinned down without a screen or a database: a
+    /// replaced picture keeping its name must still count as a change, and a failed read must be retried
+    /// rather than kept as the answer.
+    /// </remarks>
+    public static bool PicturesNeedReading(
+        ProfilePictureKey shown, ProfilePictureKey wanted, bool lastReadFailed, bool retryIsDue)
+        => shown != wanted || (lastReadFailed && retryIsDue);
+
+    /// <summary>What the screen's pictures are read against: whose they are, by name, at which revisions.</summary>
+    public ProfilePictureKey PictureKeyFor(LauncherProfile? profile) => new(
+        profile?.AccountId ?? 0, profile?.AvatarFile, profile?.BannerFile, _profiles.Revision, _pictureRevision);
+
+    private async Task DecodeProfileImagesAsync(ProfilePictureKey key) {
+        // Both at once rather than one after the other: they are two reads of the same database, and doing
+        // them in turn is the wait of two for no reason.
+        var avatarRead = PictureAsync(key.AccountId, key.Avatar);
+        var bannerRead = PictureAsync(key.AccountId, key.Banner);
+
+        await Task.WhenAll(avatarRead, bannerRead).ConfigureAwait(true);
+
+        var avatar = await avatarRead.ConfigureAwait(true);
+        var banner = await bannerRead.ConfigureAwait(true);
+
+        // A picture the database would not hand back is looked at again rather than remembered as absent.
+        if (avatar.Problem is not null || banner.Problem is not null) {
+            _picturesFailed = true;
+            _picturesRetryAt = DateTimeOffset.UtcNow + ProfilePollInterval;
+        }
+
+        // Only if nothing has been picked or replaced since the pictures were read.
+        if (PictureKeyFor(SelectedProfile) == key) {
+            ProfileAvatar = avatar.Bitmap;
+            ProfileBanner = banner.Bitmap;
+        }
+    }
+
+    /// <summary>One picture, out of the cache when it is already decoded.</summary>
+    private async Task<DecodedPicture> PictureAsync(ulong accountId, string? fileName) {
         if (accountId == 0 || string.IsNullOrWhiteSpace(fileName)) {
-            return null;
+            return new DecodedPicture(null, null);
         }
 
-        return await _profiles.ReadImageAsync(accountId, fileName).ConfigureAwait(true);
+        if (_decodedPictures.TryGetValue((accountId, fileName), out var cached)) {
+            return new DecodedPicture(cached, null);
+        }
+
+        var picture = await _profiles.ReadImageAsync(accountId, fileName).ConfigureAwait(true);
+
+        if (picture.Bytes is null) {
+            return new DecodedPicture(null, picture.Problem);
+        }
+
+        var bitmap = await DecodeAsync(picture.Bytes).ConfigureAwait(true);
+
+        // A picture that will not decode is not kept: trying again costs nothing next to showing the letter
+        // circle forever, and the file may be mid-write when it is first read.
+        if (bitmap is not null) {
+            _decodedPictures[(accountId, fileName)] = bitmap;
+        }
+
+        return new DecodedPicture(bitmap, null);
+    }
+
+    /// <summary>A picture as read: the image, and why there is none when that is the answer.</summary>
+    private readonly record struct DecodedPicture(Bitmap? Bitmap, string? Problem);
+
+    /// <summary>
+    /// Forgets a profile's copy of a picture, because it has just been replaced or removed.
+    /// </summary>
+    /// <remarks>
+    /// A picture keeps its name - the second one is <c>avatar.png</c> as well - so nothing but this says the
+    /// bytes behind that name are new. Without it the screen shows the picture it already had until the
+    /// launcher is restarted, which is exactly what setting one was reported to do.
+    /// </remarks>
+    private void ForgetPicture(ulong accountId, string? fileName) {
+        if (accountId == 0 || string.IsNullOrWhiteSpace(fileName)) {
+            return;
+        }
+
+        _decodedPictures.Remove((accountId, fileName));
+        _pictureRevision++;
+    }
+
+    /// <summary>
+    /// Reads the other profiles' pictures in the background, so switching account does not wait on two reads of
+    /// the launcher's own database and a decode in the middle of a click.
+    /// </summary>
+    /// <remarks>
+    /// Every profile except the one on screen, which the screen reads itself and retries on its own terms:
+    /// reading it here as well would be the same two pictures fetched twice. Nothing awaits this and nothing is
+    /// reported - a picture that cannot be read falls back to the initial-letter circle, which is what the
+    /// screen shows anyway.
+    /// </remarks>
+    private async Task WarmProfilePicturesAsync() {
+        if (_warmingPictures) {
+            return;
+        }
+
+        _warmingPictures = true;
+
+        try {
+            // A copy, because the pictures being read is not a reason for the list not to change under it.
+            var wanted = Profiles.Where(p => !ReferenceEquals(p, SelectedProfile)).ToList();
+
+            foreach (var profile in wanted) {
+                await PictureAsync(profile.AccountId, profile.AvatarFile).ConfigureAwait(true);
+                await PictureAsync(profile.AccountId, profile.BannerFile).ConfigureAwait(true);
+            }
+        }
+        finally {
+            _warmingPictures = false;
+        }
     }
 
     /// <summary>
@@ -932,11 +1116,13 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
-        if (await _profiles.AdoptImageAsync(SelectedProfile, picked, banner: false) is null) {
+        var kept = await _profiles.AdoptImageAsync(SelectedProfile, picked, banner: false);
+        if (kept is null) {
             AppendLog(LogLevel.Error, $"Could not keep {picked} as the profile's picture.");
             return;
         }
 
+        ForgetPicture(SelectedProfile.AccountId, kept);
         AppendLog(LogLevel.Info, $"Profile picture set from {picked}.");
         RefreshProfiles();
     }
@@ -952,11 +1138,13 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
-        if (await _profiles.AdoptImageAsync(SelectedProfile, picked, banner: true) is null) {
+        var kept = await _profiles.AdoptImageAsync(SelectedProfile, picked, banner: true);
+        if (kept is null) {
             AppendLog(LogLevel.Error, $"Could not keep {picked} as the profile's banner.");
             return;
         }
 
+        ForgetPicture(SelectedProfile.AccountId, kept);
         AppendLog(LogLevel.Info, $"Profile banner set from {picked}.");
         RefreshProfiles();
     }
@@ -969,7 +1157,11 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
+        var accountId = SelectedProfile.AccountId;
+        var removed = SelectedProfile.AvatarFile;
+
         await _profiles.ClearImageAsync(SelectedProfile, banner: false).ConfigureAwait(true);
+        ForgetPicture(accountId, removed);
         RefreshProfiles();
     }
 
@@ -981,7 +1173,11 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
+        var accountId = SelectedProfile.AccountId;
+        var removed = SelectedProfile.BannerFile;
+
         await _profiles.ClearImageAsync(SelectedProfile, banner: true).ConfigureAwait(true);
+        ForgetPicture(accountId, removed);
         RefreshProfiles();
     }
 

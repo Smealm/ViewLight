@@ -151,6 +151,12 @@ public static class AchievementScores {
 /// ladder as one card with a bar on it instead of a tile per rung, and it is derived from the track rather
 /// than stored separately so the two can never disagree about which rungs belong together.
 /// </param>
+/// <param name="FixedScore">
+/// What this badge is worth instead of what its difficulty is worth, or null for the ordinary case. One badge
+/// in the catalog sets it - the last rung of the playtime ladder - and the reason is that its own ladder says
+/// what it is worth rather than the coarse scale the rest are priced off. See
+/// <see cref="AchievementCatalog.ThousandHoursPoints"/>.
+/// </param>
 public sealed record AchievementDefinition(
     string Id,
     string Name,
@@ -161,10 +167,11 @@ public sealed record AchievementDefinition(
     bool NeedsDebugLog = false,
     AchievementDifficulty Difficulty = AchievementDifficulty.Standard,
     bool IsMilestone = false,
-    string? TrackId = null) {
+    string? TrackId = null,
+    int? FixedScore = null) {
 
     /// <summary>What this badge adds to a profile's score, before any multiplier.</summary>
-    public int Score => AchievementScores.For(Difficulty);
+    public int Score => FixedScore ?? AchievementScores.For(Difficulty);
 
     /// <summary>What it adds to a given profile's score, bonus included.</summary>
     public int PointsFor(LauncherProfile profile) => Score * AchievementScores.MultiplierFor(profile);
@@ -190,6 +197,12 @@ public sealed record AchievementDefinition(
 /// <param name="Requirement">What earns a rung, in the words a locked badge shows.</param>
 /// <param name="StepText">How far apart the rungs are, for the card's own line.</param>
 /// <param name="NeedsDebugLog">Whether the count needs the server logging at debug level.</param>
+/// <param name="FinaleName">
+/// What the badge at the top of the ladder is called, for a ladder whose last rung is a badge with a name of
+/// its own rather than one more rung - the thousandth hour. Null for a ladder whose rungs are all the same
+/// kind of thing, which is every other one.
+/// </param>
+/// <param name="FinaleScore">What that last rung is worth, instead of what its difficulty is worth.</param>
 public sealed record MilestoneTrack(
     string Id,
     string Name,
@@ -201,10 +214,15 @@ public sealed record MilestoneTrack(
     Func<int, string> Describe,
     Func<int, string> Requirement,
     string StepText,
-    bool NeedsDebugLog = false) {
+    bool NeedsDebugLog = false,
+    string? FinaleName = null,
+    int? FinaleScore = null) {
 
     /// <summary>The top of the ladder, which is where it stops.</summary>
     public int Top => Rungs.Count == 0 ? 0 : Rungs[^1];
+
+    /// <summary>Whether a rung is the one at the top, which is the one that may be named instead of counted.</summary>
+    public bool IsTop(int rung) => rung == Top;
 
     /// <summary>How many rungs a value has passed.</summary>
     public int Passed(int reached) => Rungs.Count(rung => reached >= rung);
@@ -230,12 +248,13 @@ public sealed record MilestoneTrack(
 /// does not define, and no way for one to be given twice. Adding an achievement is adding a row here.
 /// </para>
 /// <para>
-/// <b>The badges about creatures exist, and are locked, and that is on purpose.</b> Beating a boss is
-/// counted from the server's own creature list plus the duel that was won - so the half that is missing
-/// is the server naming the creature in a duel at all. It logs a duel's participants by slot and runtime
-/// id and never by template, so a win cannot be tied to a creature yet; see <see cref="DuelCreature"/>.
-/// The badges are defined and judged like any other, so the day the server writes that line they start
-/// being earned with no change here, and until then they are simply locked and the profile says why.
+/// <b>A creature is counted from the duel it was in, two ways, and both are the server's own lines.</b> A
+/// line that names a creature outright - <c>| Creature 35166 Wraith-WCBoss-L05 joined</c> - is believed as it
+/// stands, and that line does not exist in Imlight yet; see <see cref="DuelCreature"/>. What the server does
+/// write is which slots held a creature and what a spell reached, and those two together with a won duel
+/// leave a count of creatures beaten behind. Both ways are <see cref="ProfileLedger"/>'s business; the badges
+/// here only judge the count they leave behind, so nothing in this file changes when the server grows the
+/// line or when it does not.
 /// </para>
 /// <para>
 /// <b>What is genuinely not here: what you have collected.</b> Imlight's inventory keeps an item's
@@ -281,8 +300,43 @@ public static class AchievementCatalog {
     /// </remarks>
     public const int CreatureMilestoneStep = 25;
 
-    /// <summary>The top of the creature ladder when the server's own creature list has not been read.</summary>
-    public const int DefaultCreatureCap = 500;
+    /// <summary>
+    /// How far apart the rungs of the playtime ladder are once they are hours rather than minutes.
+    /// </summary>
+    /// <remarks>
+    /// Five hours, and the ladder is counted in minutes because its first two rungs are half an hour and an
+    /// hour: a step of five hours from zero would start the ladder at five hours and say nothing about the
+    /// first evening somebody played.
+    /// </remarks>
+    public const int PlaytimeMilestoneStep = 5 * 60;
+
+    /// <summary>The top of the playtime ladder, in minutes: a thousand hours.</summary>
+    public const int PlaytimeCap = 1000 * 60;
+
+    /// <summary>
+    /// What the last rung of the playtime ladder is worth.
+    /// </summary>
+    /// <remarks>
+    /// The one badge in the catalog that is deliberately worth more than its difficulty. Every other badge is
+    /// priced by how hard it is - 10, 25, 50 or 100 - which is what keeps the score explainable; the end of a
+    /// thousand hours was asked for as a heap rather than as one more legendary, so the ladder says what that
+    /// rung is worth rather than the scale. Nothing else overrides its difficulty, so the scale still explains
+    /// every other badge on a profile.
+    /// </remarks>
+    public const int ThousandHoursPoints = 500;
+
+    /// <summary>The name the badge at the top of the playtime ladder is granted under.</summary>
+    public const string ThousandHoursBadge = "Wizard of a Thousand Hours";
+
+    /// <summary>
+    /// The top of the creature ladder: how many creatures beaten its last rung asks for.
+    /// </summary>
+    /// <remarks>
+    /// Fixed, unlike <see cref="MaxLevel"/> - because this ladder counts creatures beaten rather than
+    /// <i>different</i> creatures. There is no list of them to be measured against any more (see
+    /// <see cref="CreatureTrack"/>), and twenty rungs of twenty-five ends somewhere worth calling a career.
+    /// </remarks>
+    public const int CreatureLadderTop = 500;
 
     /// <summary>
     /// The highest level this server allows, which is how far the level ladders run.
@@ -293,16 +347,6 @@ public static class AchievementCatalog {
     /// twelve, and writing either out by hand would be wrong on the other's server.
     /// </remarks>
     public static int MaxLevel { get; private set; } = DefaultMaxLevel;
-
-    /// <summary>
-    /// How far the creature ladder runs: the size of this server's own creature list, rounded up to a rung.
-    /// </summary>
-    /// <remarks>
-    /// The same idea as <see cref="MaxLevel"/> - a player cannot beat more different creatures than the
-    /// server's list holds, so a top rung fixed in code would either stop short of what is reachable or sit
-    /// above it forever.
-    /// </remarks>
-    public static int CreatureCap { get; private set; } = DefaultCreatureCap;
 
     /// <summary>The ladders, one card each on the profile rather than a badge per rung.</summary>
     public static IReadOnlyList<MilestoneTrack> Tracks => Book.Tracks;
@@ -323,7 +367,7 @@ public static class AchievementCatalog {
     /// <summary>
     /// Everything the catalog holds, swapped as one object so a reader never sees half a rebuild.
     /// </summary>
-    private static CatalogBook Book { get; set; } = Build(DefaultMaxLevel, DefaultCreatureCap, []);
+    private static CatalogBook Book { get; set; } = Build(DefaultMaxLevel, []);
 
     /// <summary>One build of the catalog: its ladders, and every badge those and the fixed list add up to.</summary>
     private sealed record CatalogBook(
@@ -344,7 +388,7 @@ public static class AchievementCatalog {
         }
 
         MaxLevel = maxLevel;
-        Book = Build(maxLevel, CreatureCap, Worlds);
+        Book = Build(maxLevel, Worlds);
     }
 
     /// <summary>
@@ -366,47 +410,27 @@ public static class AchievementCatalog {
         }
 
         Worlds = known;
-        Book = Build(MaxLevel, CreatureCap, known);
-    }
-
-    /// <summary>
-    /// Rebuilds the catalog for a server whose own creature list holds <paramref name="creatures"/> of them.
-    /// </summary>
-    /// <remarks>
-    /// Rounded up to the ladder's own step, because a top rung at 317 creatures is not a milestone anybody
-    /// would recognise. A count that did not come back sensible leaves the stock top rung in place rather
-    /// than shrinking the ladder to nothing.
-    /// </remarks>
-    public static void UseCreatureCount(int creatures) {
-        var cap = creatures <= 0
-            ? DefaultCreatureCap
-            : (creatures + CreatureMilestoneStep - 1) / CreatureMilestoneStep * CreatureMilestoneStep;
-
-        if (cap == CreatureCap) {
-            return;
-        }
-
-        CreatureCap = cap;
-        Book = Build(MaxLevel, cap, Worlds);
+        Book = Build(MaxLevel, known);
     }
 
     /// <summary>
     /// Everything the catalog holds, for a server with these limits.
     /// </summary>
     /// <remarks>
-    /// Takes the limits as arguments rather than reading <see cref="MaxLevel"/> and <see cref="CreatureCap"/>
-    /// so that the first build - which happens while the static fields are still being initialized - cannot
-    /// read fields that have not been set yet.
+    /// Takes the level cap as an argument rather than reading <see cref="MaxLevel"/> so that the first build -
+    /// which happens while the static fields are still being initialized - cannot read a field that has not
+    /// been set yet.
     /// </remarks>
-    private static CatalogBook Build(int maxLevel, int creatureCap, IReadOnlyList<string> worlds) {
+    private static CatalogBook Build(int maxLevel, IReadOnlyList<string> worlds) {
         var tracks = new List<MilestoneTrack>();
 
         foreach (var school in WizardSchool.Names) {
             tracks.Add(LevelTrack(school, maxLevel));
         }
 
+        tracks.Add(PlaytimeTrack());
         tracks.Add(BattleTrack());
-        tracks.Add(CreatureTrack(creatureCap));
+        tracks.Add(CreatureTrack());
 
         return new CatalogBook(
             tracks,
@@ -447,34 +471,13 @@ public static class AchievementCatalog {
     /// <summary>Every badge that is not a rung of a ladder.</summary>
     private static IReadOnlyList<AchievementDefinition> FixedBadges() => [
         // ------------------------------------------------------------ time on the server
+        // Time itself is the playtime ladder below rather than five badges at five thresholds: the hours
+        // between an hour and five, or five and ten, are the greater part of a wizard's life and five fixed
+        // badges said nothing about them. What is left here is what is not about time - turning up at all,
+        // and turning up often - and the one badge about playing honestly for a long time.
         new("first-steps", "First Steps", "Sign in to your own server once.",
             AchievementCategory.Playtime, AchievementSource.GameSession, p => p.SessionCount >= 1,
             Difficulty: AchievementDifficulty.Easy),
-
-        new("settling-in", "Settling In", "Spend an hour signed in to your own server.",
-            AchievementCategory.Playtime, AchievementSource.GameSession,
-            p => TimeSpan.FromSeconds(p.PlaytimeSeconds) >= Hour,
-            Difficulty: AchievementDifficulty.Standard),
-
-        new("ten-hours", "Ten Hours In", "Spend ten hours signed in to your own server.",
-            AchievementCategory.Playtime, AchievementSource.GameSession,
-            p => TimeSpan.FromSeconds(p.PlaytimeSeconds) >= Hour * 10,
-            Difficulty: AchievementDifficulty.Hard),
-
-        new("hundred-hours", "A Hundred Hours", "Spend a hundred hours signed in to your own server.",
-            AchievementCategory.Playtime, AchievementSource.GameSession,
-            p => TimeSpan.FromSeconds(p.PlaytimeSeconds) >= Hour * 100,
-            Difficulty: AchievementDifficulty.Legendary),
-
-        new("five-hours", "Five Hours In", "Spend five hours signed in to your own server.",
-            AchievementCategory.Playtime, AchievementSource.GameSession,
-            p => TimeSpan.FromSeconds(p.PlaytimeSeconds) >= Hour * 5,
-            Difficulty: AchievementDifficulty.Standard),
-
-        new("twenty-hours", "Twenty Hours In", "Spend twenty hours signed in to your own server.",
-            AchievementCategory.Playtime, AchievementSource.GameSession,
-            p => TimeSpan.FromSeconds(p.PlaytimeSeconds) >= Hour * 20,
-            Difficulty: AchievementDifficulty.Hard),
 
         new("regular", "A Regular", "Sign in to your own server twenty-five times.",
             AchievementCategory.Playtime, AchievementSource.GameSession, p => p.SessionCount >= 25,
@@ -615,6 +618,81 @@ public static class AchievementCatalog {
             Requirement: rung => $"Reach level {rung} with a {school} wizard.",
             StepText: $"every {LevelMilestoneStep} levels");
 
+    /// <summary>
+    /// Time signed in to this launcher's own server, a rung at a time.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Counted in minutes rather than in hours because the ladder starts at half an hour: a step of five
+    /// hours from zero would begin at five hours and say nothing about somebody's first evening. Half an
+    /// hour, an hour, and then five hours at a time - the twenty hours the game's own progression uses as a
+    /// boundary, and the hundred a wizard is supposed to have played, are both rungs of it.
+    /// </para>
+    /// <para>
+    /// The last rung is a badge of its own rather than one more rung (<see cref="ThousandHoursBadge"/>), and
+    /// it is what the ladder was asked for rather than something the ladder happened to reach. It is still a
+    /// rung - it is earned, stored, logged and silenced like any other - so nothing beside the ladder has to
+    /// know about it.
+    /// </para>
+    /// </remarks>
+    private static MilestoneTrack PlaytimeTrack()
+        => new(
+            Id: "playtime",
+            Name: "Playtime",
+            Category: AchievementCategory.Playtime,
+            Source: AchievementSource.GameSession,
+            Reached: profile => PlaytimeMinutes(profile.PlaytimeSeconds),
+            Rungs: PlaytimeRungs(),
+            Title: PlaytimeText,
+            Describe: minutes => $"{PlaytimeText(minutes)} signed in",
+            Requirement: minutes => $"Spend {PlaytimeText(minutes)} signed in to your own server.",
+            StepText: $"every 5 hours after the first one, up to {PlaytimeText(PlaytimeCap)}",
+            FinaleName: ThousandHoursBadge,
+            FinaleScore: ThousandHoursPoints);
+
+    /// <summary>
+    /// The rungs of the playtime ladder: half an hour, an hour, and five hours at a time to a thousand.
+    /// </summary>
+    /// <remarks>
+    /// Generated rather than listed, for the same reason the other ladders are: a run of near-identical
+    /// thresholds is exactly where a gap or a repeated one hides. The top is a thousand hours rather than the
+    /// server's own limit, because a wizard's hours are not the server's to decide.
+    /// </remarks>
+    private static IReadOnlyList<int> PlaytimeRungs() {
+        var rungs = new List<int> { 30, 60 };
+
+        for (var minutes = PlaytimeMilestoneStep; minutes <= PlaytimeCap; minutes += PlaytimeMilestoneStep) {
+            rungs.Add(minutes);
+        }
+
+        return rungs;
+    }
+
+    /// <summary>Playtime in whole minutes, which is the unit the playtime ladder is counted in.</summary>
+    private static int PlaytimeMinutes(long seconds)
+        => (int) Math.Clamp(seconds / 60, 0, int.MaxValue);
+
+    /// <summary>
+    /// Minutes said the way a person says them: <c>45 minutes</c>, <c>1 hour</c>, <c>1,000 hours</c>.
+    /// </summary>
+    /// <remarks>
+    /// A rung is named by what it is rather than by its number of minutes, because "60,000 minutes" is a
+    /// number nobody has a feel for and "1,000 hours" is the shape of a life. The hours carry a thousands
+    /// separator for the same reason.
+    /// </remarks>
+    private static string PlaytimeText(int minutes) {
+        var hours = minutes / 60;
+        var rest = minutes % 60;
+
+        if (hours == 0) {
+            return minutes == 1 ? "1 minute" : $"{minutes} minutes";
+        }
+
+        var said = hours == 1 ? "1 hour" : $"{hours:N0} hours";
+
+        return rest == 0 ? said : $"{said} {rest} minutes";
+    }
+
     /// <summary>Every tenth duel won, up to <see cref="BattleMilestoneCount"/> rungs of them.</summary>
     private static MilestoneTrack BattleTrack()
         => new(
@@ -631,25 +709,32 @@ public static class AchievementCatalog {
             NeedsDebugLog: true);
 
     /// <summary>
-    /// Every twenty-fifth creature beaten that is not a boss, to the size of the server's own list.
+    /// Every twenty-fifth creature beaten, to the top of the ladder.
     /// </summary>
     /// <remarks>
-    /// Counted as distinct creatures rather than as wins, and only for the ones the server's list calls
-    /// ordinary creatures - beating one creature ten times is not ten creatures, and a creature the list
-    /// does not have is counted as neither. It is the list that decides both, which is why the top of this
-    /// ladder is its size.
+    /// <para>
+    /// Counted as creatures beaten rather than as different creatures, which is what the server's log can
+    /// actually support: a duel says which slots held creatures and what a spell reached, and says nothing
+    /// about which creature was on a slot - the participant line carries a debug tag like <c>140DD</c> rather
+    /// than a template ID. So beating the same creature again counts again, and the top rung is a fixed
+    /// number rather than the size of anybody's creature list. See <see cref="ProfileLedger"/>.
+    /// </para>
+    /// <para>
+    /// The bosses are not taken out of it: a duel does not say which of its creatures was one, and subtracting
+    /// them would mean subtracting something the count never added.
+    /// </para>
     /// </remarks>
-    private static MilestoneTrack CreatureTrack(int cap)
+    private static MilestoneTrack CreatureTrack()
         => new(
             Id: "creatures",
             Name: "Creatures Beaten",
             Category: AchievementCategory.Battle,
             Source: AchievementSource.ServerLog,
-            Reached: profile => profile.MobsDefeated,
-            Rungs: Rungs(CreatureMilestoneStep, cap),
+            Reached: profile => profile.CreaturesKilled,
+            Rungs: Rungs(CreatureMilestoneStep, CreatureLadderTop),
             Title: rung => $"{rung:N0}",
             Describe: value => $"{value:N0} creatures beaten",
-            Requirement: rung => $"Beat {rung:N0} different creatures that are not bosses.",
+            Requirement: rung => $"Beat {rung:N0} creatures.",
             StepText: $"every {CreatureMilestoneStep} creatures beaten",
             NeedsDebugLog: true);
 
@@ -675,9 +760,14 @@ public static class AchievementCatalog {
     /// </remarks>
     private static IEnumerable<AchievementDefinition> RungsFor(MilestoneTrack track) {
         foreach (var rung in track.Rungs) {
+            // The top of a ladder may be a badge in its own right rather than one more rung of the same kind:
+            // a thousand hours is named, and worth what its ladder says rather than what its difficulty does.
+            // Every other rung, on every other ladder, is named for the ladder and priced by how hard it is.
+            var finale = track.IsTop(rung) ? track.FinaleName : null;
+
             yield return new AchievementDefinition(
                 $"{track.Id}-{rung}",
-                $"{track.Name}, {track.Title(rung)}",
+                finale ?? $"{track.Name}, {track.Title(rung)}",
                 track.Requirement(rung),
                 track.Category,
                 track.Source,
@@ -685,7 +775,8 @@ public static class AchievementCatalog {
                 track.NeedsDebugLog,
                 MilestoneDifficulty(rung, track.Top),
                 IsMilestone: true,
-                TrackId: track.Id);
+                TrackId: track.Id,
+                FixedScore: track.IsTop(rung) ? track.FinaleScore : null);
         }
     }
 

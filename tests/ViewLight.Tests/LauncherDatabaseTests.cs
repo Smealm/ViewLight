@@ -39,6 +39,62 @@ public class LauncherDatabaseTests {
     }
 
     [Fact]
+    public void TheLaunchersOwnDatabaseRunsOnTheLaunchersOwnCopyOfTheEngine() {
+        using var workspace = new TempWorkspace();
+        var root = workspace.Path("data");
+        var server = Install(workspace);
+        var config = ImlightConfig.TryLoad(server)!;
+
+        // Nothing copied yet: the engine inside the install is borrowed, which is what makes an install a
+        // requirement rather than a nicety.
+        var borrowed = LauncherDatabase.For(config, server, root, out var problem)!;
+
+        Assert.Null(problem);
+        Assert.Equal(config.ResolveRavenServerDirectory(server), borrowed.ServerDirectory);
+        Assert.False(LauncherDatabase.RunsOnItsOwnEngine(borrowed, root));
+        Assert.Contains("the server install", LauncherDatabase.EngineDescription(borrowed, root));
+
+        // Once the launcher has made its own copy - from the install, at the version the install ships - that
+        // is what its own notes run on, and the server's folder is not loaded at all.
+        Assert.True(LauncherRavenEngine.MakeFresh(config, server, root).Copied);
+
+        var own = LauncherDatabase.For(config, server, root, out problem)!;
+
+        Assert.Null(problem);
+        Assert.Equal(LauncherRavenEngine.DirectoryFor(root), own.ServerDirectory);
+        Assert.True(LauncherDatabase.RunsOnItsOwnEngine(own, root));
+        Assert.Contains("the launcher's own copy", LauncherDatabase.EngineDescription(own, root));
+
+        // What is the launcher's own either way, and never the server's: the documents, the settings file,
+        // the log and the port.
+        Assert.Equal(LauncherDatabase.DataDirectoryFor(root), own.DataDirectory);
+        Assert.Equal(LauncherDatabase.SettingsPathFor(root), own.SettingsFilePath);
+        Assert.Equal(LauncherDatabase.LogsDirectoryFor(root), own.LogsDirectory);
+
+        // And the install's own engine is still reachable on purpose, for the one case that needs it: a copy
+        // that would not start.
+        var fallback = LauncherDatabase.ForServerEngine(config, server, root, out problem)!;
+
+        Assert.Null(problem);
+        Assert.Equal(config.ResolveRavenServerDirectory(server), fallback.ServerDirectory);
+        Assert.False(LauncherDatabase.RunsOnItsOwnEngine(fallback, root));
+    }
+
+    [Fact]
+    public void WithNeitherEngineThereIsNothingToRunAndItSaysSo() {
+        using var workspace = new TempWorkspace();
+        var root = workspace.Path("data");
+
+        var config = EmptyConfig(workspace.CreateDirectory("no-install"));
+
+        Assert.Null(LauncherDatabase.For(config, workspace.Path("no-install"), root, out var problem));
+        Assert.Contains("no RavenDB", problem);
+
+        Assert.Null(LauncherDatabase.ForServerEngine(config, workspace.Path("no-install"), root, out var none));
+        Assert.Contains("no RavenDB", none);
+    }
+
+    [Fact]
     public void APortableLauncherKeepsItsDatabaseInItsOwnFolder() {
         using var workspace = new TempWorkspace();
 
@@ -242,12 +298,18 @@ public class LauncherDatabaseTests {
     /// A machine with a host at a path and exactly these frameworks. What a real machine has is read out of
     /// a process it starts, so the answer is decided here rather than depending on whose machine this is.
     /// </summary>
+    /// <remarks>
+    /// A build with no runtime beside it, deliberately: this is the machine-wide install being put to work,
+    /// and a bundle found beside the test binaries would quietly decide these tests instead.
+    /// </remarks>
     private sealed class MachineWith : IDisposable {
 
         private readonly Func<string?> _find = DotnetHost.Find;
-        private readonly Func<string, IReadOnlyList<DotnetFramework>> _list = DotnetHost.ListFrameworks;
+        private readonly Func<string?> _findBundled = DotnetHost.FindBundled;
+        private readonly Func<string, IReadOnlyList<DotnetFramework>?> _list = DotnetHost.ListFrameworks;
 
         public MachineWith(string host, params (string Name, string Version)[] frameworks) {
+            DotnetHost.FindBundled = () => null;
             DotnetHost.Find = () => host;
             DotnetHost.ListFrameworks = _ => frameworks.Select(f => new DotnetFramework(f.Name, f.Version)).ToList();
             DotnetHost.Forget();
@@ -255,6 +317,7 @@ public class LauncherDatabaseTests {
 
         public void Dispose() {
             DotnetHost.Find = _find;
+            DotnetHost.FindBundled = _findBundled;
             DotnetHost.ListFrameworks = _list;
             DotnetHost.Forget();
         }

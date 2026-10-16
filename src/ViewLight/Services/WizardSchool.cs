@@ -7,9 +7,16 @@ namespace ViewLight.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A wizard's school is persisted as a number - <c>MagicSchoolBehavior.MagicSchool</c> - and the numbers
-/// are template IDs rather than a running count, so they cannot be read as an ordinal. They are listed
-/// here so the launcher can name a school without asking the server anything.
+/// A wizard's school is persisted as Imlight's <c>MagicSchool</c> enum - <c>MagicSchoolBehavior.MagicSchool</c> -
+/// and the numbers are template IDs rather than a running count, so they cannot be read as an ordinal. They
+/// are listed here so the launcher can name a school without asking the server anything.
+/// </para>
+/// <para>
+/// <b>Both spellings are the same school, and the one that turns up depends on the database.</b> Read out of
+/// a real player database, a stored enum arrives as its <i>name</i>: the admin account's own document says
+/// <c>"AuthLevel": "Administrator"</c>, and <c>AuthLevel</c> is an enum in Imlight's <c>Account</c>. So
+/// <c>MagicSchoolBehavior.MagicSchool</c> is <c>"Storm"</c> and not <c>83375795</c>, even though the two mean
+/// the same thing here - which is why both are accepted rather than one being assumed.
 /// </para>
 /// <para>
 /// Only the seven a player can actually be are listed. Imlight's own enum also carries <c>None</c> and the
@@ -46,17 +53,27 @@ public static class WizardSchool {
     /// The name of a school from a stored value, or an empty string when it is not a school.
     /// </summary>
     /// <remarks>
-    /// The document's value is a number, but a value written as text is accepted too: both spellings appear
-    /// in the same family of documents, and refusing the readable one would turn a school badge off over
-    /// punctuation.
+    /// <para>
+    /// Either spelling: the id as it is written in the game's own template tables, or the name Imlight's
+    /// enum is written with when a database stores it as text. A value that is neither is not a school the
+    /// launcher can name, and nothing is invented for it - a creature's Sun, Moon, Star or Shadow is left
+    /// unnamed rather than being read as a wizard's school.
+    /// </para>
+    /// <para>
+    /// Case is ignored, because a name is a name: the enum's spelling is what the server writes, and a
+    /// document from somewhere else that says <c>"storm"</c> is the same school.
+    /// </para>
     /// </remarks>
     public static string NameOf(string? stored) {
         if (string.IsNullOrWhiteSpace(stored)) {
             return string.Empty;
         }
 
-        return uint.TryParse(stored.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+        var value = stored.Trim();
+
+        return uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
             ? NameOf(id)
-            : string.Empty;
+            : Schools.FirstOrDefault(s => string.Equals(s.Name, value, StringComparison.OrdinalIgnoreCase)).Name
+              ?? string.Empty;
     }
 }

@@ -49,6 +49,16 @@ public sealed class ProfileStore {
     /// <summary>Whether there is anywhere to keep notes at all yet.</summary>
     public bool IsAttached => _persistence is not null;
 
+    /// <summary>
+    /// How many times the notes have been read from where they are kept.
+    /// </summary>
+    /// <remarks>
+    /// Nothing about the notes themselves - it is what says that the copy held here is a new one, which is
+    /// what a screen showing a picture out of them has to know: the picture is fetched by name, and a name is
+    /// what a restore from the cloud keeps while replacing what is behind it.
+    /// </remarks>
+    public int Revision { get; private set; }
+
     /// <summary>Every profile, in the order they were first seen.</summary>
     public IReadOnlyList<LauncherProfile> Profiles => _file.Profiles;
 
@@ -73,6 +83,10 @@ public sealed class ProfileStore {
     /// profiles yet, which is what a first run looks like too.</returns>
     public bool Attach(IProfilePersistence persistence) {
         _persistence = persistence;
+
+        // A new place for the notes counts as a new revision whether or not the read that follows works:
+        // what is on screen was read from the old one, and it is not evidence about this one.
+        Revision++;
         return Reload();
     }
 
@@ -97,6 +111,7 @@ public sealed class ProfileStore {
         }
 
         _file = loaded;
+        Revision++;
         return true;
     }
 
@@ -175,12 +190,18 @@ public sealed class ProfileStore {
     }
 
     /// <summary>
-    /// A profile's picture, as the bytes to show, or null when it has none - or when it cannot be read just
-    /// now, which the profile screen answers by showing the initial-letter circle instead.
+    /// A profile's picture, and whether it was there to be read.
     /// </summary>
-    public async Task<byte[]?> ReadImageAsync(ulong accountId, string? fileName, CancellationToken token = default) {
+    /// <remarks>
+    /// A profile with no picture and a database that would not answer are told apart, because the screen does
+    /// different things with them: the first is drawn as the initial-letter circle and left at that, and the
+    /// second is looked at again. A picture with no name to fetch is the first kind.
+    /// </remarks>
+    public async Task<ProfilePicture> ReadImageAsync(
+        ulong accountId, string? fileName, CancellationToken token = default) {
+
         if (_persistence is null || string.IsNullOrWhiteSpace(fileName)) {
-            return null;
+            return ProfilePicture.None;
         }
 
         return await _persistence.ReadImageAsync(accountId, fileName, token).ConfigureAwait(true);

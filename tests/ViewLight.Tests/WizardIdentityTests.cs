@@ -145,6 +145,21 @@ public class WizardIdentityTests {
     }
 
     [Fact]
+    public void ASchoolStoredUnderItsOwnNameReadsAsASchool() {
+        // What a real database actually holds: Imlight's school is an enum and a stored enum arrives as its
+        // name - the same document that holds an account says "AuthLevel": "Administrator". Reading only the
+        // template id is what left every wizard on a real server shown as "School not read".
+        Assert.Equal("Storm", WizardSchool.NameOf("Storm"));
+        Assert.Equal("Balance", WizardSchool.NameOf(" Balance "));
+        Assert.Equal("Death", WizardSchool.NameOf("death"));
+
+        // And a school only a creature can be is still not a wizard's school, however it is spelled.
+        Assert.Equal(string.Empty, WizardSchool.NameOf("Shadow"));
+        Assert.Equal(string.Empty, WizardSchool.NameOf("None"));
+        Assert.Equal(string.Empty, WizardSchool.NameOf("Firecat"));
+    }
+
+    [Fact]
     public async Task TheSchoolAndLevelComeOffTheDocument() {
         using var bench = new Bench();
 
@@ -275,4 +290,76 @@ public class WizardIdentityTests {
     private static string SignIn()
         => $"{At.AddSeconds(-30).ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture)} "
            + "[INF] Sending wizard Jordan DeathBane to game server 127.0.0.1:12333.";
+
+    // ------------------------------------------------------------------ what the screen draws
+
+    private static PlayerProfileData Database(params PlayerWizardRecord[] wizards)
+        => new(wizards, [new PlayerOnlineRecord(AccountId, CharId, "WizardZone_TheCommons", "Centaur")], [], null);
+
+    private static IReadOnlyList<ProfileWizardRow> Rows(Bench bench) => ProfileWizardRow.For(bench.Profile);
+
+    [Fact]
+    public void ARowThatMovedIsADifferentRow() {
+        // The whole of the live-update fix. The screen is bound to rows rather than to the wizard objects, so
+        // a level that moved is a row that is not equal to the one on screen. A field moving inside an object
+        // nobody is watching is invisible: the binding is handed the same list instance either way, which is
+        // why the wizards section used to be right only after a restart.
+        using var bench = new Bench();
+
+        bench.Ledger.ApplyDatabase(Database(new PlayerWizardRecord(AccountId, CharId, 12, 500, [], "Storm")), At);
+        var before = Rows(bench);
+
+        // The same account read again with nothing about the wizard changed: nothing for the screen to do.
+        bench.Ledger.ApplyDatabase(Database(new PlayerWizardRecord(AccountId, CharId, 12, 500, [], "Storm")), At);
+        Assert.Equal(before, Rows(bench));
+
+        // A level reached and a purse that got heavier.
+        bench.Ledger.ApplyDatabase(Database(new PlayerWizardRecord(AccountId, CharId, 13, 900, [], "Storm")), At);
+        var after = Rows(bench);
+
+        Assert.NotEqual(before, after);
+        Assert.Equal("Level 13", after[0].LevelText);
+        Assert.Equal("900 gold", after[0].GoldText);
+    }
+
+    [Fact]
+    public void AWizardMadeWhileTheServerRunsIsAnotherRow() {
+        // A wizard arriving is an addition to a list rather than a field moving, and both have to reach the
+        // screen: it is the same complaint, and the comparison over the rows catches both.
+        using var bench = new Bench();
+
+        bench.Ledger.ApplyDatabase(Database(new PlayerWizardRecord(AccountId, CharId, 12, 0, [], "Storm")), At);
+        Assert.Single(Rows(bench));
+
+        bench.Ledger.ApplyDatabase(
+            Database(
+                new PlayerWizardRecord(AccountId, CharId, 12, 0, [], "Storm"),
+                new PlayerWizardRecord(AccountId, 4242, 5, 120, [], "Fire")),
+            At);
+
+        var rows = Rows(bench);
+
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("Fire", rows[1].SchoolText);
+        Assert.Equal("Level 5", rows[1].LevelText);
+    }
+
+    [Fact]
+    public void ARowSaysWhatCouldNotBeReadRatherThanAZero() {
+        // A wizard the database has not described yet - a launcher with no server running, or a character
+        // the server has not written a level for - is said so rather than drawn as a level 0 wizard.
+        using var bench = new Bench();
+
+        Assert.Empty(Rows(bench));
+
+        var unwritten = ProfileWizardRow.For(new LauncherProfile {
+            AccountId = AccountId,
+            Username = "jordan",
+            Wizards = [new ProfileWizard { CharId = CharId }],
+        });
+
+        Assert.Equal("Level not read yet", Assert.Single(unwritten).LevelText);
+        Assert.Equal("School not read", unwritten[0].SchoolText);
+        Assert.Equal(string.Empty, unwritten[0].LastSeenText);
+    }
 }

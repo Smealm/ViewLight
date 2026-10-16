@@ -82,7 +82,9 @@ public class ProfileStoreTests : IDisposable {
         Assert.True(File.Exists(kept));
 
         // And the bytes are the ones picked, not a name that leads nowhere.
-        Assert.Equal(new byte[] { 1, 2, 3 }, await store.ReadImageAsync(profile.AccountId, profile.AvatarFile));
+        var keptPicture = await store.ReadImageAsync(profile.AccountId, profile.AvatarFile);
+        Assert.Equal(new byte[] { 1, 2, 3 }, keptPicture.Bytes);
+        Assert.Null(keptPicture.Problem);
 
         // The banner is a separate slot: replacing one must not overwrite the other.
         var banner = await store.AdoptImageAsync(profile,
@@ -90,6 +92,27 @@ public class ProfileStoreTests : IDisposable {
 
         Assert.Equal("banner.jpg", banner);
         Assert.Equal("avatar.png", profile.AvatarFile);
+    }
+
+    [Fact]
+    public async Task ReplacingAPictureKeepsItsName() {
+        // What the screen reads a picture by is its name, and a replacement is under the same one - which is why
+        // the name alone cannot say whether the picture on screen is the current one. The screen's own count of
+        // replacements is what says so: see ProfilePictureCacheTests.
+        var store = NewStore();
+        var profile = store.GetOrCreate(42, "exampleuser");
+
+        var first = await store.AdoptImageAsync(
+            profile, _workspace.WriteFile("downloads/one.png", new byte[] { 1 }), banner: false);
+
+        var second = await store.AdoptImageAsync(
+            profile, _workspace.WriteFile("downloads/two.png", new byte[] { 2 }), banner: false);
+
+        Assert.Equal(first, second);
+        Assert.Equal("avatar.png", second);
+
+        // And the bytes behind that name are the new ones rather than the first ones left there.
+        Assert.Equal(new byte[] { 2 }, (await store.ReadImageAsync(42, "avatar.png")).Bytes);
     }
 
     [Fact]
@@ -417,7 +440,7 @@ public class ProfileLedgerTests : IDisposable {
         _ledger.ApplyDatabase(Online(at), at);
 
         Assert.True(Profile.Has("first-steps"));
-        Assert.False(Profile.Has("settling-in"));
+        Assert.False(Profile.Has("playtime-60"));
 
         // Ten seconds at a time, which is what the launcher does: an hour of play is an hour of looks.
         for (var i = 0; i < 360; i++) {
@@ -427,8 +450,8 @@ public class ProfileLedgerTests : IDisposable {
 
         Assert.Equal(3600, Profile.PlaytimeSeconds);
         Assert.Equal(1, Profile.SessionCount);
-        Assert.True(Profile.Has("settling-in"));
-        Assert.False(Profile.Has("ten-hours"));
+        Assert.True(Profile.Has("playtime-60"));
+        Assert.False(Profile.Has("playtime-600"));
     }
 }
 

@@ -131,6 +131,25 @@ public sealed class LauncherProfile {
     public bool HasBeaten(uint creatureTemplateId) => CreaturesDefeated.Contains(creatureTemplateId);
 
     /// <summary>
+    /// How many creatures this account has beaten, counted from the duels it won.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A count rather than a list, because a duel does not name what it was against. The server writes
+    /// which slots a spell reached and which slots a creature planned a turn on, and neither carries an ID:
+    /// the participant line has a debug name on it (<c>140DD</c>), not a template. So a creature counted
+    /// here is a slot on one of the creatures' circles that a spell of the player's side reached in a duel
+    /// the players won - which is what the log supports, and what the profile screen says it is. The
+    /// creatures that <i>are</i> identified, because the server named them, land in
+    /// <see cref="CreaturesDefeated"/> instead, and that list is what a boss badge needs.
+    /// </para>
+    /// <para>
+    /// Only ever added to. A creature beaten stays beaten, and nothing here is a claim about right now.
+    /// </para>
+    /// </remarks>
+    public int CreaturesKilled { get; set; }
+
+    /// <summary>
     /// How many of the creatures in <see cref="CreaturesDefeated"/> are bosses.
     /// </summary>
     /// <remarks>
@@ -142,36 +161,27 @@ public sealed class LauncherProfile {
     /// </remarks>
     public int BossesDefeated { get; set; }
 
-    /// <summary>How many of the beaten creatures the server's list has as ordinary ones.</summary>
-    public int MobsDefeated { get; set; }
-
     /// <summary>
     /// Re-counts the beaten creatures against the server's creature list.
     /// </summary>
     /// <remarks>
-    /// Both halves of the list are needed, and a creature the list does not have is counted as neither.
-    /// Calling an unlisted creature a mob because it is not among the bosses would be a claim about it,
-    /// and the only honest thing to say about one the list does not name is nothing - it stays beaten, and
-    /// it counts towards the plain duel totals, which never needed to know what it was.
+    /// A creature the list does not have is counted as nothing rather than as an ordinary one. Calling it a
+    /// mob because it is not among the bosses would be a claim about it, and the only honest thing to say
+    /// about one the list does not name is nothing - it stays beaten, and it counts towards the plain duel
+    /// totals, which never needed to know what it was.
     /// </remarks>
     /// <param name="bosses">The creatures the list names as bosses.</param>
-    /// <param name="creatures">Every creature the list has.</param>
     /// <returns>How many of the beaten creatures the list calls bosses.</returns>
-    public int ClassifyBeatenCreatures(IReadOnlySet<uint> bosses, IReadOnlySet<uint> creatures) {
+    public int ClassifyBeatenCreatures(IReadOnlySet<uint> bosses) {
         var bossCount = 0;
-        var mobCount = 0;
 
         foreach (var creature in CreaturesDefeated) {
             if (bosses.Contains(creature)) {
                 bossCount++;
             }
-            else if (creatures.Contains(creature)) {
-                mobCount++;
-            }
         }
 
         BossesDefeated = bossCount;
-        MobsDefeated = mobCount;
         return bossCount;
     }
 

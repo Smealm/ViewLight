@@ -129,11 +129,11 @@ public class ProfileBadgePresentationTests {
 
         bench.Ledger.ApplyDatabase(Database(), At);
 
-        var badge = bench.Badge("hundred-hours");
+        var badge = bench.Badge("playtime-6000");
 
         Assert.True(badge.IsLocked);
         Assert.Equal(string.Empty, badge.UnlockedText);
-        Assert.Equal("Spend a hundred hours signed in to your own server.", badge.Detail);
+        Assert.Equal("Spend 100 hours signed in to your own server.", badge.Detail);
     }
 
     // ------------------------------------------------------------ how they are gathered
@@ -228,6 +228,28 @@ public class ProfileBadgePresentationTests {
         Assert.Equal("Next milestone: level 5", fire.NextText);
         Assert.Equal("0 points earned here", fire.PointsText);
         Assert.Equal(0.6, fire.Fraction, 3);
+    }
+
+    [Fact]
+    public void TheTimePlayedCardIsNamedForTheBadgeAtItsTopOnceItIsDone() {
+        // A ladder whose last rung is a badge in its own right says so on its card, because that badge is the
+        // one thing about the ladder nobody can see: the rungs are not drawn as tiles.
+        using var bench = new Bench();
+
+        bench.Profile.PlaytimeSeconds = 1000 * 3600;
+
+        var playtime = bench.Groups.Single(g => g.Name == "Time on the server")
+            .Milestones.Single(m => m.Id == "playtime");
+
+        Assert.True(playtime.IsComplete);
+        Assert.Equal(AchievementCatalog.ThousandHoursBadge, playtime.Name);
+        Assert.Equal("Every milestone reached", playtime.NextText);
+        Assert.Equal("A milestone every 5 hours after the first one, up to 1,000 hours", playtime.StepText);
+
+        // What the card says the ladder has scored is the rungs it holds, the heap at the top included.
+        Assert.Equal(
+            bench.Badges.Where(b => b.Achievement.TrackId == "playtime" && b.IsEarned).Sum(b => b.Points),
+            playtime.Points);
     }
 
     [Fact]
@@ -354,6 +376,52 @@ public class ProfileBadgePresentationTests {
         Assert.Same(progress, groups.Single(g => g.Name == "How far you have got"));
         Assert.True(progress.IsExpanded);
         Assert.True(progress.Unlocked > before);
+    }
+
+    [Fact]
+    public void ABadgeEarnedWhileReadingSaysSoOnTheGroupHeadingAsWell() {
+        // The tiles redraw themselves - they are in an observable collection - and the heading is computed
+        // from that collection, so without a change raised for it the heading kept the numbers it had when
+        // the screen was opened. Reported as the progress bar and the "unlocked N of M" line never moving.
+        using var bench = new Bench();
+
+        bench.Ledger.ApplyDatabase(Database(), At);
+
+        var group = bench.Groups.Single(g => g.Name == "How far you have got");
+        var summary = group.Summary;
+
+        var said = new List<string>();
+        group.PropertyChanged += (_, e) => said.Add(e.PropertyName ?? string.Empty);
+
+        // A level reached while the screen is open.
+        bench.Ledger.ApplyDatabase(Database(new PlayerWizardRecord(42, 1, 12, 0, ["WC-TUT-C05-001"])), At);
+        ProfileBadgeGroup.Sync([group], bench.Groups);
+
+        Assert.NotEqual(summary, group.Summary);
+        Assert.Contains(nameof(ProfileBadgeGroup.Summary), said);
+        Assert.Contains(nameof(ProfileBadgeGroup.Unlocked), said);
+        Assert.Contains(nameof(ProfileBadgeGroup.Points), said);
+        Assert.Contains(nameof(ProfileBadgeGroup.ProgressText), said);
+        Assert.Contains(nameof(ProfileBadgeGroup.Fraction), said);
+        Assert.Contains(nameof(ProfileBadgeGroup.HasUnlocked), said);
+    }
+
+    [Fact]
+    public void AGroupThatHasNotChangedSaysNothingAtAll() {
+        // Most looks at the player database learn nothing, and a heading that announced itself every ten
+        // seconds would be a screen redrawing under whoever is reading it.
+        using var bench = new Bench();
+
+        bench.Ledger.ApplyDatabase(Database(new PlayerWizardRecord(42, 1, 12, 0, ["WC-TUT-C05-001"])), At);
+
+        var group = bench.Groups.Single(g => g.Name == "How far you have got");
+
+        var said = new List<string>();
+        group.PropertyChanged += (_, e) => said.Add(e.PropertyName ?? string.Empty);
+
+        ProfileBadgeGroup.Sync([group], bench.Groups);
+
+        Assert.Empty(said);
     }
 
     [Fact]

@@ -26,11 +26,15 @@ public sealed record ClientCopyResult(
 /// exactly as it was, so a failure leaves the user with a working game.
 /// </para>
 /// <para>
-/// <b>A Steam copy stays Steam's.</b> Copying the files does not remove the game's dependency on the
-/// Steam client: its <c>bin\steam_api.dll</c> needs Steam installed and signed in, or the game will not
-/// start wherever the files live. That is reported rather than quietly worked around, and a standalone
-/// install - which has no such dependency - is the one that makes a portable launcher genuinely stand
-/// alone.
+/// <b>A Steam copy may need Steam, and that is KingsIsle's to decide.</b> The build being served today
+/// starts without the Steam client - it has been played that way - and it carries the game's own cached
+/// copy of the patch server's files, which makes it a good thing to copy rather than a bad one. What it
+/// also carries is <c>bin\steam_api.dll</c> and <c>bin\steam_appid.txt</c>, and what that library does is
+/// KingsIsle's to change without telling anybody: a build that will not start until Steam is installed and
+/// signed in is one they can publish at any time, and a copy of it in this folder would stop working the
+/// day they do. So it is a possible dependency rather than a present one, and it is reported rather than
+/// quietly worked around - a standalone install, which ships neither file, is the copy that cannot be
+/// affected either way.
 /// </para>
 /// </remarks>
 public sealed class GameClientCopyService {
@@ -38,11 +42,18 @@ public sealed class GameClientCopyService {
     /// <summary>
     /// What a Steam source means, said once so the UI and the copy report agree.
     /// </summary>
+    /// <remarks>
+    /// Deliberately not "this will not work without Steam": it does work without it today, and telling
+    /// somebody a game they have been playing is broken is worse than saying what could change. The file
+    /// that could change it is named, so the warning can be checked against the folder it is about.
+    /// </remarks>
     public const string SteamCaveat =
-        "This is a Steam copy of Wizard101. Copying it does not remove the need for Steam: the game's "
-        + @"bin\steam_api.dll needs the Steam client installed and signed in, or it will not start however "
-        + "the files are laid out. A standalone install from KingsIsle's website has no such dependency, "
-        + "and is the one to copy if the launcher's folder is to stand on its own.";
+        "This is a Steam copy of Wizard101. It plays without the Steam client at the moment and it comes "
+        + @"with the game's own cached patch files - but it carries bin\steam_api.dll, and KingsIsle decides "
+        + "what that library does: a later build may require Steam to be installed and signed in, and this "
+        + "copy would stop working the day it does. A standalone install from KingsIsle's website ships "
+        + @"neither that library nor bin\steam_appid.txt, so it is the copy that stands on its own for "
+        + "certain.";
 
     /// <summary>
     /// Copies <paramref name="sourceFolder"/> into <paramref name="destinationFolder"/>.
@@ -84,7 +95,8 @@ public sealed class GameClientCopyService {
 
         // Copying into itself would grow without end, and copying a folder into its own parent would
         // write over the very files being read.
-        if (IsInsideOrSame(destination, source) || IsInsideOrSame(source, destination)) {
+        if (GameFolderLocator.IsInsideOrSame(destination, source)
+            || GameFolderLocator.IsInsideOrSame(source, destination)) {
             return new ClientCopyResult(false, 0, 0, destination,
                 "One of those folders is inside the other, so there is nothing sensible to copy.");
         }
@@ -183,8 +195,14 @@ public sealed class GameClientCopyService {
         return files;
     }
 
-    /// <summary>Whether the destination's drive has room, so a copy fails before it fills a disk.</summary>
-    private static bool HasRoomFor(string destination, long needed, out long free) {
+    /// <summary>
+    /// Whether the destination's drive has room, so a copy fails before it fills a disk.
+    /// </summary>
+    /// <remarks>
+    /// Shared with the update, which writes the same kind of thing into the same kind of folder and has the
+    /// same reason to look before it leaps - a check written twice is a check that will be fixed once.
+    /// </remarks>
+    public static bool HasRoomFor(string destination, long needed, out long free) {
         free = 0;
 
         try {
@@ -202,14 +220,6 @@ public sealed class GameClientCopyService {
 
         // A little headroom, so a full disk is not hit mid-write.
         return free > needed + (64L * 1024 * 1024);
-    }
-
-    private static bool IsInsideOrSame(string candidate, string folder) {
-        var a = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var b = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase)
-               || a.StartsWith(b + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Join(string? existing, string more)

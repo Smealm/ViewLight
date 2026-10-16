@@ -37,14 +37,37 @@ public interface IProfilePersistence {
     /// <summary>Writes everything. The problem is what to say when it did not work.</summary>
     bool Save(LauncherProfiles data, out string? problem);
 
-    /// <summary>A profile's picture, or <c>null</c> when it has none.</summary>
-    Task<byte[]?> ReadImageAsync(ulong accountId, string fileName, CancellationToken token = default);
+    /// <summary>A profile's picture, and why there is none when that is the answer.</summary>
+    Task<ProfilePicture> ReadImageAsync(ulong accountId, string fileName, CancellationToken token = default);
 
     /// <summary>Keeps a profile's picture under that name, replacing one that is already there.</summary>
     Task<bool> WriteImageAsync(ulong accountId, string fileName, byte[] content, CancellationToken token = default);
 
     /// <summary>Forgets a profile's picture. A picture that is not there is the outcome asked for.</summary>
     Task DeleteImageAsync(ulong accountId, string fileName, CancellationToken token = default);
+}
+
+/// <summary>
+/// What a read of a profile's picture found.
+/// </summary>
+/// <param name="Bytes">The picture, or <c>null</c>.</param>
+/// <param name="Problem">
+/// Why it could not be read, or <c>null</c> when the answer is simply that there is none.
+/// </param>
+/// <remarks>
+/// The two are not the same answer, which is the whole reason this is a pair rather than bytes alone. A
+/// profile with no picture is the ordinary case and the screen draws its initial-letter circle; a database
+/// that would not hand one back is a moment, and the screen tries again - see
+/// <c>MainWindowViewModel.LoadProfileImages</c>. Returning <c>null</c> for both is what used to leave a
+/// picture blank until the launcher was restarted.
+/// </remarks>
+public readonly record struct ProfilePicture(byte[]? Bytes, string? Problem) {
+
+    /// <summary>A profile with no picture, which is not a failure.</summary>
+    public static ProfilePicture None => new(null, null);
+
+    /// <summary>Whether there is simply no picture, rather than one that could not be read.</summary>
+    public bool IsMissing => Bytes is null && Problem is null;
 }
 
 /// <summary>
@@ -129,18 +152,22 @@ public sealed class JsonProfilePersistence : IProfilePersistence {
         }
     }
 
-    public async Task<byte[]?> ReadImageAsync(
+    /// <remarks>
+    /// A file that is not there is a profile with no picture and nothing more: there is no second copy of
+    /// this one to try, so there is nothing a later look would find that this one did not.
+    /// </remarks>
+    public async Task<ProfilePicture> ReadImageAsync(
         ulong accountId, string fileName, CancellationToken token = default) {
 
         var path = ImagePath(accountId, fileName);
 
         try {
             return File.Exists(path)
-                ? await File.ReadAllBytesAsync(path, token).ConfigureAwait(false)
-                : null;
+                ? new ProfilePicture(await File.ReadAllBytesAsync(path, token).ConfigureAwait(false), null)
+                : ProfilePicture.None;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            return null;
+            return ProfilePicture.None;
         }
     }
 
@@ -190,6 +217,21 @@ public sealed class DatabaseProfilePersistence : IProfilePersistence {
 
     private readonly LauncherDatabaseClient _client;
 
+    /// <summary>
+    /// What was last written for each profile, so a profile that has not changed is not written again.
+    /// </summary>
+    /// <remarks>
+    /// Every note the launcher learns is saved by writing the whole set, which is what makes one profile's
+    /// playtime tick cost a write of every profile there is - a document per account, one after the other,
+    /// while the launcher is holding the UI. Keeping what was written turns that back into the one document
+    /// that actually changed. Cleared whenever the notes are read again, because a read is what says what the
+    /// database holds now - which is not necessarily what this launcher put there.
+    /// </remarks>
+    private readonly Dictionary<ulong, string> _writtenProfiles = [];
+
+    /// <summary>The same, for the zone-to-world map.</summary>
+    private string? _writtenZoneWorlds;
+
     public DatabaseProfilePersistence(LauncherDatabaseClient client) => _client = client;
 
     /// <summary>Makes sure the database the notes are kept in exists.</summary>
@@ -204,6 +246,11 @@ public sealed class DatabaseProfilePersistence : IProfilePersistence {
             problem = _client.Problem;
             return null;
         }
+
+        // What the database holds now is what this read says, so what was remembered as written is no longer
+        // evidence about it: a restore from the cloud replaces documents this launcher never wrote.
+        _writtenProfiles.Clear();
+        _writtenZoneWorlds = null;
 
         var loaded = new LauncherProfiles();
         var skipped = 0;
@@ -253,26 +300,55 @@ public sealed class DatabaseProfilePersistence : IProfilePersistence {
         problem = null;
 
         foreach (var profile in data.Profiles) {
+            var document = LauncherProfileDocument.Build(profile);
+            var json = document.ToJsonString();
+
+            // Nothing about this profile has changed since it was last written, so writing it again would be
+            // the same document arriving at the same place - which the poll would do once per account per
+            // look, while the server is running and one profile's playtime is ticking.
+            if (_writtenProfiles.TryGetValue(profile.AccountId, out var written) && written == json) {
+                continue;
+            }
+
             if (!_client.WriteDocumentAsync(
-                    LauncherProfileDocument.DocumentIdFor(profile.AccountId),
-                    LauncherProfileDocument.Build(profile)).GetAwaiter().GetResult()) {
+                    LauncherProfileDocument.DocumentIdFor(profile.AccountId), document)
+                    .GetAwaiter().GetResult()) {
                 problem = _client.Problem;
                 return false;
             }
+
+            _writtenProfiles[profile.AccountId] = json;
         }
 
         // The map goes with them: it is the launcher's own note about the same server, learned the same way.
-        if (!_client.WriteDocumentAsync(ZoneWorldsDocument.DocumentId, ZoneWorldsDocument.Build(data.ZoneWorlds))
-                .GetAwaiter().GetResult()) {
-            problem = _client.Problem;
-            return false;
+        var worlds = ZoneWorldsDocument.Build(data.ZoneWorlds);
+        var worldsJson = worlds.ToJsonString();
+
+        if (worldsJson != _writtenZoneWorlds) {
+            if (!_client.WriteDocumentAsync(ZoneWorldsDocument.DocumentId, worlds).GetAwaiter().GetResult()) {
+                problem = _client.Problem;
+                return false;
+            }
+
+            _writtenZoneWorlds = worldsJson;
         }
 
         return true;
     }
 
-    public Task<byte[]?> ReadImageAsync(ulong accountId, string fileName, CancellationToken token = default)
-        => _client.ReadAttachmentAsync(LauncherProfileDocument.DocumentIdFor(accountId), fileName, token);
+    /// <remarks>
+    /// A database that would not answer is told apart from a profile with no picture: the first is worth
+    /// looking again at, and the second is the ordinary case.
+    /// </remarks>
+    public async Task<ProfilePicture> ReadImageAsync(
+        ulong accountId, string fileName, CancellationToken token = default) {
+
+        var bytes = await _client
+            .ReadAttachmentAsync(LauncherProfileDocument.DocumentIdFor(accountId), fileName, token)
+            .ConfigureAwait(false);
+
+        return new ProfilePicture(bytes, bytes is null ? _client.Problem : null);
+    }
 
     public Task<bool> WriteImageAsync(
         ulong accountId, string fileName, byte[] content, CancellationToken token = default)

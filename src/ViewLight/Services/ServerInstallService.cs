@@ -57,10 +57,24 @@ public sealed class ServerInstallService {
         return release.AssetSize <= 0 || new FileInfo(path).Length == release.AssetSize;
     }
 
+    /// <summary>
+    /// Installs or updates a server, asking the caller to stand anything down that is using the folder first.
+    /// </summary>
+    /// <param name="release">The release to install.</param>
+    /// <param name="serverPath">The install to write over.</param>
+    /// <param name="progress">Where to report progress.</param>
+    /// <param name="beforeWriting">
+    /// Called once, immediately before the first file is written over the install - and not at all if the
+    /// release never gets that far, so a download that fails costs nothing. This is where the launcher stops
+    /// the databases it runs out of the server's own <c>RavenDBServer</c> folder, because Windows will not let
+    /// a loaded DLL be replaced and an update is exactly that.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the download.</param>
     public async Task<InstallResult> InstallAsync(
         Models.ImlightRelease release,
         string serverPath,
         IProgress<InstallProgress>? progress = null,
+        Func<Task>? beforeWriting = null,
         CancellationToken cancellationToken = default) {
 
         if (string.IsNullOrWhiteSpace(serverPath)) {
@@ -103,6 +117,13 @@ public sealed class ServerInstallService {
             }
 
             // ---------------------------------------------------------- overlay (88 - 96%)
+            // The last moment this can be done: everything has been staged, so what is about to happen is the
+            // write and nothing else, and a failure before here has disturbed nothing.
+            if (beforeWriting is not null) {
+                progress?.Report(new InstallProgress(0.88, "Install", "Making way for the new files…"));
+                await beforeWriting().ConfigureAwait(false);
+            }
+
             var filesWritten = await Task.Run(
                 () => OverlayCopy(contentRoot, serverPath, progress, cancellationToken), cancellationToken)
                 .ConfigureAwait(false);
@@ -140,6 +161,11 @@ public sealed class ServerInstallService {
         }
         catch (OperationCanceledException) {
             return new InstallResult(false, release.Tag, 0, 0, "Install cancelled.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // A file that will not be written over is the one install failure a user can act on, and Windows'
+            // own sentence about it names the file rather than the thing holding it. Said properly instead.
+            return new InstallResult(false, release.Tag, 0, 0, LockedFileMessage(ex));
         }
         catch (Exception ex) {
             return new InstallResult(false, release.Tag, 0, 0, $"Install failed: {ex.Message}");
@@ -280,7 +306,7 @@ public sealed class ServerInstallService {
             var destination = Path.Combine(target, relative);
 
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(file, destination, overwrite: true);
+            CopyOver(file, destination);
             written++;
 
             if (written % 50 == 0) {
@@ -293,6 +319,49 @@ public sealed class ServerInstallService {
 
         return written;
     }
+
+    /// <summary>
+    /// Writes one file over another, waiting out a file that is busy for a moment.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The window this exists for is a real one, and it was measured rather than assumed: with a database running
+    /// out of the folder, writing over one of its DLLs fails with "the process cannot access the file ... because
+    /// it is being used by another process"; <c>EmbeddedRaven.StopAsync</c> then takes about 180 ms, and the file is
+    /// not writable for about 110 ms more after that. The wait below is roughly ten times that, so the ordinary
+    /// case never notices it.
+    /// </para>
+    /// <para>
+    /// A hold that outlives the wait is a different thing - the server itself is running, or another launcher has
+    /// the folder - and is reported as one by <see cref="LockedFileMessage"/> rather than retried for ever.
+    /// </para>
+    /// </remarks>
+    private static void CopyOver(string source, string destination) {
+        const int attempts = 8;
+
+        for (var attempt = 1; ; attempt++) {
+            try {
+                File.Copy(source, destination, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (attempt < attempts && ex is IOException or UnauthorizedAccessException) {
+                Thread.Sleep(150);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A file that would not be replaced, said in a way that names what to do about it.
+    /// </summary>
+    /// <remarks>
+    /// The launcher stops its own databases before it writes, so what this is describing is something else: the
+    /// server itself running, and holding the very binaries the update came to replace. Naming that is the whole
+    /// point - "the process cannot access the file" sends a user looking at the file, and the answer is a button
+    /// on the same screen.
+    /// </remarks>
+    internal static string LockedFileMessage(Exception ex)
+        => "A file in the server folder is in use by another process, so the update could not replace it "
+           + $"({ex.Message}). If Imlight is running, stop it and press Download latest again.";
 
     private static void TryDeleteDirectory(string path) {
         try {

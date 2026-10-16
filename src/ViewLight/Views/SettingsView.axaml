@@ -632,6 +632,75 @@
                        Text="Portable mode keeps ViewLight's settings, the server and the game in the folder it is run from, so the whole thing can be moved to another drive and still work. A Steam copy of the game still needs Steam installed to launch, because that is the game's own dependency rather than ViewLight's; a standalone install copied in has no such requirement." />
           </StackPanel>
         </StackPanel>
+      </Border>          <!-- ==================================================== the cloud backup
+           A copy of the two databases that cannot be downloaded again - the launcher's own notes and the
+           server's RavenDB - kept in the user's own Google Drive, in the app's private folder. Off until it
+           is turned on here; nothing is copied while a database is held open, which is why a sync stops the
+           launcher's databases first, why the server itself has to be down, and why the pages that write to
+           them are turned off for the moment it takes. -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Cloud backup" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="A safety net for the data that cannot be downloaded again: the accounts, the wizards, the profiles, the playtime and the badges. It is kept in your own Google Drive, in a folder belonging to ViewLight that you cannot see in Drive and that cannot reach any other file. The game's files, the client, the server binaries and the cached downloads are not backed up - those can be fetched again." />
+
+          <CheckBox Content="Keep a backup in my cloud drive"
+                    IsChecked="{Binding BackUpToCloud, Mode=TwoWay}" />
+
+          <!-- The one question about signing in, and it is whose Google app does it: ViewLight's own, which
+               needs nothing set up but is not offered until this build carries a client, or one the user
+               registered themselves. Everything below follows from the answer. -->
+          <StackPanel Spacing="6" IsVisible="{Binding BackUpToCloud}">
+            <TextBlock Classes="label" Text="Sign in with" />
+
+            <RadioButton GroupName="CloudSignIn"
+                         Content="My own Google app (bring your own)"
+                         IsChecked="{Binding UsesOwnGoogleClient, Mode=TwoWay}" />
+
+            <RadioButton GroupName="CloudSignIn"
+                         Content="ViewLight's built-in Google sign-in"
+                         IsEnabled="{Binding HasBuiltInGoogleClient}"
+                         IsChecked="{Binding CloudBackupUsesBuiltInClient, Mode=TwoWay}" />
+
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="{Binding BuiltInClientNotice}" />
+          </StackPanel>
+
+          <StackPanel Spacing="4" IsVisible="{Binding UsesOwnGoogleClient}">
+            <TextBlock Classes="label" Text="Google client id" />
+            <TextBox Text="{Binding CloudBackupClientId, Mode=TwoWay}"
+                     Watermark="…apps.googleusercontent.com" />
+            <TextBlock Classes="label" Text="Client secret" />
+            <TextBox Text="{Binding CloudBackupClientSecret, Mode=TwoWay}" PasswordChar="•" />
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="Register an OAuth client once (the readme says how) and paste its id here. Which type it is decides whether the secret is needed: a Desktop-app client is bound to the redirect by a PKCE verifier and needs no secret, while a Web-application client has to send its own secret on every call and Google refuses it without one - so paste the secret too if the client is a Web application. Spaces and line breaks around either value are stripped before they are used, so a copy straight out of the Cloud console is fine. Both are kept in ViewLight's own settings on this machine, never sent anywhere but Google." />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding BackUpToCloud}">
+            <Button Classes="accent" Content="Sign in to Google Drive"
+                    Command="{Binding SignInToCloudCommand}"
+                    IsEnabled="{Binding CanSignInToCloud}" />
+
+            <!-- The way back from a sign-in that is being waited on. Closing the browser window the sign-in
+                 opened leaves nothing for the launcher to receive, and there is nothing in the browser that can
+                 tell it so - so the wait is stopped from here rather than sat out. -->
+            <Button Content="Cancel sign-in" Command="{Binding CancelCloudSignInCommand}"
+                    IsVisible="{Binding CanCancelCloudSignIn}" />
+            <Button Content="Sign out" Command="{Binding SignOutOfCloudCommand}"
+                    IsVisible="{Binding IsCloudBackupSignedIn}" />
+            <Button Content="Back up now" Command="{Binding BackUpNowCommand}"
+                    IsEnabled="{Binding IsCloudBackupSignedIn}" />
+            <Button Content="Restore from the cloud" Command="{Binding RestoreFromCloudCommand}"
+                    IsEnabled="{Binding IsCloudBackupSignedIn}" />
+          </StackPanel>
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Backing up or restoring stops the launcher's databases for a moment - RavenDB locks its data directory, so nothing can be copied while anything has it open - and starts them again afterwards. Settings and profile changes are paused while that lasts, and a sync never runs while the server is up. It also runs by itself three times: when ViewLight starts, just before the server is started, and when the server stops. The ordinary one finds both sides already agree, and says nothing." />
+
+          <TextBlock Classes="status" Text="{Binding CloudBackupStatus}"
+                     IsVisible="{Binding HasCloudBackupStatus}" />
+        </StackPanel>
       </Border>
 
     </StackPanel>

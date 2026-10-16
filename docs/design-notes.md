@@ -46,10 +46,11 @@ build onto disk, editing `Imlight.ini` by hand, and remembering to start the ser
 
 - Windows (the Wizard101 client is Windows-only; Steam detection reads the Windows registry)
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) to build; the app targets `net10.0`
-- **A machine .NET runtime with ASP.NET Core**, which is what the launcher's own database runs in: the
-  RavenDB the server ships is framework-dependent even though Imlight's own build is not. Checked on the
-  first screen rather than discovered at a database that will not start, so a machine without one is told
-  what it needs instead of being left with an empty profile screen
+- **A .NET runtime the launcher's own database can run in**, which the release carries beside the
+  executable and a build from source does not: the RavenDB the server ships is framework-dependent even
+  though Imlight's own build is not. The copy beside the launcher is used, a machine-wide install is what
+  it falls back to, and the first screen names what is missing when neither has it - checked there rather
+  than discovered at a database that will not start
 - An Imlight install - the launcher stands down without one, and says so rather than showing a Home screen
   whose only working button is a download
 - A Wizard101 client you obtained yourself - Imlight is BYOD and ships no game files
@@ -111,7 +112,7 @@ fixed in:
 | `Config\Imlight.ini` in it | That is what "installed" means everywhere else in the launcher. |
 | `Imlight.Director.exe` | Play starts it. |
 | `RavenDBServer\Raven.Server.dll` | The database the launcher's own data lives in. |
-| The .NET runtime that database asks for | Because that database is framework-dependent (below). |
+| A .NET runtime that database can run in | It is framework-dependent, so something has to provide one: the runtime shipped beside the launcher, or a machine-wide install (below). |
 
 The screen says which piece is missing in a sentence, keeps the folder box so another folder can be
 pointed at, offers the download, and has **Check again** for somebody who installed .NET or copied an
@@ -131,25 +132,29 @@ without starting the server. Without it, somebody who installed .NET would get t
 own database still shut until the next run - the gate would have lifted and nothing else would have
 changed. The button is still not a *Play*: nothing here starts Imlight.
 
-**The .NET runtime is part of the requirement, which is not obvious.** Measured on a real install:
+**A .NET runtime has to come from somewhere, and it is not obvious why.** Measured on a real install:
 Imlight's Windows build is *self-contained* (`Imlight.Director.runtimeconfig.json` has
 `includedFrameworks`, with `coreclr.dll` and `hostfxr.dll` beside it), so Imlight itself needs nothing from
 the machine. The RavenDB inside it is the other way round: `RavenDBServer\Raven.Server.runtimeconfig.json`
 names `Microsoft.NETCore.App` **and** `Microsoft.AspNetCore.App` as shared frameworks, and that folder
-holds 198 DLLs with no ASP.NET Core among them. `EmbeddedRaven` starts it with a machine `dotnet`, so a
-machine-wide runtime has to exist and has to have the frameworks the database asks for. What it asks for is
-read from that file rather than hard-coded, and the rule is the runtime's own roll-forward: the same
-framework, the same major, a version at least as high. An Imlight that ever shipped the database
-self-contained would need nothing here and the screen would not ask for anything.
+holds 198 DLLs with no ASP.NET Core among them. `EmbeddedRaven` starts it with a `dotnet` host, so a
+runtime has to exist and has to have the frameworks the database asks for. What it asks for is read from
+that file rather than hard-coded, and the rule is the runtime's own roll-forward: the same framework, the
+same major, a version at least as high. An Imlight that ever shipped the database self-contained would
+need nothing here and the screen would not ask for anything.
 
-What that means for a user is the point of the screen rather than a consequence to soften. The launcher's
-own release is self-contained, so a machine with no .NET at all still **starts** - the launcher, the
-folders question, and this screen all work - and only the server's database is what cannot run. The screen
-uses that shape deliberately: it says the launcher itself starts without .NET, names the frameworks the
-database asked for, and links to the version's page, so a machine missing one dependency is walked through
-it instead of meeting a launcher that never appears, does nothing, or dies with an error nobody can read.
-Nothing starts a database before that screen is satisfied: holding one open for a launcher nobody can use
-is work for nothing.
+**Where that runtime comes from is the launcher's own release, not the user's machine.** The release puts a
+whole .NET installation in a `runtime` folder beside the executable and the database is started with that
+- see [task 16](#16-the-runtime-ships-with-the-launcher-so-nothing-has-to-be-installed---done), which is
+where the choice between the two lives. So the screen above is what is left for the cases where neither
+works out: a build from source, which carries no runtime, and a machine with none installed either. The
+launcher itself still **starts** on a machine with no .NET at all - the launcher, the folders question, and
+this screen all work - and only the server's database is what cannot run. The screen uses that shape
+deliberately: it says the launcher itself starts without .NET, names the frameworks the database asked for,
+and links to the version's page, so a machine missing one dependency is walked through it instead of
+meeting a launcher that never appears, does nothing, or dies with an error nobody can read. Nothing starts
+a database before that screen is satisfied: holding one open for a launcher nobody can use is work for
+nothing.
 
 **One state that is now unreachable, kept anyway.** Home's one button used to say *Download server* where
 there was no server, and it is what downloaded one. It cannot any more - the launcher does not show Home
@@ -678,6 +683,30 @@ whether Home shows a row for it, and whether a session's files may be copied int
 the server, and stop it with the server* (`PatchServerManaged`) is left to mean exactly that, the process
 and nothing else.
 
+**Asked once, on a fresh install, between the server arriving and Home.** *Whose patch server* is the one
+question in the launcher that nobody was ever asked, and leaving it unasked had a consequence rather than a
+default. A fresh machine had `UseLocalPatchServer` on with nothing installed to be it, so
+`PatchServerIsThisMachines` was false, `ApplyPatchServerToConfig` left Imlight's address exactly as its
+config had it - the public one, once `ServerConfigRepair` had replaced the stock localhost address nothing
+was listening on - and every session quietly depended on a connection for the game's own files. What that
+costs is not subtle once the game is played offline: a zone, a creature, or a single asset the machine has
+never cached cannot be fetched, and a session asked for one is stuck there.
+
+So the launcher asks, on a screen of its own after the Imlight download:
+
+| Answer | What the launcher does | What it costs |
+| --- | --- | --- |
+| This machine's own - the default, and the one the screen argues for | downloads `aurorium.exe` there and then, into `LauncherPaths.DefaultPatchServerPath`, and Play starts it and points Imlight at it | about 9 MB, and then the patch server's own first start - which is where the revision's file list, the fetch, and the offer to be handed the game's files instead all belong |
+| The public patch server | nothing: Imlight keeps the address its config already has | a connection whenever the game wants something it has not already cached |
+
+Asked only where there is something to answer. `PatchServerChoiceAnswered` records that the question was
+put, and the screen is gated on all three of *the folders are known*, *Imlight is installed*, and *it has
+not been answered yet* - so a machine that already has a patch server is never stopped by it (installing one
+is an answer), and a launcher is never asked twice. *Continue* is only available for the public answer or for
+a local patch server that is genuinely installed, because an answer of *mine* with nothing to be it is not an
+answer at all. Nothing is started from the screen: the first start, the fetch and the copy offer stay where
+they were, in Play - which is also what keeps this a question rather than a download that begins by itself.
+
 **The mirror only ever asks this machine's patch server**, because that is the one it has an address for:
 `GET /revisions` goes to `LocalPatchServerUrl`. With a remote patch server in use the switch therefore has
 nothing to read and does nothing - which is a limit rather than a decision, and is recorded in
@@ -1047,12 +1076,14 @@ gives a locally earned level its weight: nobody handed it out.
 **Score, ladders and the clean bonus.** A badge's worth comes from its difficulty (10, 25, 50 or 100), and
 the total is summed from the catalog rather than stored - so a badge can be re-priced without rewriting
 anybody's profile, and an id the catalog no longer knows cannot add points to a total no screen could
-explain. Three ladders are *generated* rather than written out: one rung per school per five levels, up to the
-server's own `Character.MaxLevel`; one per ten duels won; and one per twenty-five ordinary creatures beaten,
-up to the size of the server's own creature list. Generated because a run of near-identical rows is exactly
+explain. Four ladders are *generated* rather than written out: one rung per school per five levels, up to the
+server's own `Character.MaxLevel`; one per ten duels won; one per twenty-five creatures beaten, to a fixed top
+rung, because that ladder counts kills rather than different creatures (task 11); and one for the time played - half an hour, an hour, and
+then five hours at a time to a thousand, whose last rung is the badge **Wizard of a Thousand Hours** rather
+than one more rung (task 12). Generated because a run of near-identical rows is exactly
 where a gap or a repeated level hides, and because the top of a ladder is the server's to decide rather than
-the launcher's to assume (`AchievementCatalog.UseMaxLevel` and `UseCreatureCount` are called with what the
-server itself says; the rungs above a wizard's own cap never come up).
+the launcher's to assume (`AchievementCatalog.UseMaxLevel` is called with what the server itself says; the
+rungs above a wizard's own cap never come up).
 
 The rungs are badges - they are what is earned, stored, logged and scored - but they are **shown as one
 milestone card per ladder**, not as a tile each. Forty rungs per school as forty badges is a wall nobody
@@ -1098,6 +1129,11 @@ names cannot answer.
 - a **world** is known only once the server has been watched loading a zone of it, because that is the only
   place the two are ever said together - so a world nobody has been near is not offered a badge, and a zone
   the server only numbers is never attributed to one at all;
+- a **creature** beaten is counted from the duel itself - a creature's circle a spell of the players' side
+  reached, in a duel the players won, one per creature in it (task 11). Which of a duel's creatures was a
+  **boss** is the server's own `creature.manifest`'s answer, and that file does not exist, so the boss badges
+  are the ones still waiting; a creature nothing reached is not counted at all, and neither is one that never
+  planned a turn before it died;
 - a wizard's *name* is not in the database as text (Imlight stores the indices it was built from, resolved
   through the game's own name tables), so a name comes from the log when that names the wizard signing in,
   and otherwise from `Root.wad` when a game folder is known. A character neither source can name is shown by
@@ -1156,6 +1192,15 @@ banner as attachments on its own document - so one directory is the whole of the
 is a file that can be lost on its own. Downloaded archives and extraction scratch space live alongside both.
 In portable mode all of it sits in the launcher's own folder instead - see below.
 
+**The server folder is not one of those places.** Imlight's install folder holds what Imlight put there, and
+the only thing the launcher writes into it is `Config\Imlight.ini` - the file Imlight expects an outside tool
+to edit - plus the release overlay when it is installing or updating Imlight, which is the launcher doing its
+job rather than keeping something of its own. Its settings, profiles, notes database, art cache, downloads
+and staging are all under `%LOCALAPPDATA%\ViewLight`, or in the launcher's own folder in portable mode. The
+one exception used to be that its own database was *run* out of `<server>\RavenDBServer`, which is what broke
+an update; it now has its own pruned copy of that engine, `ravendb\` beside `database\` - see
+[task 18](#18-the-launchers-own-data-stops-borrowing-the-servers-files---done).
+
 ## Portable mode
 
 The launcher is portable when a `portable.txt` file sits next to its executable; **Settings → Portable
@@ -1192,22 +1237,50 @@ a Wizard101 install, refuses when either folder is inside the other (copying a f
 grow without end, and into its own parent would overwrite the files being read), and never touches the
 source install, so a failure leaves the user with a working game.
 
-### A Steam copy stays Steam's
+**A finished copy is read where it landed, and is not offered again.** Two things went wrong on the first
+real portable setup, and both came from the same place: the launcher only re-reads the folder when something
+tells it to. A portable launcher starts out pointed at its own `game` folder - that is the default in
+`LauncherSettingsStore.CreateDefault` - so a copy writing into that folder is **no change of path at all**.
+`ClientPath = result.Destination` was therefore a no-op, nothing re-checked anything, and Settings went on
+reporting *root.wad was not found in the selected game folder* and *bin\WizardGraphicalClient.exe was not
+found here* about a folder that had just been filled with both, until the folder was set by hand.
+`CopyGameIntoPortableAsync` now calls `RefreshClientState()` on the way out for exactly that reason - the
+update path in `MainWindowViewModel.ClientUpdate` already did, which is what made the gap visible by contrast
+- so the copy is read where it landed and the status lines are about the folder as it now is.
 
-This is the caveat that matters, and it is deliberately reported rather than worked around:
+**And the card could not stop asking, because it was gated on saying something as well as doing something.**
+`ShowPortableClientCard` was `PortableNeedsClient || IsCopyingGame || HasCopyGameMessage`, and the message is
+what is left after a copy finishes: a card headed *copy your game into this folder*, offering to make a copy
+that is already there. The ask is now its own property (`ShowPortableClientPrompt`) with its own heading
+(*your game is already in this folder* once the copy is in), so what remains when there is a game in the
+folder is the line reporting how the copy went. Nothing is hidden that should be seen: a copy that has fallen
+behind the machine's install is a different card entirely - that is a game which *is* here and wants
+replacing - and the two cannot be mistaken for each other.
 
-> A Steam copy of Wizard101 loads its own `bin\steam_api.dll`, which talks to the Steam client. Copying
-the files does not remove that dependency: with no Steam client installed and signed in, the game will
-not start, however the files are laid out. A standalone install from KingsIsle's website ships neither
-that library nor `bin\steam_appid.txt`, and so has no such dependency.
+### A Steam copy may need Steam, and that is KingsIsle's call
 
-Launch arguments do not help here. The client's `-ST` is Imlight's way of being *told* that an account is
-a Steam one - it is what a Steam-linked account needs to sign in to Wizard101's own server, and what a
-standalone account must not be sent - so it is about which server will accept the account, not about
+The Steam build is worth copying rather than a thing to avoid, and the first version of this warning had
+that backwards. It starts with no Steam client running, and it arrives with the game's own cached patch
+files - a head start for a patch server on the same machine that nothing else offers. What makes it worth a
+warning is the other half of the same file:
+
+> This is a Steam copy of Wizard101. It plays without the Steam client at the moment and it comes with the
+> game's own cached patch files - but it carries `bin\steam_api.dll`, and KingsIsle decides what that library
+> does: a later build may require Steam to be installed and signed in, and this copy would stop working the
+> day it does. A standalone install from KingsIsle's website ships neither that library nor
+> `bin\steam_appid.txt`, so it is the copy that stands on its own for certain.
+
+So it is a *possible* dependency rather than a present one, and the wording says which. The earlier version
+said the game would not start without Steam, which is wrong about the build in front of the user and reads as
+a launcher reporting a game somebody is already playing as broken - and the file that could change it is
+named, so the warning can be checked against the folder it is about.
+
+Launch arguments do not help here, either way. The client's `-ST` is Imlight's way of being *told* that an
+account is a Steam one - it is what a Steam-linked account needs to sign in to Wizard101's own server, and
+what a standalone account must not be sent - so it is about which server will accept the account, not about
 whether Steam has to be present. `GameFolderLocator.IsSteamInstall` recognises such an install by
-`bin\steam_api.dll` or `bin\steam_appid.txt`, and `GameClientCopyService.SteamCaveat` is reported before
-the copy starts and again when it finishes, so nobody concludes that copying the files was enough. The
-honest recommendation is to copy a standalone install and to leave a Steam copy where Steam put it.
+`bin\steam_api.dll` or `bin\steam_appid.txt`, and `GameClientCopyService.SteamCaveat` is reported wherever a
+copy or an update is offered from one, so nobody has to find this out from a game that stopped starting.
 
 ## Tests
 
@@ -1215,7 +1288,7 @@ honest recommendation is to copy a standalone install and to leave a Steam copy 
 dotnet test ViewLight.slnx
 ```
 
-669 tests covering the parts most likely to break quietly: INI round-tripping and merging (including
+849 tests covering the parts most likely to break quietly: INI round-tripping and merging (including
 unknown sections such as `[CrownShop]` surviving an update), the KIWAD
 reader, game folder detection and the too-deep-path migration, free port selection, release selection,
 item list parsing, the starter kit limits, the config repairs and the live loopback probe that decides
@@ -1275,7 +1348,15 @@ playtime and session counting across polls (including a gap between two of them 
 attribution refusing to hand a win to nobody in particular, badges never granted twice and never taken back
 by a later read that has not caught up, wizards, quests and the command log read from the database, which
 remembered accounts may be shown and which may not, and the words the screen uses when there is no profile
-to show.
+to show. Also, and each of these is a fault found by using the launcher rather than by reading it: a school
+read in either spelling the server writes it in (its template id, and the enum's name, which is what a real
+database holds), a duel's creatures read from the slots they planned turns on and its spells from the slots
+they reached, the same sigil fought twice writing the same duel id and starting from nothing the second time,
+a creature's own spell crediting nothing, a duel won with no creature line in it crediting nothing, and kills
+surviving a restart - a group heading announcing
+its own numbers when they move and staying silent when they do not, the rows the profile screen draws a
+wizard from being values that move when the wizard does, and the time played ladder's rungs, its named top
+rung, and that the heap at the top is the one badge in the catalog not priced by its difficulty.
 
 **Where those notes are kept is covered as a pair rather than as a database.** `IProfilePersistence` has two
 implementations - the database the launcher uses, and the file the suite builds stores over and an older
@@ -1288,10 +1369,13 @@ own five rules - a file with profiles in it, a file with nothing in it, a file t
 that has already happened, and a file that turns up after one has - and the last two are checked against a
 real database rather than only against a fake one.
 
-The Imlight requirement - the launcher's first screen, and the rule behind it - is covered by sixteen tests
-of its own: which piece each gap reports, that a database carrying its own runtime asks a machine for
-nothing at all, that a framework-dependent one asks for exactly what its own file names, the roll-forward
-rule that decides whether a machine can run it, the shape of a `--list-runtimes` listing, that the .NET
+The Imlight requirement - the launcher's first screen, and the rule behind it - is covered by twenty-six
+tests of its own: which piece each gap reports, that a database carrying its own runtime asks nothing of
+anything, that a framework-dependent one asks for exactly what its own file names, the roll-forward rule
+that decides whether a runtime can run it, the shape of a `--list-runtimes` listing, which of the two
+runtimes is chosen when both are there and when only one of them fits (`BundleWith` decides what each one
+offers, and a build that ships a runtime is not allowed to turn on whose machine this is), what a short
+runtime is told - that it is the shipped one and that a machine-wide install is the fix - that the .NET
 gaps carry the steps to install it while the gaps this screen fixes itself carry none, and the launcher
 standing down the moment an install appears - no restart, no stale answer. The screen itself was checked in
 a real window, there being no view test in the suite to do it: it covers the whole window, no navigation
@@ -1472,6 +1556,17 @@ up later starts there.
   under the player.
 - **Updating Aurorium while it runs.** The install stops it first, because Windows will not replace a
   running executable.
+- **Switching to portable mode does not move what is already there.** Turning it on points the launcher at
+  folders inside its own folder and downloads a server and a patch server into them; the ones that were
+  already installed elsewhere are left where they are, and turning it off again leaves the portable ones
+  behind in the same way. On the machine this was first reported from that meant two complete server installs
+  (the one in `%LOCALAPPDATA%\ViewLight` and the portable one), each with its own `Imlight.ini` and its own
+  database, which is several hundred megabytes and two things that can drift apart. Moving rather than
+  copying is not obviously right either - it is the user's install, and there are two answers (move it, or
+  keep both and say so) - so the work is: offer the choice when the mode changes, do the move when it is
+  wanted, and end any process left running out of the folder being left behind either way. See
+  [task 17](#17-an-update-replaces-the-servers-files-which-means-letting-go-of-them-first---done) for why it
+  is not the same bug as a file that is in use.
 
 Three entries that used to sit here have been done and are recorded above rather than deleted: the
 **game-first Home screen** (banner, hero Play button, status demoted to one strip), a **wizard's name and
@@ -1525,6 +1620,7 @@ users hit them on a first run and would otherwise read them as the launcher's fa
 | A server that has never booted has no accounts at all | There is no player database yet, so there is nothing to list, nothing to sign in as, and nothing to type `.account create` as. The admin account in `Imlight.ini` is what creates that database on the first boot, so a server has to be started once before any account exists |
 | The administrator password in `Imlight.ini` is not the one the account has | Imlight creates that account once and never applies a later password change to it, so the account keeps the password it was made with. The launcher puts the configured one on it whenever it reads the database, and says so under **Settings → Administrator account** - without that, the password on the screen was not one anything would accept. That write is the one instance left of the overstep the account card was removed for: it is waiting on a decision rather than on code, and is recorded in [To be added](#to-be-added) |
 | The first boot downloads its assets and can then stop by itself | Nothing in the launcher's own startup path: the Director fetches `Root.wad` (about 281 MB) and dies after the fetch, unreproduced. Pressing **Play** again boots it normally, and it has not been seen to recur after a successful first boot |
+| No boss badge moves, however many duels are won | **`manifests/creature.manifest` never gets written.** The launcher reads it, and would rather read it than guess - it is what says which creatures are bosses - but the file is written by `Imlight.Director`'s `ManifestGenerator`, and **nothing in Imlight ever constructs it**: the class is `internal`, its constructor is `internal`, and there is no `new ManifestGenerator()` anywhere in the source. It is a generator that has to be wired to a call before the file it writes can exist, and until then the launcher's own screen says the list is missing rather than counting nothing quietly (`ProfileBossesText`). Creature kills themselves no longer wait on it: they are counted from the duel's own lines (task 11) |
 | A new zone is slow to load | The zone's assets come from the patch server, and the public one is a community machine rather than KingsIsle's infrastructure. The server is local; the assets are not - running the launcher's own patch server is what fixes this, once it has finished its first fetch |
 | `404 (Not Found)` downloading `Root.wad` from a `127.0.0.1` patch server | One of two things. Either the local patch server has not finished fetching that revision yet - its first minutes, and the honest answer is to leave it running - or it holds the revision Wizard101 currently offers while `GameRevision` pins the server to an older build, which has a fix rather than a wait: **Make the server accept the patch server's revision** - see [running one instead of visiting one](#running-one-instead-of-visiting-one). The launcher does not redirect the session for either of them: the address it was given is the address Imlight keeps |
 | `TcpListener for Imlight.Patch on port 12500 failed` | Imlight's **own** patch listener (`PatchServerPort`, the one the *client* talks to) could not bind, which means something else already holds that port: a previous Imlight still running, or the launcher's patch server configured to the same port. The launcher's card warns about the second; the first is a leftover the leftover-server guard normally clears |
@@ -1543,23 +1639,51 @@ launcher is: a proof of concept that is played with rather than depended on.
 is the only copy of it: About reads the number off the assembly, and a build with no `Version` property
 reports `1.0.0` by the SDK's own default - which is what the first build did. It is bumped by hand when a
 build is published, and the tag and the release are named after it, so the number in the window, the number
-on the release and the commit that produced both agree. `v1.0.0` was the first build; `v1.1.0` is the one
-that adds the patch server, the launcher's own database, and the screen that stands down when Imlight or
-the runtime it needs is missing.
+on the release and the commit that produced both agree. `v1.0.0` was the first build; `v1.1.0` adds the
+patch server, the launcher's own database, and the screen that stands down when Imlight or the runtime it
+needs is missing; `v1.2.0` adds the cloud backup, the live profile and achievement updates, and the runtime
+the launcher carries rather than asks for.
 
-The build shipped in a release is produced by exactly two commands:
+**Three accounts of every build, for three different readers.** `CHANGELOG.md` is the plain one - per
+release, what was added, changed, fixed and removed, in the language of somebody who uses the launcher
+rather than somebody who changes it. The release notes on GitHub are the sales pitch, screenshots and all.
+This file is the third, and the only one that says *why*. The readme is the manual, and it was rewritten for
+this build to be one: shorter, plainer, and stripped of the reasoning that belongs here instead. The four
+are meant to agree, which is something to check when a build is published rather than something that keeps
+itself true.
+
+The build shipped in a release is produced by exactly these commands:
 
 ```bash
 dotnet publish src/ViewLight/ViewLight.csproj -c Release -r win-x64 --self-contained true -o publish
+curl -fsSL https://dot.net/v1/dotnet-install.ps1 -o .tmp/dotnet-install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .tmp/dotnet-install.ps1 -Runtime aspnetcore -Channel 10.0 -InstallDir publish/runtime
 7z a ViewLight-win-x64.zip ./publish/*
 ```
 
-**Self-contained on purpose.** The launcher's audience is people who want to play a private Wizard101
-server without first installing a development toolchain, so the zip carries its own runtime and needs
-neither .NET nor administrator rights *for the launcher itself*. The one thing it does ask a machine for is
-the runtime its own database runs in - a consequence of keeping the notes in the RavenDB the server already
-ships, and the reason the first screen checks for it rather than the profile screen failing later. The cost is size, and it is worth paying here: every alternative
-ends in "install the .NET 10 desktop runtime" instructions on a page that wanted one button.
+The two in the middle are the runtime the database in the launcher's own folder runs in:
+[dotnet-install](https://dot.net/v1/dotnet-install.ps1) writes a real .NET installation - the host, and
+`shared/Microsoft.NETCore.App` and `shared/Microsoft.AspNetCore.App` under it - into `publish/runtime`
+without touching the machine it runs on, which is exactly the layout `DotnetHost` looks for. Three choices
+in there are deliberate: `powershell` rather than `pwsh`, because every Windows has the first and the
+script needs nothing newer; `aspnetcore` rather than `dotnet`, because ASP.NET Core is what carries both
+frameworks the database names; and a channel rather than a pinned version, because what the database is
+matched by is the runtime's own roll-forward, so a newer patch of the same major is a match.
+
+**Self-contained on purpose, and now truly so.** The launcher's audience is people who want to play a
+private Wizard101 server without first installing a development toolchain, so the zip carries its own
+runtime and needs neither .NET nor administrator rights. Bundling a *second* runtime looks like paying for
+that twice, and it is the only part of this that was worth arguing about: the runtime the launcher is
+published into cannot be borrowed, because the database is a framework-dependent application and what it
+resolves frameworks out of is an installation layout - a host and `shared/` - rather than a folder of
+DLLs. So the honest choices were "ask the user for a runtime" (which is what this used to do, and what the
+first screen was for) or "ship a second copy of one". The second copy is 107 MB on disk against a launcher
+that publishes at 104 MB - a zip of 43.0 MB becoming 87.6 MB, both measured - and it buys the thing the
+whole project is for: unpack the zip, run the exe, and nothing has to be installed first. The cost is
+size, and it is worth paying here: every alternative ends in "install the .NET 10 desktop runtime"
+instructions on a page that wanted one button. `v1.2.0` is the first build that carries one, and the zips before
+it - `v1.1.0` and earlier - carry no `runtime` folder and still ask the machine for one, which is what
+the first screen is for.
 
 The zip root *is* the launcher folder, and that is deliberate rather than incidental - it is what makes
 `portable.txt` work. A user can unpack the zip beside a `portable.txt` marker (or an empty file of that
@@ -1578,8 +1702,8 @@ show rather than after the file names they arrived with.
 
 ## To be added
 
-Five changes that came out of *using* the launcher rather than out of reading its code, written down here
-in the order they will be done. Each one records the reason as much as the job - they came out of a
+Twenty-one changes that came out of *using* the launcher rather than out of reading its code, written down
+here in the order they will be done. Each one records the reason as much as the job - they came out of a
 conversation, and a later reader should be able to finish any of them without having it again. The finished
 ones stay in the list and point at the section above that now describes the rule properly, which is the same
 habit [Not done yet](#not-done-yet) keeps.
@@ -1660,11 +1784,14 @@ else ever opens this one - so the launcher can hold it open for as long as it ru
 
 **The one premise of that decision that did not hold, and what came of it.** "No new dependency to ship"
 is true of *binaries* and false of *runtime*: the database is a framework-dependent application, and the
-install it comes out of is self-contained, so what the launcher actually depends on is a machine-wide .NET
-runtime with the frameworks the database names. That was measured against a real install and written up
-under [Imlight is a requirement](#imlight-is-a-requirement-and-the-launcher-stops-and-says-so). The user
-chose to keep the engine and make the runtime part of the requirement, which is why that screen exists and
-why it checks the runtime rather than discovering it later at a database that will not start.
+install it comes out of is self-contained, so what the launcher depends on is a .NET runtime with the
+frameworks the database names. That was measured against a real install and written up under
+[Imlight is a requirement](#imlight-is-a-requirement-and-the-launcher-stops-and-says-so). The first answer
+was to make the runtime part of the requirement and have the first screen ask for it. That answer did not
+last: asking a user to install a runtime so that a launcher they unpacked can keep notes about a game is a
+step that should not be there at all, and it is the one step a bundling step in the release can delete -
+which is what [task 16](#16-the-runtime-ships-with-the-launcher-so-nothing-has-to-be-installed---done) did.
+The premise now holds: the launcher's own data has no dependency that is not in its own zip.
 
 **Decided while starting it.** The profile images - `profiles/<account id>/avatar.png` and its banner -
 become **attachments on the profile document** rather than files beside the database. A file is what a
@@ -1730,9 +1857,11 @@ to a database would have two answers to every question and no way to know which 
 when the database answers, which is also when the ledger re-reads the learned worlds it took a copy of while
 the store was still empty.
 
-**The pictures are attachments on the profile document.** `ProfileStore.ReadImageAsync` hands back bytes for
-the screen to decode, replacing the path it used to resolve and the profile screen used to read off disk; a
-picture now exists for exactly one profile, travels with it, and is part of a backup of the directory. The
+**The pictures are attachments on the profile document.** `ProfileStore.ReadImageAsync` hands back the bytes
+for the screen to decode and why there are none when that is the answer (`ProfilePicture`), replacing the path
+it used to resolve and the profile screen used to read off disk; a picture now exists for exactly one profile,
+travels with it, and is part of a backup of the directory. What the screen does with the two answers is task 7
+below. The
 file implementation keeps its pictures as files and leaves a forgotten one where it is, which is the one
 place the two differ and is written down in `DeleteImageAsync`.
 
@@ -1786,7 +1915,7 @@ file that turns up later, out of an old backup, is not notes this launcher has n
 copy of notes the database already has, and it is left alone. That is checked against a real database, not
 only against a fake one.
 
-### 5. A cloud backup of the few databases that matter - *not started*
+### 5. A cloud backup of the few databases that matter - *done*
 
 **What was asked for.** A safety net for the data that cannot be re-downloaded. A new machine, a new
 launcher install and a fresh server install should end with the accounts, the wizards, the profiles, the
@@ -1807,10 +1936,17 @@ changed since the common ancestor they were last seen equal at - stops and asks.
 upload and every download would be a stream of notifications about the machine doing exactly what it was
 told to do.
 
+**The first sync of all takes the cloud's copy - which is [task 21](#21-a-first-sync-never-writes-over-the-cloud---done)'s correction.**
+With no ancestor there is nothing to weigh the two sides against, and this originally asked: a question whose
+"keep this machine's data" button writes a fresh install's empty database over the only backup there is. The
+cloud wins instead - restore first, upload afterwards, never the other way round.
+
 **The constraint.** RavenDB holds its data directory under an exclusive lock, so nothing is copied *or*
 restored while anything has it open. The sync therefore runs while the launcher is idle and nothing is
 running - which is exactly the window `EmbeddedRaven` already manages, so the taking-turns code is there and
-this rides on it. A restore is applied before the next server start, never under a running server.
+this rides on it. A restore is applied before the next server start, never under a running server. Task 6
+below is that rule written out properly: the three moments it may run at, and what it does with each database
+at each of them.
 
 **The decision: Google Drive, in the app's own hidden folder.** Two access modes were described. The one to
 build is the app-sandboxed one: the `drive.appdata` scope gives the launcher a folder of its own inside the
@@ -1831,3 +1967,757 @@ And Drive is the choice because it is what the user already has: the manifest, t
 are the same against any of the file-sync services, and only the sign-in and the API calls would change.
 Look up current install guidance for the chosen provider when this is built rather than working from these
 notes alone.
+
+**Provider guidance, looked up rather than assumed.** The Gravity Index - the catalogue of third-party
+services this project integrates against - carries no Google Drive entry, so there was nothing to compare it
+to: Google Drive stands as the choice above, because it is the account the user already has and because the
+whole sync is provider-neutral except for the sign-in and the handful of API calls. The shapes that were
+built are Google's own documented installed-app flow: authorization-code with **PKCE**, a loopback redirect,
+`access_type=offline` and `prompt=consent` so a refresh token comes back every time, then a refresh-token
+exchange for each unattended upload. `drive.appdata` is the only scope asked for.
+
+**What was built, in the order it had to be.** The manifest first, because it is the part that cannot be
+improvised later: `BackupManifest` (per database, a content hash and the time, with equality that ignores the
+time and the recorded sizes), `DirectoryFingerprint` (a directory as one SHA-256, over paths and bytes in a
+fixed order and nothing else), `BackupSync` (the three-way rule, pure), `BackupArchive` (the zip: the
+directories and the manifest, written to a temporary name and moved into place so a reader never sees half an
+archive, restored into `<name>.restoring` and only then swapped in), and `BackupSet` (which two directories -
+resolved the way the launcher resolves them to open them, never a second guess). Then the plumbing:
+`ICloudBackupStore` (two names and nothing else, so the app-scoped folder is the only place a bug could
+reach), `CloudBackup` (hash, read, decide, move - archive first and manifest second, and a manifest that will
+not read is a conflict rather than an empty remote, so an unreadable backup is never overwritten). Then Google:
+`GoogleDriveBackupStore` (Drive v3 against `appDataFolder`, find-then-create-or-replace because Drive has no
+"replace") and `GoogleOAuth` (the installed-app flow, with a raw `TcpListener` for the redirect rather than
+`HttpListener`, which would want a URL reservation the launcher has no business asking for). Then
+`CloudBackupState`, then the view model and the Settings card. 60-odd tests, against fakes rather than against
+Google or a live RavenDB: the rule in a table, the hash's determinism, an archive round trip, the request
+shapes a Drive call has, and the sync end to end over an in-memory store.
+
+**The one correction, and it is about the lock rather than the cloud.** The notes above said the refresh token
+is "kept in the launcher's own database rather than in a file". It is - `CloudBackupState.WriteRefreshTokenAsync`
+writes a document - but the notes did not see what that costs, because the *other* constraint is that a
+RavenDB data directory cannot be copied or replaced while anything has it open, and the launcher holds **two**
+of them: its own, for the whole run, and the server's, while Imlight is idle. A sync therefore cannot simply
+run "while the launcher is idle"; it has to put both databases down to take the copy and start them again
+afterwards - which is what `RunCloudBackupAsync` does, and why a backup stops and restarts the launcher's own
+database around itself. The token stays in the database (the sign-in has to outlive a run and it is where the
+launcher's long-lived state goes); the *ancestor* does not, and that is deliberate: it is the hash of the
+launcher's own directory, so writing it there would change the thing it describes and the two sides would take
+turns uploading for ever. It lives in `backup-sync.json` beside the settings - the one thing a restore must
+not carry, because a machine that has just restored has nothing to compare against until it has hashed what it
+restored.
+
+**A database that cannot be read is not a database that is gone.** The one bug found while building it,
+and it was a real one: a directory that exists but cannot be walked - another process holding it, which is
+exactly what a RavenDB lock is - hashed to "absent", and absent is a change, so the sync would have planned an
+upload saying a database had been emptied. The next restore would then have acted on it. The fix is that the
+read failure is carried apart from the manifest (`BackupPlanResult.LocalProblem`), a failed local read is a
+conflict before anything is decided, and even a forced **Back up now** refuses a manifest built from it. Two
+regression tests hold it: one that a locked directory reports a reason rather than an absence, and one that a
+plan made while the data is held asks instead of uploading.
+
+**Content decides, never clocks.** Nothing in the sync reads `TakenAt`. Two machines disagree about the time,
+a clock change or a time-zone move would be enough to make one side look newer than it is, and the hashes are
+the same answer everywhere - so "which side changed" is answered against the ancestor by content alone. The
+time is carried because a person asked when their last backup was, and that is all it is for.
+
+**Both answers to the open question, rather than one.** The notes above left "where the OAuth client id comes
+from" open, and it is now a choice on the screen instead of a decision made here. *My own Google app (bring
+your own)* is the user's own Desktop-app client, pasted into Settings - what was built first, and what this
+build uses. *ViewLight's built-in Google sign-in* is a client id the launcher carries, so signing in needs no
+setup beyond the button.
+
+**The built-in side is written and works, and is greyed out until there is a client to name.** Nothing about it
+is unfinished code: the same installed-app flow, the same PKCE verifier, the same loopback redirect - a public
+client sends **no secret at all**, because Google's own guidance says a secret shipped inside an installed
+application is not secret and the verifier is what binds the redirect to this process instead. `GoogleOAuth`
+therefore sends `client_secret` only when there is one, and `GoogleOAuth.BuiltInClientId` is where a real id
+goes. What is missing is the registration rather than the workflow: a client id belongs to a Google Cloud
+project somebody owns, and this build has none - there is no backend behind the application today. So the
+option is `IsEnabled`-bound to `HasBuiltInClient`, and the same rule is enforced again in the setter, because
+a disabled control is not a check. The moment a client id is registered, putting it in that one constant is the
+whole of switching the option on - and the readme says exactly that where a user meets it.
+
+**Left for a later build, and written down rather than hidden.** The client id and secret are the user's, not
+shipped: a Desktop-app OAuth client is registered once and pasted into Settings, which is the "one the user
+registers" half of the open question left above, and it is the side that ships no credential belonging to
+anyone else. The automatic sync runs when the feature is on - at launcher start, before a server start, and
+when a server stops (task 6) - and that means stopping and restarting both databases each time to find out that
+nothing has changed: correct, and heavier than it should be; the cheap answer, comparing the remote manifest to
+the ancestor before touching anything local, only saves work when there is a remote at all, so it is a smaller
+win than it looks and is left for when the feature has
+been used in anger. And whether a sign-in is per machine or per Drive account is still whatever the person
+doing it decides, because the token is this machine's.
+
+### 6. Cloud syncing only databases that are not in use - *done*
+
+**What was asked for.** The rule stated as a rule, and enforced rather than intended: **a sync may only ever
+copy a database nothing is using.** The server is running, so its database is not copied. The server is about
+to start, so both databases are closed, copied, and only then handed over. The server has stopped, so both are
+copied while they are free. The same rule covers a restore, and the launcher may stand down its own database
+for the moment it takes, because that database is the launcher's own. Nothing may be edited while it runs, and
+the screen should say so rather than looking broken.
+
+**The three moments.** Launcher start, which is the earliest a sign-in can be read from the launcher's own
+database. Server stop, once Imlight has let go of the player database and the launcher has taken it back. And
+the way *into* a server, which is the moment the rule above is really about. The first two are found by the
+launcher itself and asked for in the background through one rule, `CloudSyncMayStart`; the third is asked for
+by the start that is taking the databases (`StartServerAsync`) and *waited for*, because that caller is the one
+about to need them.
+
+**The way into a server is the awkward one, and the delivery is the point.** Play hands the player database to
+Imlight: it releases the database and then spawns the server. A sync that started in that window would take
+the database back - and start it again - underneath the boot it is standing in the middle of, which is why the
+first build of this simply refused to sync there (`playInFlight`, and the automatic gate). That refusal is still
+there for everything automatic, and it is now the only thing it applies to: `_handingOverToServer` keeps the
+automatic path out while the handover sync is asked for directly, and stays up until the server has actually
+been spawned, because the config work between the two is not instant either.
+
+**What the handover sync does with each database afterwards is the part that is not symmetry.** The player
+database is left **closed**: Imlight is about to open it, and starting it here only to stop it again would be a
+RavenDB boot paid for on the way into every session. The launcher's own database is started again, in the
+background, because no server ever competes with it for that folder and the profiles and their pictures are
+read from it while Imlight boots. `handOverToServer` is what says which of the two is happening.
+
+**A start that arrives during a sync waits for it.** `_cloudSyncTask` is the sync that is running, and a
+handover joins it rather than starting a second one: the databases are closed underneath the first, and the
+server cannot be handed a database that is being copied.
+
+**A conflict is still not decided here, and Play is not held up by one.** The handover sync runs the same
+plan as every other: unchanged here and there is nothing, one side newer is that side moved, both sides changed
+is a conflict - and a conflict is a question, not an answer. So the session plays with this machine's copy and
+the card says what the two ways out are, which is the same thing the automatic path does at a start. Blocking a
+Play on a question somebody has already answered by pressing the button would be the launcher deciding for them,
+and there is no way to tell whose copy was meant to win.
+
+**An open is not a lock, and that was a real bug.** `ReleaseIdleDatabaseAsync` did nothing when the launcher
+was not *holding* the database - and that is exactly what it is while RavenDB is still starting. Press Play in
+the first seconds of a launcher start, and the launcher's own RavenDB went on coming up onto the port and the
+data directory Imlight was taking; Imlight then died on a lock it cannot see, with an exit code and nothing
+else. The open is now abandoned where it stands (`_idleDatabaseAbandoned`, checked at every step), its process
+is killed, and the open unwinds before the release returns - so it cannot come up a moment later, onto the very
+port the server is taking. `SomethingHoldsThePlayerDatabase` is the rule, pure, so the case that was missed is
+written down: an open that is still running holds the database.
+
+**Nothing is edited while it runs.** The window says what is happening in the corner
+(`CloudSyncNotice`), and the pages are turned off (`IsEditingAllowed`) for as long as it lasts: the notes live
+in one of the databases the sync has stopped, so a setting changed or a picture picked in that window is a
+change the launcher could not keep. The nav is left alone - looking at another page is not an edit.
+
+### 7. The profile screen's notes arrive at once - *done*
+
+**What was asked for.** A picture, a banner or the rest of a profile could take seconds to appear when the
+launcher started, and a picture that had just been chosen often needed a launcher restart before it showed.
+Three ideas came with it: update the screen live, cache lookups with a way to tell a stale one, and improve the
+query itself.
+
+**The restart was a real bug, and it was in the key rather than in the database.** A picture is kept under a
+name of the launcher's own choosing - `avatar.png`, `banner.png` - and replacing one reuses that name, which is
+deliberate: a picture exists for exactly one profile and a replacement should not leave the old one behind as an
+attachment nothing shows. But the screen's cache key was *the names*, so a replacement produced an identical
+key, the screen concluded that nothing had changed, and the old picture stayed up until a restart. The key is
+now the profile, the two names, the revision of the notes (`ProfileStore.Revision`, which moves when they are
+read again, as a restore does) and this run's own count of replacements - and replacing one calls
+`ForgetPicture`, which drops the decoded copy and moves that count.
+
+**A read that failed was remembered as an answer.** `ReadImageAsync` returned `null` for both "this profile has
+no picture", which is the ordinary case, and "the database would not hand it back", which is a moment. The key
+was remembered either way, so one miss - while the launcher's database was still warming up, say - left the
+initial-letter circle there for the rest of the run. A read now reports both (`ProfilePicture`), and a failed
+one is retried after `ProfilePollInterval` instead of being kept. `PicturesNeedReading` is the rule, pure, so
+both halves of it are pinned down without a screen or a database.
+
+**Caching, in the process rather than on disk.** Decoded pictures are kept by profile and name
+(`_decodedPictures`), so switching profile and switching back is not two more reads; the avatar and the banner
+are read at the same time rather than one after the other; and every profile's pictures are read in the
+background when the list of profiles changes, the selected one first, so the card in the corner of the window
+is drawn from the cache and a switch is already answered.
+
+**The quiet cost was in the writing rather than the reading.** A save wrote *every* profile document plus the
+zone map - a document per account, one after the other, over HTTP and synchronously while the launcher was
+holding the UI. Playtime ticks every ten seconds while somebody is signed in, so the poll was rewriting
+profiles that had not changed, every ten seconds, in the middle of the screen. `DatabaseProfilePersistence` now
+remembers the document it wrote for each profile and writes only what is different, and forgets that memory
+whenever the notes are read again - because a read is what says what the database holds now, and a restore
+replaces documents this launcher never wrote.
+
+**Not done, deliberately: a cache on disk.** The pictures could be shown before the embedded RavenDB has
+finished starting if the last known notes were kept in a file as well, and that is the other half of the
+"seconds to appear" complaint - but it would be a second copy of the launcher's own notes, and the rule the
+launcher has kept everywhere else is one answer per question. The database is the answer; the screen waits for
+it, and warm-up is what makes the wait end at the earliest moment it can.
+
+**What is not claimed here.** Nothing was timed. This environment has no Avalonia display and no Imlight
+install, so what is written down is the shape of the work - the reads that no longer happen, the writes that no
+longer happen, the retry that does - rather than a measured number of milliseconds. The suite covers the rules
+(`ProfilePictureCacheTests`, the write-skip and picture-read cases in `ProfilePersistenceTests`), and the
+remaining wiring is what would need a real install to watch.
+
+### 8. Everything on the achievements screen updates live - *done*
+
+**What was asked for.** On the achievements screen the badges themselves light up as they are earned and the
+score follows immediately, but the *heading* of a category does not: "unlocked 3 of 40 · 90 points", the bar
+under it, and the tick beside the name are all as they were when the screen was opened. Reported as "progress
+bar, number of completed achievements on collapsable and some other UI elements".
+
+**Why the headings lag when the tiles do not.** They are two different mechanisms. The tiles come out of
+`ObservableCollection<ProfileBadge>` and the group is refilled in place (`ProfileBadgeGroup.Replace`), so a
+badge that has just been earned redraws by itself. The heading's numbers are *computed* - `Unlocked`, `Total`,
+`Points`, `Summary`, `ProgressText`, `Fraction`, `HasUnlocked` - and nothing raises a change for them, so a
+binding to `Summary` is read once and then never asked again. Same for the two lines that decide whether the
+ladders and the discovered worlds are shown at all (`HasMilestones`, `HasWorlds`).
+
+**The fix.** `Replace` raises the change for the derived half when, and only when, something it was derived
+from changed - which is the same rule the collections already follow, and is what keeps a poll ten seconds
+apart from redrawing a screen nobody has changed.
+
+### 9. The wizards on the profile update live - *done*
+
+**What was asked for.** The wizards section of the profile screen is only right after a restart: a wizard
+made since the launcher started does not appear, and a level, a school, a gold total or a finished quest does
+not move while the server is running, even though the launcher reads the player database every ten seconds
+and the data behind it is current.
+
+**Why.** Two faults with one cause. The rows are the launcher's own mutable objects (`ProfileWizard`), and
+the screen is bound to `SelectedProfile.Wizards` - a `List<ProfileWizard>` whose *instance* never changes.
+`RefreshProfileDerived` does raise `ProfileWizards`, but the value handed to the binding is the same list, so
+there is nothing for the screen to see; and even a redraw would print the same numbers, because nothing on a
+row raises a change when a field on it moves. A wizard that appears is an *addition* to a list nobody is
+watching, which is why it needs the restart.
+
+**The fix, following the badges.** A row per wizard as an immutable snapshot (`ProfileWizardRow`), the same
+shape as `ProfileBadge` and for the same reason: a row that has changed is a different value, so "has anything
+changed" is one comparison and the answer decides whether the collection is touched at all. The screen then
+binds a list whose *contents* move rather than one whose objects do, and a new wizard or a level-up is a new
+row. The wizard's own numbers are still the thing that is stored and merged - the rows are only what is on
+screen.
+
+### 10. A wizard's school is read the way the server writes it - *done*
+
+**What was asked for.** The profile shows "School not read" for every wizard on a real server, which also
+stops that school's level ladder from ever progressing.
+
+**The cause, and it was a real bug with real evidence.** Imlight persists a wizard's school as the
+`MagicSchool` **enum**, and RavenDB writes Imlight's enums by *name*. Read out of this machine's own player
+database (`Playerdata`, via the embedded server's HTTP API), the admin account document says
+`"AuthLevel":"Administrator"` - and `AuthLevel` is an enum in Imlight's `Account`. So
+`MagicSchoolBehavior.MagicSchool` arrives as `"Storm"`, never as `83375795`, and the launcher's reader
+accepted a JSON **number** and nothing else. The suite could not have caught it: the wizard documents the
+tests build carry `MagicSchoolBehavior` with a `Level` and no `MagicSchool` at all, so the one field that was
+wrong was the one field no test ever wrote.
+
+**The fix.** `WizardSchool.NameOf` accepts a school's name as well as its id - the two spellings are the same
+school, and the file-local docs already claimed text was accepted while the implementation only took a
+*numeric* string - and the reader takes the field in either shape. An unrecognised value is still no school
+rather than a guess, which is what keeps a creature's school (Sun, Moon, Star, Shadow) from being read as a
+wizard's.
+
+### 11. Creature kills are counted from the duel the server logs - *done*
+
+**What was asked for.** Nothing the launcher does counts a creature killed, so the creature ladder never
+moves and no boss is ever beaten. The suggestion that came with it: the server logs what a spell hits and who
+was in the duel, so a spell that hit four creatures in a duel the players won can be read as four creatures
+defeated - an assumption, but an assumption about lines the server actually writes.
+
+**The first attempt rested on a line that means something else, and one real duel is what showed it.** It read
+`| Slot 4 | Participant Wraith-WCBoss-L05 joined` and matched that name against `creature.manifest`: for a
+creature, the thought went, the participant's `m_debugName` *is* the name the manifest carries, because the
+generator prefers the same field. Both halves of that are wrong, and Imlight's own source says so:
+`ManifestGenerator` builds the object it names from `FinalizeCoreObject(templateId)`, whose `CoreObjectInfo`
+is blank - no zone tag - so `m_debugName` is empty on that path and the manifest's name is the template's
+`m_objectName`. A live participant, meanwhile, is built from the zone's own spawn info, so its debug name is
+the **zone tag** it spawned under. Here is a real duel of two creatures, won, from this machine's own server
+log - the account's only wizard, and the second fight at the same sigil:
+
+```
+Duel 4854107232535182118 | Created. Grace period over in 3.75
+Duel 4854107232535182118 | Slot 1 | Participant 140DD joined
+Duel 4854107232535182118 | Slot 0 | Smart: true | Aggressive: true | Selfish: true
+Duel 4854107232535182118 | Slot 1 | Smart: true | Aggressive: true | Selfish: false
+Duel 4854107232535182118 | Slot 4 | Caster is casting spell 661258515 against target 0
+Duel 4854107232535182118 | Slot 4 | Spell 661258515 hits targets [0]
+Duel 4854107232535182118 | Slot 4 | Spell 1427280917 hits targets [1]
+Duel 4854107232535182118 | Duel ended. Players win.
+... the same sigil fought again, 17 seconds later: same id, same slots, this time fled and lost ...
+```
+
+**What that log says, fact by fact.** `140DD` is a debug name, not a template id and not a manifest name, so
+nothing could ever have been matched to it - the participant line is read as the server's record of who took a
+slot and **nothing is counted from it**. The line that does say which slots hold creatures is the attitude
+line, which only ever comes from `CombatCreatureAIComponent`: a slot a creature planned a turn on holds a
+creature, said by the process that knows. And `CombatGroupReservations` states the rest outright -
+*"Circles 0-3 belong to the creatures, 4-7 to the players"* - which its own circle-choosing code walks, so a
+player is never put on a creature's circle and a spell cast from 4 or above is the player's side casting. The
+third fact is that **a duel id is the sigil's, not the fight's**: the same id comes round again for the next
+battle at that sigil, which is why the `Created.` line is read at all - without it the second fight would
+inherit the first one's slots.
+
+**The rule.** A duel the players won leaves behind one creature beaten per creature slot a spell of the
+players' side reached, once each - the slots a creature was seen planning on, reached by a cast from a
+player's circle, in a duel the players won. Every part of it is a line the server writes, and the circle layout is
+not believed on its own: a duel in which no creature ever planned a turn proves nothing and credits nothing.
+What a badge earned in that duel quotes is the line that ended it rather than the spell that reached the
+creature: the pass quotes one line for everything it turns on, and a spell's line is not evidence of a duel
+badge - see `Award`.
+
+**It counts kills, and that is a change of meaning worth saying out loud.** A duel never says *which* creature
+was on a slot, so this is a count of creatures beaten rather than a list of different ones: beating the same
+creature again counts again, and the creature ladder (`Creatures Beaten`, one rung per twenty-five) is built on
+that count, with a fixed top rung of 500 instead of one sized by the server's creature list. The creatures that
+*are* identified - because the server named them - still go into the list of what was beaten, once each, and
+that list is what a boss badge reads; the two leave different things behind on purpose, and the screen's own
+words say which is which.
+
+**What it deliberately does not claim.** A creature nothing hit is not counted, and neither is one that joined
+a fight and died before it ever planned a turn - the count can only ever be under, which is the same rule the
+duels and the bosses already follow. Nothing is quoted onto a badge for a count either: the duel's own pass
+quotes the line that ended the duel.
+
+**What the user will still not see, until Imlight is changed.** The bosses. A boss badge needs a creature's
+**template id**, and no line in the log carries one - which is what
+`| Creature <templateId> joined`, still unwritten, is for, and what `manifests/creature.manifest` is keyed by.
+That file is still not written by anything (see
+[Rough edges in Imlight itself](#rough-edges-in-imlight-itself)), so `BossesDefeated` stays at zero and the
+profile screen says why - while the counts above, which need no file at all, move as duels are won.
+
+**Checked against the real thing, not just the tests.** The 1348 lines of the day's log this machine's server
+actually wrote were run through the launcher's own reader (`ServerLogFacts` and `ProfileLedger`, the same two
+calls the launcher makes per poll): one duel won with two creatures on it, one duel fled and lost, and the
+profile that came out holds `CreaturesKilled = 2`, `DuelsWon = 1`, `DuelsLost = 1`, `CreaturesDefeated` empty
+and `BossesDefeated = 0` - exactly what that log says and no more.
+
+### 12. Time played becomes a ladder instead of a handful of badges - *done*
+
+**What was asked for.** Playtime is currently five badges at five fixed thresholds, which says nothing about
+the hours between them. Asked for instead: a milestone rung starting at half an hour, then an hour, then five
+hours, ten, fifteen, twenty, and five hours at a time from there to a cap of a thousand - with the final rung
+worth a heap of points and granting a badge called **Wizard of a Thousand Hours**.
+
+**How it lands.** A fourth generated ladder (`playtime`), a rung per threshold, which is what the milestone
+cards and the Settings announcement switch already know how to draw and to stay quiet about. The five fixed
+playtime badges move into it - their thresholds are all rungs of the new ladder - and the two that are not
+about time (`first-steps` for signing in at all, `a-regular` for twenty-five sessions) stay badges.
+
+**The finale.** A rung of a ladder is named from the ladder (`Time played, 1,000 hours`), so the last one
+would not read as the badge that was asked for. `MilestoneTrack` gains one optional word for its top rung, so
+the thousandth hour is *itself* the badge named **Wizard of a Thousand Hours** rather than a second badge
+arriving beside it - and it is scored by the ladder rather than by its difficulty, because a heap of points
+the size of the other legendaries would not be the reward that was asked for.
+
+**What this changes for a profile that already has the old badges.** The old ids (`settling-in`,
+`five-hours`, ...) are no longer in the catalog, so they stop being drawn and stop scoring: the catalog is the
+whole list, and a profile cannot be scored from a badge nothing defines. The hours themselves are not lost -
+they are the playtime the ladder is measured in - so the rungs up to what the account has played are earned on
+the next read. Five fixed thresholds cannot sit beside a ladder of the same five thresholds; the hour would
+have been scored twice.
+
+### 13. The sign-in itself: kept, explained, and stoppable - *done*
+
+**What was asked for.** Three reports about the same card: the sign-in does not survive a restart, so it has to
+be done again every session; Google answers with a 401 unless the client secret is pasted in, which the readme
+had said could be left blank; and closing the browser window the sign-in opens leaves the launcher waiting for
+a sign-in that never arrives, with no way back to the button that started it.
+
+**The 401 was one trailing space, and it was measured rather than guessed.** The client id in the settings on
+this machine ends in a space - a copy out of the Cloud console picks one up and a settings box shows nothing -
+and the id goes into a form body, where Google's lookup sees the space as part of the value. Three probes
+against the real client, with a deliberately bogus refresh token so that only the client's own validity is
+under test: the id **as stored** with the secret answers `401 invalid_client` *"The OAuth client was not
+found."*; the id with the space **stripped** answers `400 invalid_grant` *"Bad Request"*, which is the client
+and the secret being accepted and the token alone being refused; and the stripped id with **no** secret answers
+`400 invalid_request` *"client_secret is missing."* So the space is the whole of the first report and the
+missing secret is the whole of the second. `GoogleOAuth.Normalize` now strips whitespace, quotes and the
+zero-width characters a web page can smuggle into a copy wherever an id or a secret is used, and the sign-in
+writes the cleaned values back into the settings, so what is sent and what is shown cannot drift apart again.
+
+**A Web-application client's secret is not optional, and the readme said it was.** A Desktop-app client is
+bound to the redirect by the PKCE verifier and needs no secret - which is what the readme described as if it
+were the only client type. A Web-application client has to send its secret on every token call, and the third
+probe above is Google's answer when it does not. Both the readme and the Settings card now say which type needs
+which, and - because a 401 says nothing a user can act on - `GoogleOAuth.Refused` reads the error code and its
+description and names the cause: an unrecognised client, a missing or wrong secret, a redirect address the
+client does not allow, a sign-in cancelled at Google, or a refresh token that has expired or been revoked. The
+raw line is kept in the sentence rather than dropped, so anything unrecognised still reaches the Log.
+
+**The wait was uncancellable, and the redirect was not the only thing a browser sends.** Two separate ways to
+sit on a sign-in that had already failed. The first: the loopback socket took *the first connection* as the one
+redirect, and a browser opens connections of its own beside a page - a preconnect, a probe, the request for the
+icon - so a request carrying no code ended the wait with no code and no reason, and the real redirect that
+followed had nobody listening. The listener now stays open and answers one connection at a time until a request
+actually carries a code or an error, and drops a connection that says nothing rather than waiting on it. The
+second: closing the browser leaves nothing to receive and nothing that can report it, and the launcher had no
+way to be told. The wait is now registered against a cancellation token, the sign-in command holds it, and a
+**Cancel sign-in** button appears beside the sign-in button for exactly as long as the wait lasts - with the
+status line saying, while it waits, that closing the window leaves ViewLight waiting and where to press.
+
+**Restoring data is not signing out.** The refresh token is a document in the launcher's own database, and a
+restore replaces that whole directory with the copy in the cloud - which can be one taken before this machine
+ever signed in. The sign-in this run already holds is therefore written back the next time the database comes
+up (`CloudBackupState.ReadRefreshTokenOrRestoreAsync`), and only that one: a launcher that starts with no
+sign-in anywhere stays signed out, or the sign-out button would not hold. The same review found the write
+itself unchecked - a sign-in that could not be stored still said *signed in*, and the next start asked for it
+again with nothing to explain why - so the result of that write is now read and reported.
+
+**What holds it.** `GoogleSignInTests` drives the real loopback socket rather than a stub: it cancels a wait and
+checks it ends with a sentence about cancelling, lets a wait run out and checks it says nothing was saved, and
+opens the browser's own stray request followed by the real redirect to check that the redirect is still the one
+that is caught. The normalisation and the five refusals are checked against the messages Google actually sent,
+and `CloudBackupStateTests` checks the restore case in both directions - a sign-in this run holds is written
+back, and one the database already has is not written over.
+
+### 14. An install that is there is not an install that is gone - *done*
+
+**What was reported.** "Installed server detection seems to be broken: the server is installed, it says it is
+not. Reinstalling works, and later it can show up as uninstalled again."
+
+**Three failures wearing one sentence.** `ImlightConfig.TryLoad` answered `null` for *three* things - no file,
+a file another process had open, and a file this account could not read - and every caller read `null` as the
+first one. So an install that was plainly in the folder was announced as missing: the requirement screen said
+`does not hold an Imlight install`, and the Settings row said `No server installed here yet
+(Config/Imlight.ini not found)`. That is what a reinstall "fixing" it looks like from the outside: rewriting
+the config takes the lock off, the next read works, and the message was wrong the whole time. `ImlightConfig.Read`
+now returns the config *and* whether a file was there at all, and the failure is read off the exception -
+`FileNotFoundException` is "no file", everything else is "there and not readable" - because `File.Exists`
+answers `false` for a file held open with no sharing, which is the very case being told apart. What is there and
+busy is now a gap of its own (`ImlightGap.ConfigUnreadable`) with a sentence, no accusation, and the Check
+again button that was always on that screen; and the read itself waits up to three quarters of a second and
+tries again, because everything that holds a config file - an install unpacking a build over the folder, the
+server writing its own settings as it boots, a scanner reading what was just written - lets go in far less than
+that.
+
+**And the same mistake one level down.** The .NET probe ran `dotnet --list-runtimes` once, gave it ten seconds,
+and read *no answer at all* as *an answer of nothing*: an empty framework list, cached for the rest of the run,
+which made a machine that has the runtime look like one that does not - `NoRuntime`, with steps for installing
+something it already had. `DotnetHost.Ask` now answers `null` for "would not say" as against an empty list for
+"it has nothing", asks twice before giving up, and **nothing about a failure to answer is cached**: a probe that
+timed out is a fact about a moment, not about the runtime. Where a host genuinely cannot be asked, the
+requirement is treated as met and the database says for itself what is wrong when it is started, with its own
+port and exit code in the Log - the launcher being wrong about a runtime is worse than a database that fails
+with a message.
+
+**Still per-machine truth rather than per-run.** The framework rule and the roll-forward it uses are unchanged
+and still pinned by their tests: a shared framework with the same name and major at an equal or higher version
+is a match, another major is not. What changed is only what an *unanswered* probe means.
+
+### 15. A copy of the game is a build, and builds go stale - *done*
+
+**What was asked for.** Portable mode plays the game out of the launcher's own folder, and that copy is made
+once, so it can be an older build than the one installed on the machine with nothing in the folder itself to
+say so. The ask was a check at start-up that finds the local install, says when it is newer, and offers an
+update - by either of two methods, one that rewrites the whole game and one that reads both copies and writes
+only the difference.
+
+**Where the question belongs, and why it is not the patch server's version of it.** The launcher already
+compares client builds in one place - the preload plan, which checks whether the patch server's mirrored files
+match the build being played - but that is about a *server's* files. This is about the launcher's own copy
+being behind the machine it lives on, which the patch server knows nothing about. What is reused is the part
+that was already the truth: `ClientBuildReader` reads the revision out of the client itself
+(`bin\revision.dat`, falling back to the client's log) and orders two builds by the number in them, so neither
+"newer" nor "the same" is guessed at. `PortableClientUpdate.Check` is the whole of the question, and it is a
+pure function of two folders and one remembered path.
+
+**The install to compare against is found rather than assumed.** The folder the copy was made from is written
+down when a copy finishes (`LauncherSettings.PortableGameSourcePath`, stored through the launcher's own path
+rules, so a portable folder carried to another drive keeps it), and it is used as given - a remembered install
+is a stable answer where a search is not. With nothing remembered, the usual places are searched, which is also
+what makes a portable launcher carried to a second machine useful: it finds *that* machine's install. A
+remembered folder that is no longer a game, or one inside the copy's own folder, is passed over rather than
+trusted.
+
+**Nothing is claimed from a build that cannot be read.** Either revision being unreadable means no comparison
+is made at all: a client states its own build once it has been started, so a copy that has never run has no
+revision to read, and "I could not tell" must not be reported as "you are out of date". The reasons a check
+decided against saying anything are kept in the result for the Log, and the card is only ever drawn when there
+is genuinely a newer build to move to.
+
+**Two methods, one result - so the choice is the user's.** `GameClientUpdateService` plans first and writes
+afterwards, which is what lets it check the free space before removing anything and say "nothing to do" without
+writing a byte. `Replace` plans every source file to be written and every file in the copy to be removed;
+`Mirror` writes a file when it is missing, a different length, or a different hash, and removes what the newer
+build does not have. The difference between them is *only* what they spend - one writes the whole game, the
+other reads both trees to find out what to write - so the launcher does not decide it: the card offers both,
+says what each costs, and defaults to the reading method. Both finish by removing the folders a newer build
+dropped, so a build that deletes a folder does not leave its skeleton in the copy for ever.
+
+**Automatic check, manual update.** The check runs on the client state refreshing, which is once at start-up
+and again whenever the game folder changes, and it is deliberately not in `RefreshDerived` - it reads registry
+keys and walks the usual install locations, and it is only ever interesting when the folder is what changed.
+The update runs when it is asked for and not before, **Not now** puts the offer away for the run rather than for
+ever, and afterwards the folder is re-read rather than assumed: that is what makes the offer disappear when the
+update worked, and the card stays up to say what it did. `GameClientUpdateTests` drives both methods over two
+real build trees, checks the copy equals the source file for file afterwards, and drives the whole thing
+through a portable launcher and its command.
+
+### 16. The runtime ships with the launcher, so nothing has to be installed - *done*
+
+**What was asked for.** The launcher's own data lives in the RavenDB the server ships, that database is a
+framework-dependent application, and the answer until now was to ask the user for a runtime - a screen, a
+link, a version to match, an installer to run. For a project whose whole promise is "unpack the zip and run
+the exe", that is a step that should not exist. The ask was to delete it: bundle a runtime with the build,
+accept a few more megabytes of download and disk, and take the requirement off the user's machine.
+
+**The runtime the launcher is already published into cannot be borrowed, which is why there are two.** A
+self-contained publish is a flat folder of DLLs plus `coreclr.dll`, and a framework-dependent application
+resolves its shared frameworks out of an *installation layout* - a host, `host/fxr/`, and
+`shared/Microsoft.NETCore.App` and `shared/Microsoft.AspNetCore.App` under one root. Nothing in the
+launcher's own output is that, so "the launcher already carries a runtime" does not help the database
+inside it, however much it sounds like it should. The alternative to a second copy is what was already
+there: ask the machine for one. The user's answer was the second copy, and it is the one that leaves
+nothing for a user to do.
+
+**One folder, found one way.** `DotnetHost.BundledRuntimeFolderName` is `runtime` and
+`BundledRuntimeDirectory` is that folder beside the executable - inside the launcher's own folder, which is
+the one `portable.txt` is looked for in, so a portable launcher carried to another machine carries its
+runtime with it and the whole release folder can be moved between drives. `DotnetHost.FindBundled` looks for the muxer in it
+(`dotnet.exe`, or `dotnet` elsewhere), and it is a settable `Func` for the same reason `Find` is: whether a
+build ships a runtime is a fact a test has to be able to decide. What is found has to be the muxer rather
+than the assemblies, because pointing a host at a runtime of its own is done with an environment variable -
+`DOTNET_ROOT`, and the architecture-specific spelling of it that the host prefers - and
+`DotnetHost.UseRuntimeRoot` sets both to that folder when `EmbeddedRaven` starts the database.
+
+**Which runtime is used is one decision, and it can now say which one fell short.** `DotnetHost.HostFor`
+returns a `DotnetHostChoice`: the host, the root to point it at when it is the bundled one, which of the two
+it is, and - when a host was asked and answered short - the framework it cannot offer. The order is the one
+the ask implies: the bundle when it can run the database *or when it would not answer*; a machine-wide
+install when the bundle cannot but the machine can (a database that has moved to a newer major than the
+shipped runtime is better served than by refusing to start); and, when neither fits, still the bundle if
+there is one - so the screen can name the runtime a user can actually see, and say that installing one on
+the machine is what gives the launcher something else to use. Nothing anywhere is `NoDotnet`, the one case
+where both places are named. "Would not answer" is still not "not enough": a probe that times out is a
+fact about the moment, and the application that genuinely cannot run reports its own failure into the Log.
+
+**The screen stays, because a build from source has no bundle.** `ImlightRequirements.For` checks a runtime
+exactly as it did - the same call, in the same fourth layer - and its two messages now differ in a way that
+matters to what a user does next: a short machine-wide runtime is named by its path, and a short shipped
+runtime is named as *the runtime ViewLight ships with*, in a sentence that says the machine-wide install is
+the fix. The guide behind the link opens by saying the same thing, since "install the .NET runtime" reads
+differently once the launcher may already be carrying one. Which runtime the database actually ended up in
+is written into the Log when the launcher's own database starts (`EmbeddedRaven.HostDescription`): on a
+machine with no .NET of its own, that line is the first thing worth knowing.
+
+**How the release fills it.** Two commands, between the publish and the zip: fetch
+[dotnet-install.ps1](https://dot.net/v1/dotnet-install.ps1), then run it into `publish/runtime` - the exact
+lines are under [Packaging and releases](#packaging-and-releases). It writes a real installation - the
+muxer, `host/fxr/`, and both shared frameworks - without touching the machine it runs on. `aspnetcore`
+rather than `dotnet` because ASP.NET Core is what carries *both* frameworks the database names; a channel
+rather than a pinned version because the database is matched against the runtime's own roll-forward, so a
+newer patch of the same major is a match, and pinning one would mean editing the release notes every time
+.NET shipped a patch. Measured on this machine: the runtime is 107 MB on disk, the launcher publishes at
+104 MB, and the zip goes from 43.0 MB to 87.6 MB. Nothing is paid in memory or in start-up time for it:
+one of the two runtimes is used and never both, so the database is still one .NET process, and picking
+between them is the same single probe - one process launch, remembered for the run - that the machine-wide
+search already cost.
+
+**Verified with the real thing rather than with an answer.** With that runtime installed into the test
+project's own output folder - so the production `FindBundled` found it, un-stubbed - and with
+`DotnetHost.Find` answering *no runtime on this machine*, the launcher's own check said Imlight was usable,
+the database was started with the muxer out of that folder and `DOTNET_ROOT` pointing at it, and the real
+RavenDB in `%LOCALAPPDATA%\ViewLight\server` came up on a free port, answered, and stopped cleanly when
+asked. That check was a scratch harness and is not kept: what it proved is a property of the layout and of
+`EmbeddedRaven`, and what *is* kept pins the choice itself - `BundleWith` decides what each of the two
+runtimes offers, and `TheRuntimeBesideTheLauncherIsWhatRunsTheDatabase` asserts the host, the root it is
+pointed at, both environment variables, and that a machine with nothing installed is still told it is
+usable.
+
+### 17. An update replaces the server's files, which means letting go of them first - *done*
+
+**What was reported.** An update of an install that was already at the newest build - triggered from
+Settings - ended in the Log as:
+
+```
+INFO   Updating server to r806919.Wizard_1_610. Existing settings will be kept.
+ERROR  Install failed: The process cannot access the file
+       '...\server\RavenDBServer\Acornima.dll' because it is being used by another process.
+```
+
+The suspicion in the report was that the launcher was in two minds about the install: replacing it while
+also reading its database. That was right about the state and wrong about which install - it was not
+mixing up two folders, and it knew the install was there (it said "Updating"). It was holding the files.
+
+**What was holding them.** Both of the launcher's databases are the server's own `Raven.Server.dll`, started
+out of `<server>\RavenDBServer` so that the storage, the port and the documents are Imlight's rather than a
+reimplementation - which means that while either of them runs, that folder's ~200 assemblies are loaded and
+cannot be written over. Both of them run there: the launcher's own database (`-c ...\raven\launcher-settings.json`,
+held for the whole run) and the player database while Imlight is not running
+(`-c ...\raven\embedded-settings.json`). An overlay that replaces those assemblies therefore collides with
+
+the launcher itself, every time - and the overlay is what an update is. Confirmed on the machine it was
+reported from, with both processes listed by their command lines and both running from the portable server
+folder the update was writing into.
+
+**Measured rather than assumed.** Against a database started from a copy of those binaries: writing over one
+of its DLLs fails with exactly the message above; `EmbeddedRaven.StopAsync` then takes about 180 ms, and the
+file is still not writable for about 110 ms after the process is gone. So stopping is necessary and not quite
+sufficient, which is why the overlay waits a moment rather than giving up at the first refusal, and why what
+it reports when the wait runs out is about a process rather than about a file.
+
+**The fix, in three parts.** `ServerInstallService.InstallAsync` takes a `beforeWriting` callback, invoked
+once immediately before the first file is written and never at all if the release never gets that far - so a
+download that fails costs no stopped database. The launcher passes
+`MainWindowViewModel.ReleaseDatabasesForInstallAsync`, which closes the client, stops the launcher's own
+database and gives the player database back, in that order, through the same paths the cloud sync uses;
+whichever way the install ends, the `finally` starts both again in the background, and both opens are
+single-flight now so that a second ask is answered by the start already running rather than by a second
+database on the same port. Neither database is needed for the minute an update takes - they are read again as
+soon as they are back. And since stopping the launcher's own databases cannot help against the one thing that
+legitimately holds that folder - Imlight, running - the install refuses while the server is up, and a hold
+that outlives the wait is reported as `LockedFileMessage`: the file it could not replace, and the button to
+press once the server is stopped.
+
+**Verified against the failure itself.** A scratch harness (not kept) started a real database from a copy of
+the server's binaries and then ran the real install pipeline over that folder, with a release archive holding
+the very file from the report. Without the handover: failure after 1181 ms - the retry budget, so the wait is
+bounded - reported as *A file in the server folder is in use by another process ... if Imlight is running,
+stop it and press Download latest again*. With it: success in 2151 ms, `Acornima.dll` replaced by the
+archive's, the database stopped and its port silent. What is kept in the suite is the message and the wait
+(`ServerInstallServiceTests`: a file held for the whole install is reported that way, a file held for half a
+second is waited out, and the callback is asked for the folder before the first byte and not at all for a
+download that failed).
+
+**The unrelated thing that looked related.** That machine has two complete server installs - the one in
+`%LOCALAPPDATA%\ViewLight` it was switched away from and the portable one beside the launcher - because
+portable mode downloads into its own folders rather than moving what is already there. It is a real mess
+(see [Not done yet](#not-done-yet)) and a plausible suspect for a file in use, but it is not this one: the
+processes holding the folders ran out of the portable install, with the portable launcher's own settings
+files, and nothing at all was running from the old location. What followed from it is
+[task 18](#18-the-launchers-own-data-stops-borrowing-the-servers-files---done).
+
+### 18. The launcher's own data stops borrowing the server's files - *done*
+
+**The rule, as it was put.** The server folder is *Imlight's*, managed by Imlight rather than by the launcher.
+The launcher writes the files Imlight expects an outside tool to write - `Imlight.ini` - and nothing else; its
+own data goes under `%LOCALAPPDATA%\ViewLight`, or a folder inside the launcher's own folder in portable
+mode, in both cases its own and nowhere near the install. The question that came with it was whether the
+launcher was breaking that rule anywhere. It was not, with one exception that was not a *file* at all.
+
+**The audit.** Every write the launcher makes into a server folder, from the code: `Config\Imlight.ini` and its
+`.bak` (the file an outside tool is expected to edit), and the release overlay when it installs or updates
+Imlight. Everything else it owns is under `LauncherPaths.DataRoot` - `launcher.json`, `profiles.json`,
+`profiles\<account>\`, `art\`, `downloads\`, `staging\`, `backup\`, `database\`, `raven\` - and the two
+`PatchServerPreload` writes go into the *patch server's* revision folder, which is the patch server's own
+install. Two couplings were left, and neither is launcher data: the launcher's databases *ran* the server's
+`Raven.Server.dll`, and the idle player database opens the server's own data directory (that one is the
+server's data, written by the server's own engine, which is the feature rather than the leak).
+
+**The exception, and why it mattered.** Running the server's binaries is not storing anything in its folder,
+but it has every consequence of sharing one: while either of the launcher's databases was up, those ~200
+assemblies were loaded and could not be replaced, so an Imlight update failed against the launcher itself
+(task 17). A copy of its own is what makes the launcher's own notes independent of Imlight's folder in the
+way the rule describes - and it is what stops an update colliding with the launcher at all.
+
+**What the copy is.** `LauncherRavenEngine` keeps it in `ravendb\` under the launcher's own root, which means
+`%LOCALAPPDATA%\ViewLight\ravendb` normally and `<launcher folder>\ravendb` in portable mode, so a portable
+folder still carries everything it needs. It is made *from the installed server* rather than shipped or
+downloaded: installing Imlight is what brings a new engine, the launcher copies it at the version that
+install has, and a version stamp written last (`.viewlight-engine.json`) is what says a copy finished - a
+folder without it is what a machine that lost power left behind, and it is not run. Copying happens off the
+UI thread, before the launcher's database starts and again after an install, because those are the two
+moments nothing is running out of either copy.
+
+**It is pruned, and the pruning was measured.** The engine is 567 MB as shipped, of which 422 MB is
+`runtimes\` - native libraries for every platform RavenDB supports. A copy keeps this machine's runtime
+folder and the fallback the host resolves through, and drops the rest: 179 MB, 288 files. The rule is a list
+of *known other platforms* rather than a list of wanted files, so a folder nobody here has heard of is copied
+rather than dropped - pruning conservatively costs 30 MB more than pruning cleverly and cannot cost a database
+that will not start. The pruned copy was then made to do real work: started, created its database, wrote and
+read back a document, stored and read back an attachment, stopped clean.
+
+**Which engine runs what, deliberately.** The launcher's own notes run on the launcher's own copy. The
+*player* database still runs on the engine inside the install, because its data directory is Imlight's and is
+written by the engine Imlight ships today: opening it with an older copy of RavenDB - the one this launcher
+happened to be built against - is a risk nobody asked for, and the same engine as the server's next boot is
+the right answer for the server's data. The install's engine is also the fallback for the launcher's own
+database, tried once and only when its own copy fails to start: a copy made from an engine older than the data
+it is asked to open, or one a half-finished copy damaged, is not a reason for the launcher to have no notes at
+all. Which engine a running database is on, and which runtime it was started with, are written into the Log.
+
+**What the change deliberately does not touch.** The requirement screen still asks for the engine inside the
+install: Imlight cannot boot without its own RavenDB, so an install missing it is still an install to fix. And
+the backup set is unchanged - it is two directories, named explicitly, and the engine copy is not one of them.
+It is machinery rather than notes: it is re-derived from the install at no download cost, and backing up
+179 MB of another program's binaries would make every backup bigger for something that can be made again. That
+was the one thing worth checking about it, since the launcher's notes database *did* move out of the server
+folder once before and a backup has to follow where the notes are - this time the notes have not moved.
+
+**Verified against the real thing.** With a real (pruned) engine standing in for an install's, the production
+path made the copy - 288 files, 179 MB, version 7.2.4.72015, the version the install had - and the launcher
+then chose it rather than the install's, started on it, created its database in `database\` under the portable
+root it was given, wrote and read a document, stored and read back an attachment, and stopped with the port
+silent. The fallback still resolves the install's engine. That harness is not kept; what is kept is
+`LauncherRavenEngineTests` (the folder it lives in, the pruning rule, the copy and its stamp, a copy that is
+not made twice, one that is replaced when the install's engine moves on, one without its stamp is not a copy,
+and no install at all), the resolution tests in `LauncherDatabaseTests`, and the backup test that asserts the
+engine copy is not in a set.
+
+### 19. The patch server is asked about before Home, instead of assumed - *done*
+
+**What was asked for.** Running a fresh install downloads the server and says nothing at all about the patch
+server - which Imlight cannot boot without, so a session always has one and the only thing to decide is whose.
+Two things follow from leaving that unasked. The launcher's own default is a patch server on this machine and
+a fresh one has none, so every session lands on the public instance without anybody choosing it. And the public
+instance is exactly what a session played offline cannot rely on: a new zone, creature, item or single asset
+that this machine has never cached cannot be fetched, and the game is stuck there rather than merely slower.
+The question belongs in the first run, where the other two decisions already are, and the local answer is the
+one worth recommending - it is the only arrangement that plays with no connection at all.
+
+**What came out of it.** A third first-run screen, between the Imlight download and Home, asking it once: run
+one on this machine (the default, with Aurorium downloaded there and then) or use the public patch server
+(nothing downloaded, the address Imlight already has). `PatchServerChoiceAnswered` remembers that the question
+was put, the gate is those three screens in order, and a machine that already has a patch server is never
+stopped by it. The point of asking rather than defaulting is that the two answers are not equivalent, and the
+consequence of the wrong one arrives hours later, in a game that cannot be played - which is not a thing to
+find out from a softlock. Written up under [the patch server](#the-patch-server).
+
+**One thing deliberately left where it was.** The screen does not start the patch server, or fetch anything
+with it. Its first start is where the revision's file list is written, where the fetch begins, and where the
+offer to hand it the game's files instead is made - and all three of those belong to Play, next to the thing
+they are for, rather than to a first-run screen that would then be a download with a question attached.
+
+### 20. A finished copy is noticed, and the card stops asking - *done*
+
+**What was asked for.** In portable mode, after the game is copied in, two things went on being wrong on
+screen. Home kept offering to copy the game in, with a card headed *copy your game into this folder*, about a
+copy that had just finished. And Settings → the game folder went on saying *root.wad was not found* and
+*bin\WizardGraphicalClient.exe was not found* about the folder the copy had just been written into - until
+*Detect* was pressed again by hand, which then found both. The launcher had done the work and not looked at
+it.
+
+**What came out of it.** Both were the same missing read. A portable launcher starts out pointed at its own
+`game` folder, so `ClientPath = result.Destination` was writing back the value that was already there: no
+change, no `OnClientPathChanged`, and therefore no re-read of the very folder the copy had filled. The copy
+now calls `RefreshClientState()` on the way out, as the update path already did - that contrast is what made
+it obvious - so the executable and the archive are found the moment the copy finishes. The card's ask was
+separated from its report for the same reason: it is the ask that has to end, so `ShowPortableClientPrompt`
+decides the folder box and the buttons, the heading changes with it, and the message that proves the copy ran
+is left on screen where it belongs. A copy that is behind the machine's install is still the other card -
+[15](#15-a-copy-of-the-game-is-a-build-and-builds-go-stale---done) - because that is a different situation
+with a different fix. Written up under [copying the game in](#copying-the-game-in).
+
+### 21. A first sync never writes over the cloud - *done*
+
+**What was asked for.** A cloud sync that is dangerous in a way nobody expects, on the one day it matters
+most. A launcher started fresh creates its own database, and may already have a server database from one run;
+the cloud holds the real thing. Say yes to the backup and that machine's copy is what the sync weighs as
+current, so signing in on a new install can wipe the profile data that was the entire reason to sign in -
+destroyed before the sync that was supposed to restore it could run. The rule asked for is blunt and right:
+**when the cloud is being set up, the remote always wins.** A machine with nothing up there wins by default
+and syncs ordinarily; a machine pointing at a cloud that *does* hold something takes that copy first, and
+only then does the normal logic apply.
+
+**What came out of it.** `BackupSync.Plan` no longer stops to ask when both sides are present, they differ,
+and there is no ancestor: that state is a launcher which has never synced with this cloud, and the answer is
+a restore. The restore settles the ancestor as it already did, so the next sync
+is judged the ordinary way and this is never the everyday case. The conflict path is untouched and still
+reached where it belongs - both sides changed since they last agreed - and the two manual buttons stay as
+they were, because a person pressing **Back up now** is a decision rather than a guess.
+
+**The second route to the same loss, found while closing the first.** An upload writes the archive and then
+its manifest, so a run that stops between the two leaves a real backup with nothing beside it saying what it
+holds - and a manifest that is not there reads exactly like a Drive with no backup on it. That planned an
+upload: a fresh machine writing its empty database over a backup it could not see. `ICloudBackupStore`
+gained `ExistsAsync`, asked once about the archive - a listing rather than a tens-of-gigabytes download - and
+a cloud holding an archive with no manifest is now brought down (it carries its own manifest) instead of
+written over. A search that fails is a third answer rather than a second, and it stops the sync rather than
+being read as an empty drive. Written up under [a cloud backup of the few databases that
+matter](#5-a-cloud-backup-of-the-few-databases-that-matter---done) and in the readme's table of what a sync
+does.

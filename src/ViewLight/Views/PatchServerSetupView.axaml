@@ -1,0 +1,88 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ViewLight.ViewModels"
+             x:Class="ViewLight.Views.PatchServerSetupView"
+             x:DataType="vm:MainWindowViewModel"
+             Background="{DynamicResource ContentBackgroundBrush}">
+
+  <ScrollViewer>
+    <StackPanel MaxWidth="660" Spacing="16" Margin="40,44"
+                HorizontalAlignment="Center" VerticalAlignment="Center">
+
+      <TextBlock Text="Choose your patch server" Classes="heroTitle" HorizontalAlignment="Center" />
+
+      <!-- Why there is a question at all, before the two answers: Imlight cannot boot without a patch
+           server, so nothing here is optional - what is being chosen is whose. -->
+      <TextBlock Classes="muted" TextAlignment="Center" TextWrapping="Wrap"
+                 Text="Imlight is a thin client: it loads the game's files from a patch server as it runs, starting with Root.wad before the server will boot at all. So a session always has one, and the only thing to decide is whose. It is worth deciding on purpose — this is what decides whether the game works with no connection." />
+
+      <!-- ============================================ which one -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="Where the game's files come from" />
+
+          <StackPanel Spacing="6">
+            <RadioButton GroupName="FirstRunPatchServer" Content="Run one on this machine (recommended)"
+                         IsChecked="{Binding UseLocalPatchServer, Mode=TwoWay}" />
+            <RadioButton GroupName="FirstRunPatchServer" Content="Use the public patch server"
+                         IsChecked="{Binding UsesRemotePatchServer, Mode=TwoWay}" />
+          </StackPanel>
+
+          <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding UseLocalPatchServer}"
+                     Text="Aurorium — the Revive101 project's own file server — is downloaded and kept here, and Play starts it before the server so Imlight can read it while it boots. Everything a session asks for is then served from this machine, a zone, creature or item the game has never seen included. This is the only arrangement that plays with no internet at all." />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding UsesRemotePatchServer}"
+                     Text="Nothing is downloaded and nothing is kept running: Imlight keeps the address its own config has, which is the public one the community runs. The game then needs a connection whenever it wants something it has not already cached — a zone or a creature it has never seen cannot be fetched offline, and a session that is asked for one can be stuck there. A server started here is not what stops working: it is the game's own files that stop arriving." />
+        </StackPanel>
+      </Border>
+
+      <!-- ============================================ what the local answer needs
+           One executable and no setup, which is the whole cost of the answer - but an empty patch server
+           does fetch a revision whole on its first start, and that is worth saying before it happens. -->
+      <Border Classes="card" IsVisible="{Binding UseLocalPatchServer}">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="The patch server on this machine" />
+
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Downloading it is one executable of about 9 MB and no setup. Its first start then fetches the revision Wizard101 is serving — thousands of files, around 18 GB — or it can be handed the ones your game already has, which is what the offer before your first session is for." />
+
+          <StackPanel Spacing="4">
+            <TextBlock Classes="label" Text="It goes in" />
+            <TextBlock Classes="value" TextWrapping="Wrap" Text="{Binding PatchServerSetupFolder}" />
+            <TextBlock Classes="muted"
+                       Text="ViewLight manages this folder. Settings can point it somewhere else." />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding !PatchServerInstalled}">
+            <Button Classes="accent" Content="Download the patch server"
+                    Command="{Binding GetPatchServerForSetupCommand}" />
+            <TextBlock Classes="muted" VerticalAlignment="Center" Text="{Binding PatchInstalledText}" />
+          </StackPanel>
+
+          <TextBlock Classes="status" Text="Downloaded — Play starts it before the server and points Imlight at it."
+                     IsVisible="{Binding PatchServerInstalled}" />
+
+          <Border Classes="glass" IsVisible="{Binding IsPatchBusy}">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding PatchInstallStage}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Cancel" Command="{Binding CancelPatchInstallCommand}" />
+              </Grid>
+              <ProgressBar Value="{Binding PatchInstallProgress}" Maximum="100" />
+            </StackPanel>
+          </Border>
+
+          <TextBlock Classes="error" TextWrapping="Wrap" Text="{Binding PatchCheckError}"
+                     IsVisible="{Binding HasPatchCheckError}" />
+        </StackPanel>
+      </Border>
+
+      <Button Classes="accent play" Content="Continue" HorizontalAlignment="Center"
+              Command="{Binding CompletePatchServerSetupCommand}" />
+
+      <TextBlock Classes="muted" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                 Text="Running your own patch server needs it downloaded here first; the public one needs nothing. Either answer can be changed in Settings." />
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

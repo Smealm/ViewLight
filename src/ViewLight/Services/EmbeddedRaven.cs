@@ -117,6 +117,16 @@ public sealed class EmbeddedRaven : IDisposable {
     public string? Problem { get; private set; }
 
     /// <summary>
+    /// Which runtime the running database was started with, once it is running.
+    /// </summary>
+    /// <remarks>
+    /// Worth saying out loud rather than leaving to be inferred: a machine with no .NET of its own is
+    /// running this out of the launcher's folder, and that is the first question asked of a database that
+    /// misbehaves on one machine and not another.
+    /// </remarks>
+    public string? HostDescription { get; private set; }
+
+    /// <summary>
     /// The settings the server's RavenDB is started with.
     /// </summary>
     /// <remarks>
@@ -166,20 +176,21 @@ public sealed class EmbeddedRaven : IDisposable {
             return Problem = $"The database's settings could not be written ({ex.Message}).";
         }
 
-        var host = FindDotnetHost();
-        if (host is null) {
-            return Problem =
-                "No .NET host was found to run the server's RavenDB with, so the player database can only "
-                + "be read while the server itself is running.";
-        }
+        var host = DatabaseHostFor(setup);
 
-        var start = new ProcessStartInfo(host) {
+        var start = new ProcessStartInfo(host.Host) {
             WorkingDirectory = setup.ServerDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+
+        if (host.RuntimeRoot is { Length: > 0 } runtimeRoot) {
+            // The host beside the launcher is started from the folder it shares with the frameworks it is to
+            // resolve, which is what makes a machine with no .NET of its own able to run this at all.
+            DotnetHost.UseRuntimeRoot(start, runtimeRoot);
+        }
 
         // The shape Imlight's own embedded package launches it with: a settings file, and non-interactive
         // so nothing ever waits for a console that is not there.
@@ -205,6 +216,7 @@ public sealed class EmbeddedRaven : IDisposable {
                 _process = process;
                 Port = setup.Port;
                 DataDirectory = setup.DataDirectory;
+                HostDescription = host.Description;
 
                 // Tied to the launcher for the same reason the server is: a launcher that is killed
                 // outright must not leave a database holding the lock the server needs.
@@ -341,16 +353,22 @@ public sealed class EmbeddedRaven : IDisposable {
     }
 
     /// <summary>
-    /// The .NET host used to run the database server, or the name to try when this machine has none.
+    /// The host this database is to be run with, and the runtime it is to be given.
     /// </summary>
     /// <remarks>
     /// <c>Raven.Server.dll</c> is a framework-dependent assembly - the same shape Imlight's embedded
-    /// package runs it in - so it needs a host. The search is <see cref="DotnetHost.Find"/>, which finds one
-    /// put where an installer usually puts it as well as one that is only on <c>PATH</c>, and it is the same
-    /// answer the launcher's own first screen is decided on: a machine with no runtime is answered the same
-    /// way in both places rather than by two searches that could disagree. What is left for here is the last
-    /// resort: the bare name, so a machine with no runtime still gets an attempt and the operating system's
-    /// own "not found" rather than nothing at all.
+    /// package runs it in - so it needs a host, and which one is decided by <see cref="DotnetHost.HostFor"/>:
+    /// the runtime the launcher ships with, and this machine's install when there is no bundle or the bundle
+    /// is not what the database asks for. It is the same answer the launcher's own first screen is decided
+    /// on, chosen in one place rather than by two searches that could disagree - a launcher whose screen says
+    /// it is fine and whose database then will not start is the failure that used to be possible here.
+    /// <para>
+    /// What is left for this method is the last resort: the bare name, so a build with no runtime beside it
+    /// and none found on the machine still gets an attempt and the operating system's own "not found" rather
+    /// than nothing at all.
+    /// </para>
     /// </remarks>
-    public static string? FindDotnetHost() => DotnetHost.Find() ?? "dotnet";
+    public static DotnetHostChoice DatabaseHostFor(EmbeddedRavenSetup setup)
+        => DotnetHost.HostFor(DotnetHost.RequiredBy(setup.ServerDirectory))
+           ?? new DotnetHostChoice("dotnet", null, IsBundled: false);
 }

@@ -212,11 +212,13 @@ public sealed partial class MainWindowViewModel {
         : _manifests is not { HasCreatures: true } manifests
             ? "Bosses cannot be counted yet: the server has no "
               + $"{ImlightManifestReader.RelativeDirectory}{Path.DirectorySeparatorChar}"
-              + $"{ImlightManifestReader.CreatureFileName} to name them from."
+              + $"{ImlightManifestReader.CreatureFileName}, and that list is what says which of the "
+              + "creatures a duel was against was a boss. The creatures themselves are counted anyway, "
+              + "from the duels your account wins."
             : $"{ProfileBossesDefeated} of {manifests.Bosses.Count:N0} bosses beaten"
               + (ProfileBossesDefeated == 0
-                  ? " — bosses are counted when the server names the creature a won duel was against, "
-                    + "which it does not do yet."
+                  ? " — a creature counts as a boss once a duel names it and the server's own list has it "
+                    + "as one."
                   : string.Empty);
 
     /// <summary>
@@ -232,18 +234,9 @@ public sealed partial class MainWindowViewModel {
         _manifests = manifests;
 
         if (manifests.HasCreatures) {
-            // Both halves go over: a creature the list does not have at all is counted as neither a boss
-            // nor a mob, because calling it a mob would be a claim the list never made.
-            var bosses = manifests.Bosses.Select(b => b.TemplateId).ToHashSet();
-            var creatures = manifests.Creatures.Select(c => c.TemplateId).ToHashSet();
-
-            // The list is also how far the creature ladder runs: a player cannot beat more different
-            // creatures than the server has, so the top rung is this server's rather than the launcher's
-            // guess at it - the same reason the level ladders follow Character.MaxLevel. Bosses are taken
-            // out because beating one is counted as a boss, not as one of the ordinary creatures.
-            AchievementCatalog.UseCreatureCount(creatures.Count - bosses.Count);
-
-            var earned = _ledger.UseCreatureRoster(bosses, creatures, DateTimeOffset.Now);
+            // The whole list goes to the ledger: a duel names the creatures it was against and never says
+            // which of them was a boss, and the list is where that answer lives.
+            var earned = _ledger.UseCreatureRoster(manifests.Creatures, DateTimeOffset.Now);
 
             if (earned.Count > 0) {
                 RefreshProfiles();

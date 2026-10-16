@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ViewLight.Services;
 using ViewLight.ViewModels;
 using Xunit;
@@ -10,6 +11,18 @@ namespace ViewLight.Tests;
 /// install it can work with, and what the screen says when there is not one, is pinned down here.
 /// </summary>
 public class ImlightRequirementTests {
+
+    /// <summary>
+    /// The machine-wide host the fictions below report - deliberately not the one a real machine has.
+    /// </summary>
+    /// <remarks>
+    /// What a host offers is remembered for the run, keyed by its own path, and any test that builds a
+    /// launcher sets the launcher's own database going in the background against the real host. A probe of
+    /// that one landing after <see cref="DotnetHost.Forget"/> would answer these tests with this machine's
+    /// runtimes, so a host path no machine has is what keeps them about the code rather than about whose
+    /// machine they ran on.
+    /// </remarks>
+    private const string FictionalMachineHost = @"C:\viewlight-tests\dotnet\dotnet.exe";
 
     // ------------------------------------------------------------------ what is missing
 
@@ -61,6 +74,82 @@ public class ImlightRequirementTests {
     }
 
     [Fact]
+    public void AConfigThatIsThereButBusyIsNotAnInstallThatIsGone() {
+        using var workspace = new TempWorkspace();
+        var server = Install(workspace, selfContained: true);
+        var config = ImlightConfig.ConfigPathFor(server);
+
+        // Something else has the file - an install unpacking a build over the folder, the server writing its
+        // own settings as it boots. Held open with no sharing at all, which is the worst of it, and which also
+        // makes File.Exists answer false: the exception is what says the file is there.
+        using (File.Open(config, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) {
+            var missing = ImlightRequirements.For(server);
+
+            // Not "there is no server here": the server is plainly there, and being sent to download one is
+            // what the old answer did.
+            Assert.Equal(ImlightGap.ConfigUnreadable, missing.Gap);
+            Assert.Contains("could not be read", missing.Missing);
+            Assert.Contains(config, missing.Missing);
+            Assert.DoesNotContain("does not hold an Imlight install", missing.Missing);
+        }
+
+        // And once whatever had it lets go, the very next look is a working install - no restart, no
+        // re-download: this is the Check again button.
+        Assert.True(ImlightRequirements.For(server).IsMet);
+    }
+
+    [Fact]
+    public void AConfigThatIsNotThereAtAllIsStillAnInstallThatIsNotThere() {
+        using var workspace = new TempWorkspace();
+
+        // The distinction the gap above must not blur: no file, no install, and the sentence says so.
+        var missing = ImlightRequirements.For(workspace.CreateDirectory("server"));
+
+        Assert.Equal(ImlightGap.NoInstall, missing.Gap);
+        Assert.Contains("does not hold an Imlight install", missing.Missing);
+
+        // And the read itself says which of the two it was, because everything that reports to a person asks
+        // it rather than asking the file system.
+        var read = ImlightConfig.Read(workspace.Path("server"));
+
+        Assert.Null(read.Config);
+        Assert.False(read.FileIsThere);
+        Assert.True(read.NoInstall);
+    }
+
+    [Fact]
+    public void AHostThatWillNotAnswerIsNotAMachineWithoutTheRuntime() {
+        using var workspace = new TempWorkspace();
+
+        var server = Install(workspace, selfContained: false,
+            frameworks: [("Microsoft.AspNetCore.App", "10.0.8")]);
+
+        // A probe that timed out - a machine busy enough to eat ten seconds - is a fact about the moment, not
+        // about the runtime. It used to be cached, which turned one bad moment into a launcher insisting for
+        // the rest of the run that a runtime it could not ask about was missing.
+        using (new Unaskable(FictionalMachineHost)) {
+            Assert.True(ImlightRequirements.For(server).IsMet);
+
+            // Asked again rather than remembered: nothing about a failure to answer is cached.
+            var asked = 0;
+            DotnetHost.ListFrameworks = _ => {
+                asked++;
+                return null;
+            };
+
+            Assert.True(ImlightRequirements.For(server).IsMet);
+            Assert.True(ImlightRequirements.For(server).IsMet);
+            Assert.Equal(2, asked);
+        }
+
+        // A host that answers, and answers with nothing, is a different thing entirely: that one really is a
+        // machine without the framework, and it still says so.
+        using (new MachineWith(FictionalMachineHost)) {
+            Assert.Equal(ImlightGap.NoRuntime, ImlightRequirements.For(server).Gap);
+        }
+    }
+
+    [Fact]
     public void ADatabaseThatCarriesItsOwnRuntimeNeedsNothingFromThisMachine() {
         using var machine = new NoDotnet();
         using var workspace = new TempWorkspace();
@@ -96,7 +185,7 @@ public class ImlightRequirementTests {
         var server = Install(workspace, selfContained: false, frameworks: [
             ("Microsoft.NETCore.App", "10.0.8"), ("Microsoft.AspNetCore.App", "10.0.8")]);
 
-        using (new MachineWith(@"C:\Program Files\dotnet\dotnet.exe", ("Microsoft.NETCore.App", "10.0.10"))) {
+        using (new MachineWith(FictionalMachineHost, ("Microsoft.NETCore.App", "10.0.10"))) {
             var missing = ImlightRequirements.For(server);
 
             Assert.Equal(ImlightGap.NoRuntime, missing.Gap);
@@ -106,7 +195,7 @@ public class ImlightRequirementTests {
         }
 
         // A runtime that has both, at a higher version than the one asked for, is what the database needs.
-        using (new MachineWith(@"C:\Program Files\dotnet\dotnet.exe",
+        using (new MachineWith(FictionalMachineHost,
                    ("Microsoft.NETCore.App", "10.0.10"), ("Microsoft.AspNetCore.App", "10.0.10"))) {
             Assert.True(ImlightRequirements.For(server).IsMet);
         }
@@ -133,8 +222,12 @@ public class ImlightRequirementTests {
         Assert.Contains("x64", missing.Guide);
         Assert.Contains("Check again", missing.Guide);
 
+        // And that the install being asked for goes on the machine, since a released build carries a runtime
+        // of its own: this screen is about a database with nothing to run in, not about .NET in general.
+        Assert.Contains("brings a runtime of its own", missing.Guide);
+
         // A runtime that is there but too old is the same page and the same steps.
-        using (new MachineWith(@"C:\Program Files\dotnet\dotnet.exe", ("Microsoft.NETCore.App", "10.0.10"))) {
+        using (new MachineWith(FictionalMachineHost, ("Microsoft.NETCore.App", "10.0.10"))) {
             var old = ImlightRequirements.For(server);
 
             Assert.Equal(ImlightGap.NoRuntime, old.Gap);
@@ -213,6 +306,131 @@ public class ImlightRequirementTests {
         Assert.Equal(new[] { new DotnetFramework("Microsoft.NETCore.App", "10.0.8") }, required);
     }
 
+    // ------------------------------------------------------------------ the runtime that ships with the launcher
+
+    [Fact]
+    public void TheRuntimeBesideTheLauncherIsWhatRunsTheDatabase() {
+        using var machine = new NoDotnet();
+        using var workspace = new TempWorkspace();
+
+        var server = Install(workspace, selfContained: false,
+            frameworks: [("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        using var build = new BundleWith([("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        // A machine with no .NET on it at all, and this screen has nothing to complain about: that is the
+        // whole point of shipping a runtime rather than asking for one.
+        Assert.True(ImlightRequirements.For(server).IsMet);
+
+        // And the database is run with the copy beside the launcher, told where its frameworks are - which
+        // is what makes it work on a machine that has none.
+        var host = EmbeddedRaven.DatabaseHostFor(Setup(server));
+
+        Assert.True(host.IsBundled);
+        Assert.Equal(BundleWith.Host, host.Host);
+        Assert.Equal(BundleWith.Root, host.RuntimeRoot);
+        Assert.Contains("ships with", host.Description);
+
+        var start = new ProcessStartInfo(host.Host);
+        DotnetHost.UseRuntimeRoot(start, host.RuntimeRoot!);
+
+        Assert.Equal(BundleWith.Root, start.Environment["DOTNET_ROOT"]);
+        Assert.Equal(BundleWith.Root, start.Environment[DotnetHost.RuntimeRootVariable()]);
+    }
+
+    [Fact]
+    public void TheRuntimeThatShipsIsUsedEvenWhereTheMachineHasOne() {
+        using var workspace = new TempWorkspace();
+
+        var server = Install(workspace, selfContained: false,
+            frameworks: [("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        // Both are there and both fit, and the shipped one is still the one that is used - so the database
+        // behaves the same way on every machine rather than the way each machine's install happens to.
+        using var build = new BundleWith([("Microsoft.AspNetCore.App", "10.0.10")],
+            [("Microsoft.AspNetCore.App", "10.0.12")]);
+
+        var host = EmbeddedRaven.DatabaseHostFor(Setup(server));
+
+        Assert.True(host.IsBundled);
+        Assert.Equal(BundleWith.Host, host.Host);
+    }
+
+    [Fact]
+    public void ABundleWithoutTheFrameworkItIsAskedForFallsBackToTheMachine() {
+        using var workspace = new TempWorkspace();
+
+        var server = Install(workspace, selfContained: false,
+            frameworks: [("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        // The bundle is too old for what the database asks, and the machine can do it: better a database
+        // started with the machine's runtime than a screen insisting on an install that is already there.
+        using var build = new BundleWith([("Microsoft.AspNetCore.App", "10.0.9")],
+            [("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        Assert.True(ImlightRequirements.For(server).IsMet);
+
+        var host = EmbeddedRaven.DatabaseHostFor(Setup(server));
+
+        Assert.False(host.IsBundled);
+        Assert.Equal(BundleWith.MachineHost, host.Host);
+
+        // A machine's own runtime is left to resolve itself, rather than being pointed at a folder that is
+        // not a runtime root at all.
+        Assert.Null(host.RuntimeRoot);
+    }
+
+    [Fact]
+    public void ABundleThatIsNotEnoughSaysWhichRuntimeIsShort() {
+        using var machine = new NoDotnet();
+        using var workspace = new TempWorkspace();
+
+        var server = Install(workspace, selfContained: false, frameworks: [
+            ("Microsoft.NETCore.App", "10.0.10"), ("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        using var build = new BundleWith([("Microsoft.NETCore.App", "10.0.10")]);
+
+        var missing = ImlightRequirements.For(server);
+
+        Assert.Equal(ImlightGap.NoRuntime, missing.Gap);
+
+        // The shipped runtime is named, because nothing an installer does will change what is in the
+        // launcher's own folder - and the machine-wide one is what fixes this.
+        Assert.Contains("ViewLight ships with", missing.Missing);
+        Assert.Contains("Microsoft.AspNetCore.App 10.0.10", missing.Missing);
+        Assert.Contains("machine-wide runtime", missing.Missing);
+        Assert.Equal("https://dotnet.microsoft.com/download/dotnet/10.0", missing.ActionUrl);
+    }
+
+    [Fact]
+    public void WithNoRuntimeAnywhereBothPlacesAreNamed() {
+        using var machine = new NoDotnet();
+        using var workspace = new TempWorkspace();
+
+        var server = Install(workspace, selfContained: false,
+            frameworks: [("Microsoft.AspNetCore.App", "10.0.10")]);
+
+        var missing = ImlightRequirements.For(server);
+
+        Assert.Equal(ImlightGap.NoDotnet, missing.Gap);
+
+        // Both were looked in, so both are named: which of them to fill is the user's to decide, and a
+        // message that mentions only the machine reads as a launcher that never tried its own folder.
+        Assert.Contains("ships none beside the launcher", missing.Missing);
+        Assert.Contains("this machine has none installed", missing.Missing);
+        Assert.Contains("Microsoft.AspNetCore.App 10.0.10", missing.Missing);
+        Assert.Equal("Get the .NET runtime", missing.ActionLabel);
+    }
+
+    [Fact]
+    public void TheRuntimeIsLookedForInTheFolderTheReleasePutsItIn() {
+        // One name and one place, because the release has to fill exactly this: the muxer is a real .NET
+        // installation's - a host, and shared frameworks beside it - rather than a folder of assemblies.
+        Assert.Equal("runtime", DotnetHost.BundledRuntimeFolderName);
+        Assert.Equal(Path.Combine(AppContext.BaseDirectory, DotnetHost.BundledRuntimeFolderName),
+            DotnetHost.BundledRuntimeDirectory);
+    }
+
     // ------------------------------------------------------------------ the launcher's first screen
 
     [Fact]
@@ -232,12 +450,22 @@ public class ImlightRequirementTests {
         launcher.CheckImlightAgainCommand.Execute(null);
 
         Assert.False(launcher.RequiresImlight);
-        Assert.True(launcher.ShowMainInterface);
         Assert.Equal(string.Empty, launcher.ImlightProblem);
         Assert.Equal(ImlightGap.None, launcher.ImlightGap);
 
         // And the steps go away with the problem they were for.
         Assert.False(launcher.HasImlightGuide);
+
+        // An install is not the whole answer any more, and this is where that shows: a machine that has one
+        // and no patch server still has one question left - whose patch server a session's files come from -
+        // so the launcher waits for that rather than showing itself.
+        Assert.True(launcher.RequiresPatchServerChoice);
+        Assert.False(launcher.ShowMainInterface);
+
+        launcher.UsesRemotePatchServer = true;
+        launcher.CompletePatchServerSetupCommand.Execute(null);
+
+        Assert.True(launcher.ShowMainInterface);
     }
 
     [Fact]
@@ -303,7 +531,7 @@ public class ImlightRequirementTests {
 
         // Somebody installs .NET, comes back, and presses the button: the answer is asked for again rather
         // than remembered from the start of the run.
-        var installed = new MachineWith(@"C:\Program Files\dotnet\dotnet.exe",
+        var installed = new MachineWith(FictionalMachineHost,
             ("Microsoft.AspNetCore.App", "10.0.10"));
 
         try {
@@ -371,27 +599,39 @@ public class ImlightRequirementTests {
             : $"{{\"runtimeOptions\":{{\"tfm\":\"net10.0\",\"frameworks\":[{asked}]}}}}";
     }
 
+    /// <summary>What a database is started with, for asking which runtime it would be given.</summary>
+    private static EmbeddedRavenSetup Setup(string server) {
+        var raven = Path.Combine(server, ImlightConfig.RelativeRavenServerDirectory);
+
+        return new EmbeddedRavenSetup(
+            Path.Combine(raven, "Raven.Server.dll"), raven, server, server, server,
+            ImlightConfig.DefaultEmbeddedDatabasePort, TimeSpan.FromSeconds(30));
+    }
+
     /// <summary>Puts the machine's own answers back, so one test cannot decide another's.</summary>
     private static void Restore(
-        Func<string?> find, Func<string, IReadOnlyList<DotnetFramework>> list) {
+        Func<string?> find, Func<string?> findBundled, Func<string, IReadOnlyList<DotnetFramework>?> list) {
         DotnetHost.Find = find;
+        DotnetHost.FindBundled = findBundled;
         DotnetHost.ListFrameworks = list;
         DotnetHost.Forget();
     }
 
-    /// <summary>A machine with no .NET on it at all.</summary>
+    /// <summary>A machine with no .NET on it at all, and a build with no runtime beside it.</summary>
     private sealed class NoDotnet : IDisposable {
 
         private readonly Func<string?> _find = DotnetHost.Find;
-        private readonly Func<string, IReadOnlyList<DotnetFramework>> _list = DotnetHost.ListFrameworks;
+        private readonly Func<string?> _findBundled = DotnetHost.FindBundled;
+        private readonly Func<string, IReadOnlyList<DotnetFramework>?> _list = DotnetHost.ListFrameworks;
 
         public NoDotnet() {
+            DotnetHost.FindBundled = () => null;
             DotnetHost.Find = () => null;
             DotnetHost.ListFrameworks = _ => [];
             DotnetHost.Forget();
         }
 
-        public void Dispose() => Restore(_find, _list);
+        public void Dispose() => Restore(_find, _findBundled, _list);
     }
 
     /// <summary>
@@ -401,14 +641,89 @@ public class ImlightRequirementTests {
     private sealed class MachineWith : IDisposable {
 
         private readonly Func<string?> _find = DotnetHost.Find;
-        private readonly Func<string, IReadOnlyList<DotnetFramework>> _list = DotnetHost.ListFrameworks;
+        private readonly Func<string?> _findBundled = DotnetHost.FindBundled;
+        private readonly Func<string, IReadOnlyList<DotnetFramework>?> _list = DotnetHost.ListFrameworks;
 
         public MachineWith(string host, params (string Name, string Version)[] frameworks) {
+            DotnetHost.FindBundled = () => null;
             DotnetHost.Find = () => host;
             DotnetHost.ListFrameworks = _ => frameworks.Select(f => new DotnetFramework(f.Name, f.Version)).ToList();
             DotnetHost.Forget();
         }
 
-        public void Dispose() => Restore(_find, _list);
+        public void Dispose() => Restore(_find, _findBundled, _list);
+    }
+
+    /// <summary>A machine whose host is there and will not answer - the probe that times out.</summary>
+    private sealed class Unaskable : IDisposable {
+
+        private readonly Func<string?> _find = DotnetHost.Find;
+        private readonly Func<string?> _findBundled = DotnetHost.FindBundled;
+        private readonly Func<string, IReadOnlyList<DotnetFramework>?> _list = DotnetHost.ListFrameworks;
+
+        public Unaskable(string host) {
+            DotnetHost.FindBundled = () => null;
+            DotnetHost.Find = () => host;
+            DotnetHost.ListFrameworks = _ => null;
+            DotnetHost.Forget();
+        }
+
+        public void Dispose() => Restore(_find, _findBundled, _list);
+    }
+
+    /// <summary>
+    /// A build that ships a runtime of its own beside the launcher, offering exactly these frameworks.
+    /// </summary>
+    /// <remarks>
+    /// The bundle's shape is real - a host inside the folder the launcher works out for itself - because what
+    /// is being pinned down is which of two runtimes is chosen and how the chosen one is pointed at its own
+    /// frameworks. What each of them offers is decided here rather than discovered, for the same reason the
+    /// machine's own answers are: a test that turns on which runtime this machine happens to have is a test
+    /// that fails on somebody else's.
+    /// </remarks>
+    private sealed class BundleWith : IDisposable {
+
+        /// <summary>The host inside the launcher's own runtime folder.</summary>
+        public static readonly string Host = Path.Combine(DotnetHost.BundledRuntimeDirectory,
+            OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+
+        /// <summary>The folder that is that runtime's root.</summary>
+        public static readonly string Root = DotnetHost.BundledRuntimeDirectory;
+
+        /// <summary>Where a machine's own install is, in the query below - see the class's own note.</summary>
+        public const string MachineHost = FictionalMachineHost;
+
+        private readonly Dictionary<string, IReadOnlyList<DotnetFramework>> _offered = [];
+
+        private readonly Func<string?> _find = DotnetHost.Find;
+        private readonly Func<string?> _findBundled = DotnetHost.FindBundled;
+        private readonly Func<string, IReadOnlyList<DotnetFramework>?> _list = DotnetHost.ListFrameworks;
+
+        /// <summary>
+        /// The build, and - when a second list is given - a machine that has a runtime of its own too.
+        /// </summary>
+        public BundleWith(
+            (string Name, string Version)[] bundled,
+            (string Name, string Version)[]? onMachine = null) {
+
+            _offered[Host] = Frameworks(bundled);
+
+            if (onMachine is null) {
+                DotnetHost.Find = () => null;
+            }
+            else {
+                _offered[MachineHost] = Frameworks(onMachine);
+                DotnetHost.Find = () => MachineHost;
+            }
+
+            DotnetHost.FindBundled = () => Host;
+            DotnetHost.ListFrameworks = host => _offered.TryGetValue(host, out var offered) ? offered : [];
+            DotnetHost.Forget();
+        }
+
+        public void Dispose() => Restore(_find, _findBundled, _list);
+
+        private static IReadOnlyList<DotnetFramework> Frameworks((string Name, string Version)[] frameworks)
+            => frameworks.Select(f => new DotnetFramework(f.Name, f.Version)).ToList();
     }
 }

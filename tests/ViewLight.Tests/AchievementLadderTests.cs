@@ -93,6 +93,94 @@ public class AchievementLadderTests {
             a => a.AchievementId.Contains("-level-", StringComparison.Ordinal));
     }
 
+    // ------------------------------------------------------------------ time played
+
+    [Fact]
+    public void TheTimePlayedLadderIsTheShapeItWasAskedFor() {
+        // Half an hour, an hour, and then five hours at a time to a thousand - with the twenty hours the
+        // game itself uses as a boundary and the hundred a wizard is supposed to have played both landing on
+        // rungs of it rather than on badges of their own.
+        var playtime = AchievementCatalog.Tracks.Single(t => t.Id == "playtime");
+
+        Assert.Equal(AchievementCategory.Playtime, playtime.Category);
+        Assert.Equal([30, 60, 300, 600, 900, 1200, 1500], playtime.Rungs.Take(7));
+        Assert.Equal(AchievementCatalog.PlaytimeCap, playtime.Top);
+        Assert.Equal(1000 * 60, AchievementCatalog.PlaytimeCap);
+
+        // A rung a minute apart would be a badge per look at the database, so the ladder is the thresholds
+        // themselves and nothing else: the rung above the cap is not there, and neither is one between two.
+        Assert.NotNull(AchievementCatalog.ById($"playtime-{AchievementCatalog.PlaytimeCap}"));
+        Assert.Null(AchievementCatalog.ById($"playtime-{AchievementCatalog.PlaytimeCap + AchievementCatalog.PlaytimeMilestoneStep}"));
+        Assert.Null(AchievementCatalog.ById("playtime-6030"));
+    }
+
+    [Fact]
+    public void PlaytimeIsCountedFromTheHourTheAccountHasActuallyPlayed() {
+        // Minutes, and the same minutes the launcher adds up: half an hour of play is the first rung and no
+        // more, and a second short of an hour is not the hour.
+        var half = new LauncherProfile { AccountId = 1, PlaytimeSeconds = 30 * 60 };
+        var hour = new LauncherProfile { AccountId = 1, PlaytimeSeconds = 60 * 60 };
+
+        Assert.True(AchievementCatalog.ById("playtime-30")!.Earned(half));
+        Assert.False(AchievementCatalog.ById("playtime-60")!.Earned(half));
+        Assert.True(AchievementCatalog.ById("playtime-60")!.Earned(hour));
+        Assert.False(AchievementCatalog.ById("playtime-300")!.Earned(hour));
+
+        // And nothing is earned by a profile that has never played.
+        var untouched = new LauncherProfile { AccountId = 1 };
+
+        Assert.All(
+            AchievementCatalog.All.Where(a => a.TrackId == "playtime"),
+            a => Assert.False(a.Earned(untouched)));
+    }
+
+    [Fact]
+    public void TheThousandthHourIsABadgeOfItsOwnWorthAHeap() {
+        // The point of the ladder's top rung: rather than one more playtime rung it is a badge with a name,
+        // and it is what the ladder says it is worth rather than what its difficulty says - a heap, as asked
+        // for, on the one badge in the catalog where the coarse scale does not apply.
+        var thousand = AchievementCatalog.ById($"playtime-{AchievementCatalog.PlaytimeCap}")!;
+
+        Assert.Equal(AchievementCatalog.ThousandHoursBadge, thousand.Name);
+        Assert.Equal(AchievementCatalog.ThousandHoursPoints, thousand.Score);
+        Assert.True(thousand.IsMilestone);
+        Assert.Equal("playtime", thousand.TrackId);
+        Assert.Equal("Spend 1,000 hours signed in to your own server.", thousand.Requirement);
+
+        // It is granted when the rung is done, and not a minute before.
+        Assert.True(thousand.Earned(new LauncherProfile { AccountId = 1, PlaytimeSeconds = 1000 * 3600 }));
+        Assert.False(thousand.Earned(new LauncherProfile { AccountId = 1, PlaytimeSeconds = 1000 * 3600 - 60 }));
+    }
+
+    [Fact]
+    public void EveryOtherRungOfTheLadderIsPricedAndNamedByItsLadder() {
+        // The finale is the exception, and it has to stay the only one: everything else a ladder generates is
+        // named for the ladder and worth what its difficulty is worth, which is what keeps a score explainable
+        // from the badges on the profile.
+        var rungs = AchievementCatalog.All.Where(a => a.TrackId == "playtime").ToList();
+        var finale = $"playtime-{AchievementCatalog.PlaytimeCap}";
+
+        Assert.All(rungs.Where(r => r.Id != finale), rung => {
+            Assert.Equal(AchievementScores.For(rung.Difficulty), rung.Score);
+            Assert.StartsWith("Playtime, ", rung.Name, StringComparison.Ordinal);
+        });
+
+        Assert.All(
+            AchievementCatalog.All.Where(a => a.FixedScore is not null),
+            a => Assert.Equal(finale, a.Id));
+    }
+
+    [Fact]
+    public void TheBadgesTimePlayedUsedToBeAreGoneRatherThanKeptBesideTheLadder() {
+        // Five fixed thresholds cannot sit beside a ladder of the same five thresholds without the profile
+        // scoring the same hour twice, and the catalog is the whole list - so the ladder replaces them. The
+        // hours themselves are not lost: they are the playtime the ladder is measured in, so the rungs up to
+        // what an account has played are earned on its next read.
+        foreach (var id in new[] { "settling-in", "five-hours", "ten-hours", "twenty-hours", "hundred-hours" }) {
+            Assert.Null(AchievementCatalog.ById(id));
+        }
+    }
+
     // ------------------------------------------------------------------ the spellbook
 
     [Fact]

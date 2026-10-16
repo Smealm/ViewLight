@@ -61,26 +61,93 @@ public sealed class ProfileLedger {
     private readonly List<ZoneEntered> _pendingZones = [];
 
     /// <summary>
-    /// The creatures each duel has been seen to involve, by the template they were spawned from.
+    /// The duels that have been seen to start and have not ended yet, by the id the server gives them.
     /// </summary>
     /// <remarks>
-    /// Held until the duel's ending arrives, because the two are separate lines: the creatures are named
-    /// when the duel starts, and who won is only known when it ends. A win is credited to every creature
-    /// in the duel, which is what the log actually says - it lists one winner for the whole duel, not a
-    /// separate result per participant.
+    /// Held until the ending arrives, because the parts are separate lines: who took a slot, what a spell
+    /// hit, and who won. A win is credited to every creature of the duel, which is what the log actually
+    /// says - it lists one winner for the whole duel, not a separate result per participant.
     /// </remarks>
-    private readonly Dictionary<string, List<uint>> _duelCreatures = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WatchedDuel> _duels = new(StringComparer.Ordinal);
+
+    /// <summary>What has been read about one duel that has not ended yet.</summary>
+    /// </summary>
+    private sealed class WatchedDuel {
+
+        /// <summary>
+        /// The slots a creature planned a turn on, which is the server saying that a creature is on them.
+        /// </summary>
+        /// <remarks>
+        /// This is what tells a creature from a player in a real duel, and it is the only thing that does:
+        /// the participant line carries a debug name (<c>140DD</c>) rather than a template ID or a name a
+        /// creature list could carry, and no line gives a creature's template at all. A creature that
+        /// planned a turn was in the fight; one that joined it and died before ever planning is not counted,
+        /// which is an under-count rather than a guess. See <see cref="DuelCreatureTurn"/>.
+        /// </remarks>
+        public HashSet<int> CreatureSlots { get; } = [];
+
+        /// <summary>What each spell reached.</summary>
+        public List<SpellCast> Hits { get; } = [];
+
+        /// <summary>
+        /// The creatures the line the server does not write yet would name outright.
+        /// </summary>
+        /// <remarks>
+        /// Kept apart from the counted kills because it needs no list to be believed: a template id is the
+        /// creature. See <see cref="DuelCreature"/>.
+        /// </remarks>
+        public List<uint> Creatures { get; } = [];
+
+        /// <summary>
+        /// The creature slots a spell of the players' side reached in this duel, once each.
+        /// </summary>
+        /// <remarks>
+        /// Both halves come off the server's own lines: a spell's line says which slot it was cast from and
+        /// which slots it reached, and a creature's attitude line says which slots held creatures. Casting
+        /// from a player's circle at a creature's is the player's side reaching it - and a creature casting
+        /// at a creature, or a spell that landed on the players' own circles, is neither.
+        /// </remarks>
+        public IEnumerable<int> CreatureSlotsHitByPlayers()
+            => Hits.Where(hit => IsPlayersSide(hit.CasterSlot))
+                .SelectMany(hit => hit.Slots)
+                .Where(slot => CreatureSlots.Contains(slot) && !IsPlayersSide(slot))
+                .Distinct();
+    }
 
     /// <summary>
-    /// The server's own creature list, once it has been read.
+    /// The first slot that belongs to the players, from the server's own circle layout.
     /// </summary>
     /// <remarks>
-    /// A duel says who won it and names the creatures it was against, but nothing in either says which of
-    /// them was a boss - that is a fact about the creature, and the server's creature list is where it
-    /// lives. Until the list has been read, a beaten creature is counted as beaten and nothing more, which
-    /// can only ever under-count.
+    /// Circles 0-3 are the creatures' and 4-7 the players', in the order the sigil template lists them:
+    /// Imlight says so in <c>CombatGroupReservations</c> and its own circle-choosing code walks the same
+    /// split, so no player is ever put on a creature's circle. That is what makes "cast from 4 or above"
+    /// mean the players' side - and the split is corroborated per duel rather than believed on its own: a
+    /// duel in which no creature ever planned a turn credits nothing at all.
     /// </remarks>
-    private (IReadOnlySet<uint> Bosses, IReadOnlySet<uint> Creatures)? _roster;
+    public const int FirstPlayerCircle = 4;
+
+    private static bool IsPlayersSide(int slot) => slot >= FirstPlayerCircle;
+
+    /// <summary>
+    /// One spell's cast, as the duel it belongs to saw it.
+    /// </summary>
+    /// <remarks>
+    /// The line itself is not kept: a badge earned by a count of creatures quotes the line that ended the
+    /// duel rather than one of the spells in it, because the ending is what made the count true. See the
+    /// duel's own pass in <see cref="Apply"/>.
+    /// </remarks>
+    private sealed record SpellCast(int CasterSlot, IReadOnlyList<int> Slots);
+
+    /// <summary>
+    /// The creatures the server's own list calls bosses, once it has been read.
+    /// </summary>
+    /// <remarks>
+    /// A duel names the creatures it was against and never says which of them was a boss - that is a fact
+    /// about the creature, and the server's creature list is where it lives. The list no longer has to say
+    /// who was a creature: a duel's own lines do that (see <see cref="DuelCreatureTurn"/>), which leaves the
+    /// bosses as the only thing still waiting on it.
+    /// </remarks>
+    private IReadOnlySet<uint>? _bosses;
 
     /// <summary>
     /// The game's own name tables, once they have been handed over.
@@ -308,14 +375,29 @@ public sealed class ProfileLedger {
             case ZoneNamed named:
                 return LearnZoneWorld(named, earned);
 
+            // -------------------------------------------------------- a duel began
+            case DuelStarted started:
+                RestartDuel(started.DuelId);
+                return true;
+
             // -------------------------------------------------------- a creature joined a duel
             case DuelCreature creature:
                 NoteDuelCreature(creature);
                 return true;
 
+            // -------------------------------------------------------- a creature planned a turn
+            case DuelCreatureTurn turn:
+                NoteDuelCreatureTurn(turn);
+                return true;
+
+            // -------------------------------------------------------- a spell reached some slots
+            case DuelSpellHit hit:
+                NoteDuelSpellHit(hit);
+                return true;
+
             // -------------------------------------------------------- a duel finished
             case DuelFinished duel: {
-                var creatures = ForgetDuel(duel.DuelId);
+                var watched = ForgetDuel(duel.DuelId);
                 var profile = SingleOnlineProfile();
 
                 if (profile is null) {
@@ -325,18 +407,26 @@ public sealed class ProfileLedger {
 
                 if (duel.PlayersWon) {
                     profile.DuelsWon++;
-                    CreditCreatures(profile, creatures);
 
-                    // Which of them were bosses is the creature list's business, so it is re-counted here
-                    // once that list is known - a duel won before it was read still counts.
-                    if (_roster is { } roster) {
-                        profile.ClassifyBeatenCreatures(roster.Bosses, roster.Creatures);
+                    // What a won duel leaves behind: the creatures it identified outright, and a count of
+                    // the creature slots the players' spells reached. The count needs no creature list -
+                    // the duel's own lines carry it - while which of them were bosses still does.
+                    CreditCreatures(profile, watched);
+
+                    // What was just beaten is re-counted against the list here rather than only when the
+                    // list is read: a boss beaten in this duel is a boss beaten now, not at the next
+                    // launcher start.
+                    if (_bosses is { } bosses) {
+                        profile.ClassifyBeatenCreatures(bosses);
                     }
                 }
                 else {
                     profile.DuelsLost++;
                 }
 
+                // One pass, quoting the line that ended the duel: the duel's own badges are what that line
+                // is about, and a count reached in the duel is not shown as if a spell line proved it. See
+                // Award for why a pass quotes one line rather than a line each.
                 Award(profile, duel.At, duel.Evidence, earned);
                 return true;
             }
@@ -650,26 +740,67 @@ public sealed class ProfileLedger {
         return added;
     }
 
-    /// <summary>Records that a creature took part in a duel, ready for the duel's ending.</summary>
-    private void NoteDuelCreature(DuelCreature creature) {
-        if (!_duelCreatures.TryGetValue(creature.DuelId, out var creatures)) {
-            // Oldest first, so a duel that never ended cannot crowd out the ones that still might.
-            while (_duelCreatures.Count >= MaxTrackedDuels) {
-                _duelCreatures.Remove(_duelCreatures.Keys.First());
-            }
-
-            creatures = [];
-            _duelCreatures[creature.DuelId] = creatures;
+    /// <summary>
+    /// The duel a line is about, started here if it is the first thing seen about it.
+    /// </summary>
+    /// <remarks>
+    /// The oldest is dropped once too many are being followed, so a duel that never ends cannot leave its
+    /// parts behind for as long as the launcher runs. Nothing is ever concluded from a duel that is gone.
+    /// </remarks>
+    private WatchedDuel DuelOf(string duelId) {
+        if (_duels.TryGetValue(duelId, out var duel)) {
+            return duel;
         }
 
-        if (!creatures.Contains(creature.TemplateId)) {
-            creatures.Add(creature.TemplateId);
+        while (_duels.Count >= MaxTrackedDuels) {
+            _duels.Remove(_duels.Keys.First());
+        }
+
+        duel = new WatchedDuel();
+        _duels[duelId] = duel;
+        return duel;
+    }
+
+    /// <summary>
+    /// Starts a duel over, under the id the server gave it.
+    /// </summary>
+    /// <remarks>
+    /// The id is the sigil's rather than the fight's, and a sigil is fought at more than once: the same
+    /// number comes round again with the same lines about slots underneath it. Throwing away what the
+    /// earlier fight said is what keeps a creature that was in that one out of this one's count.
+    /// </remarks>
+    private void RestartDuel(string duelId) {
+        _duels.Remove(duelId);
+        DuelOf(duelId);
+    }
+
+    /// <summary>
+    /// Records that a creature took part in a duel, by the template the server named it with.
+    /// </summary>
+    /// <remarks>
+    /// Imlight does not write this line yet, and the day it does, this is what turns a duel's creatures into
+    /// creatures the launcher can name - which is what the boss badges are waiting on. See
+    /// <see cref="DuelCreature"/>.
+    /// </remarks>
+    private void NoteDuelCreature(DuelCreature creature) {
+        var duel = DuelOf(creature.DuelId);
+
+        if (!duel.Creatures.Contains(creature.TemplateId)) {
+            duel.Creatures.Add(creature.TemplateId);
         }
     }
 
-    /// <summary>Takes a duel's creature list, once its ending has been read.</summary>
-    private IReadOnlyList<uint> ForgetDuel(string duelId)
-        => _duelCreatures.Remove(duelId, out var creatures) ? creatures : [];
+    /// <summary>Records that a creature planned a turn on a slot, which makes it a creature's slot.</summary>
+    private void NoteDuelCreatureTurn(DuelCreatureTurn turn)
+        => DuelOf(turn.DuelId).CreatureSlots.Add(turn.Slot);
+
+    /// <summary>Records what a spell reached, ready for the duel's ending.</summary>
+    private void NoteDuelSpellHit(DuelSpellHit hit)
+        => DuelOf(hit.DuelId).Hits.Add(new SpellCast(hit.CasterSlot, hit.Slots));
+
+    /// <summary>Takes what was read about a duel, once its ending has arrived.</summary>
+    private WatchedDuel ForgetDuel(string duelId)
+        => _duels.Remove(duelId, out var duel) ? duel : new WatchedDuel();
 
     /// <summary>
     /// Takes the game's own name tables, so a wizard can be shown by name rather than by id.
@@ -685,17 +816,18 @@ public sealed class ProfileLedger {
     /// here rather than only as duels are won. Every profile is re-counted, because a boss beaten on an
     /// account the launcher was not watching is still a boss beaten that this list can now explain.
     /// </remarks>
-    /// <param name="bosses">The creatures the list names as bosses.</param>
     /// <param name="creatures">Every creature the list has.</param>
     /// <returns>The achievements this made true, so the caller can say so.</returns>
     public IReadOnlyList<ProfileAward> UseCreatureRoster(
-        IReadOnlySet<uint> bosses, IReadOnlySet<uint> creatures, DateTimeOffset at) {
-        _roster = (bosses, creatures);
+        IReadOnlyList<CreatureManifestEntry> creatures, DateTimeOffset at) {
+        var bosses = creatures.Where(c => c.IsBoss).Select(c => c.TemplateId).ToHashSet();
+
+        _bosses = bosses;
 
         var earned = new List<ProfileAward>();
 
         foreach (var profile in _store.Profiles) {
-            profile.ClassifyBeatenCreatures(bosses, creatures);
+            profile.ClassifyBeatenCreatures(bosses);
 
             // Nothing is quoted, for the same reason as the database pass: reading a creature list is not
             // something that happened to this badge, and the badges it turns on say what they take.
@@ -707,17 +839,36 @@ public sealed class ProfileLedger {
     }
 
     /// <summary>
-    /// Marks every creature of a won duel as beaten by the profile.
+    /// Marks the creatures of a won duel as beaten by the profile.
     /// </summary>
     /// <remarks>
-    /// Already-beaten creatures are left alone so the list stays a list of what was beaten rather than a
-    /// count of how many times, and nothing is ever removed from it.
+    /// <para>
+    /// Two ways of knowing, and both are the server's own lines. A line naming a creature outright
+    /// (<c>| Creature 35166 Wraith-WCBoss-L05 joined</c>) is taken as it stands - the template id is the
+    /// creature, and no list is needed to believe it - but Imlight does not write that line yet, so the way
+    /// that works today is the duel's other lines read together: a spell cast from a player's circle that
+    /// reached a slot a creature was seen planning on is the players' side beating that creature, and the
+    /// duel having been won is what makes it beaten rather than merely hit.
+    /// </para>
+    /// <para>
+    /// The two leave different things behind on purpose. A named creature goes into the list of what was
+    /// beaten, once each, because the id is known; a slot does not, because nothing says which creature was
+    /// on it - so it adds one to the count of creatures beaten instead. Farming one creature therefore
+    /// counts every time, which is what the log supports and what the screen says.
+    /// </para>
     /// </remarks>
-    private static void CreditCreatures(LauncherProfile profile, IReadOnlyList<uint> creatures) {
-        foreach (var creature in creatures) {
-            if (!profile.CreaturesDefeated.Contains(creature)) {
-                profile.CreaturesDefeated.Add(creature);
-            }
+    private static void CreditCreatures(LauncherProfile profile, WatchedDuel duel) {
+        foreach (var creature in duel.Creatures) {
+            Beat(profile, creature);
+        }
+
+        profile.CreaturesKilled += duel.CreatureSlotsHitByPlayers().Count();
+    }
+
+    /// <summary>Marks one creature as beaten by a profile, once.</summary>
+    private static void Beat(LauncherProfile profile, uint templateId) {
+        if (!profile.CreaturesDefeated.Contains(templateId)) {
+            profile.CreaturesDefeated.Add(templateId);
         }
     }
 

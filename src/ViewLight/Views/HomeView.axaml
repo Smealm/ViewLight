@@ -229,46 +229,101 @@
 
       <!-- ============================================================ portable: copy the game in
            Portable mode keeps the launcher, the server and the game in one folder that can be carried
-           anywhere. The game is the one part ViewLight cannot fetch, so this is where it gets copied in -
-           and where a Steam copy is called out, because copying it does not make it independent of Steam. -->
+           anywhere. The game is the one part ViewLight cannot fetch, so this is where it gets copied in.
+
+           The asking is a card of its own, because it has to stop: a copy that has finished leaves the
+           game in the folder and nothing left to do, and the card would otherwise go on offering to copy
+           a game that is already there. What is left of it then is the line saying how it went. A Steam
+           copy is called out while it is chosen, because whether that build needs Steam is KingsIsle's to
+           decide rather than something the copy settles. -->
       <Border Classes="card" IsVisible="{Binding ShowPortableClientCard}">
         <StackPanel Spacing="12">
-          <TextBlock Classes="cardTitle" Text="Copy your game into this folder" />
-          <TextBlock Classes="muted"
-                     Text="ViewLight is running portably, so it plays the game from its own folder rather than from an install elsewhere. Point it at your Wizard101 folder and it will copy the game in; your existing install is left untouched." />
-          <TextBlock Classes="value" Text="{Binding PortableGameFolder}" />
+          <TextBlock Classes="cardTitle" Text="{Binding PortableClientCardTitle}" />
 
-          <StackPanel Spacing="4">
-            <TextBlock Classes="label" Text="Copy the game from" />
-            <Grid ColumnDefinitions="*,Auto,Auto">
-              <TextBox Text="{Binding PortableGameSource, Mode=TwoWay}"
-                       Watermark="C:\Program Files (x86)\Steam\steamapps\common\Wizard101" />
-              <Button Grid.Column="1" Margin="8,0,0,0" Content="Detect"
-                      Command="{Binding DetectPortableGameSourceCommand}" />
-              <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
-                      Command="{Binding BrowsePortableGameSourceCommand}" />
-            </Grid>
+          <StackPanel Spacing="12" IsVisible="{Binding ShowPortableClientPrompt}">
+            <TextBlock Classes="muted"
+                       Text="ViewLight is running portably, so it plays the game from its own folder rather than from an install elsewhere. Point it at your Wizard101 folder and it will copy the game in; your existing install is left untouched." />
+            <TextBlock Classes="value" Text="{Binding PortableGameFolder}" />
+
+            <StackPanel Spacing="4">
+              <TextBlock Classes="label" Text="Copy the game from" />
+              <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBox Text="{Binding PortableGameSource, Mode=TwoWay}"
+                         Watermark="C:\Program Files (x86)\Steam\steamapps\common\Wizard101" />
+                <Button Grid.Column="1" Margin="8,0,0,0" Content="Detect"
+                        Command="{Binding DetectPortableGameSourceCommand}" />
+                <Button Grid.Column="2" Margin="8,0,0,0" Content="Browse…"
+                        Command="{Binding BrowsePortableGameSourceCommand}" />
+              </Grid>
+            </StackPanel>
+
+            <TextBlock Classes="warning" Text="{Binding PortableSteamWarning}"
+                       IsVisible="{Binding HasPortableSteamWarning}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Classes="accent" Content="Copy the game in"
+                      Command="{Binding CopyGameIntoPortableCommand}" />
+              <Button Content="Cancel" Command="{Binding CancelCopyGameCommand}"
+                      IsVisible="{Binding IsCopyingGame}" />
+            </StackPanel>
+
+            <Border Classes="glass" IsVisible="{Binding IsCopyingGame}">
+              <StackPanel Spacing="10">
+                <TextBlock Text="{Binding CopyGameStage}" />
+                <ProgressBar Value="{Binding CopyGameProgress}" Maximum="100" />
+              </StackPanel>
+            </Border>
           </StackPanel>
 
-          <TextBlock Classes="warning" Text="{Binding PortableSteamWarning}"
-                     IsVisible="{Binding HasPortableSteamWarning}" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding CopyGameMessage}"
+                     IsVisible="{Binding HasCopyGameMessage}" />
+        </StackPanel>
+      </Border>
 
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button Classes="accent" Content="Copy the game in"
-                    Command="{Binding CopyGameIntoPortableCommand}" />
-            <Button Content="Cancel" Command="{Binding CancelCopyGameCommand}"
-                    IsVisible="{Binding IsCopyingGame}" />
+      <!-- ============================================================ portable: the copy is out of date
+           A portable launcher plays the game out of its own folder, and that copy was made once - so a Steam
+           update elsewhere leaves it playing a build the machine has moved past, with nothing in the folder
+           itself to say so. Both ways of closing the gap end with the same copy; they differ in what they
+           spend, writes or processor time, so the choice is offered rather than made for the user. -->
+      <Border Classes="card" IsVisible="{Binding ShowPortableClientUpdateCard}">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="cardTitle" Text="The game in this folder is out of date" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding PortableUpdateSummary}"
+                     IsVisible="{Binding HasPortableClientUpdate}" />
+
+          <StackPanel Spacing="4" IsVisible="{Binding HasPortableClientUpdate}">
+            <TextBlock Classes="label" Text="How to update it" />
+
+            <RadioButton GroupName="ClientUpdate"
+                         Content="Only what changed (reads both copies, writes only the difference)"
+                         IsChecked="{Binding PortableUpdateOnlyChanges, Mode=TwoWay}" />
+
+            <RadioButton GroupName="ClientUpdate"
+                         Content="Copy the game in fresh (every file written again)"
+                         IsChecked="{Binding PortableUpdateReplacesEverything, Mode=TwoWay}" />
+
+            <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding PortableUpdateMethodNote}" />
           </StackPanel>
 
-          <Border Classes="glass" IsVisible="{Binding IsCopyingGame}">
+          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasPortableClientUpdate}">
+            <Button Classes="accent" Content="Update the game in this folder"
+                    Command="{Binding UpdatePortableClientCommand}" />
+            <Button Content="Not now" Command="{Binding DismissPortableClientUpdateCommand}" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsUpdatingPortableClient}">
+            <Button Content="Cancel" Command="{Binding CancelPortableClientUpdateCommand}" />
+          </StackPanel>
+
+          <Border Classes="glass" IsVisible="{Binding IsUpdatingPortableClient}">
             <StackPanel Spacing="10">
-              <TextBlock Text="{Binding CopyGameStage}" />
-              <ProgressBar Value="{Binding CopyGameProgress}" Maximum="100" />
+              <TextBlock Text="{Binding PortableUpdateStage}" />
+              <ProgressBar Value="{Binding PortableUpdateProgress}" Maximum="100" />
             </StackPanel>
           </Border>
 
-          <TextBlock Classes="muted" Text="{Binding CopyGameMessage}"
-                     IsVisible="{Binding HasCopyGameMessage}" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding PortableUpdateMessage}"
+                     IsVisible="{Binding HasPortableUpdateMessage}" />
         </StackPanel>
       </Border>
 

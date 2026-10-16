@@ -85,10 +85,13 @@ public static class GameFolderLocator {
     /// A Steam install ships <c>bin\steam_api.dll</c> and <c>bin\steam_appid.txt</c>; the standalone
     /// installer from KingsIsle ships neither - verified against a real Steam install on this machine.
     /// <para>
-    /// This matters to portable mode. A Steam copy still needs the Steam client installed and signed in
-    /// to start, because its <c>steam_api.dll</c> has nothing to talk to otherwise, so copying the game's
-    /// files into the launcher's own folder does <b>not</b> make that copy stand alone. A standalone copy
-    /// has no such dependency, which is what makes one worth copying into a portable launcher.
+    /// This matters to portable mode, but not in the way it looks like it should. The Steam build being
+    /// served today starts with no Steam client running, so a copy of it in the launcher's own folder
+    /// works - and it arrives with the game's cached patch files, which is a head start nothing else
+    /// offers. What makes it worth flagging is that <c>steam_api.dll</c> is a live dependency either way:
+    /// whether it insists on Steam being installed and signed in is KingsIsle's decision, not this
+    /// launcher's or the user's, and a build that insists is one they can publish tomorrow. A standalone
+    /// copy carries no such file and so cannot be affected by that choice.
     /// </para>
     /// </remarks>
     public static bool IsSteamInstall(string? path) {
@@ -98,6 +101,26 @@ public static class GameFolderLocator {
 
         return File.Exists(Path.Combine(path, RelativeSteamApi))
                || File.Exists(Path.Combine(path, RelativeSteamAppId));
+    }
+
+    /// <summary>
+    /// Whether one folder is the other, or lives inside it.
+    /// </summary>
+    /// <remarks>
+    /// Asked before any copying: a folder copied into itself would grow without end, and one copied into its
+    /// own parent would write over the very files it is reading. Shared by the two services that write a game
+    /// into a folder, because getting it wrong is equally destructive in both.
+    /// </remarks>
+    public static bool IsInsideOrSame(string? candidate, string? folder) {
+        if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(folder)) {
+            return false;
+        }
+
+        var a = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var b = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase)
+               || a.StartsWith(b + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Every suggested game folder, best first, de-duplicated.</summary>
