@@ -169,7 +169,12 @@ public sealed record ProfileMilestone(
 
     public string Id => Track.Id;
 
-    public string Name => Track.Name;
+    /// <summary>
+    /// What the card is called: the ladder's own name, or the badge's when the ladder has been climbed to a
+    /// top rung that is a badge in its own right - the thousandth hour is a badge called something, not one
+    /// more playtime rung.
+    /// </summary>
+    public string Name => IsComplete && Track.FinaleName is { } finale ? finale : Track.Name;
 
     public string CategoryName => AchievementHeadings.Of(Track.Category);
 
@@ -351,12 +356,18 @@ public sealed partial class ProfileBadgeGroup : ObservableObject {
         IReadOnlyList<ProfileMilestone> milestones,
         IReadOnlyList<ProfileWorld> worlds) {
 
+        var badgesMoved = false;
+        var milestonesMoved = false;
+        var worldsMoved = false;
+
         if (!Badges.SequenceEqual(badges)) {
             Badges.Clear();
 
             foreach (var badge in badges) {
                 Badges.Add(badge);
             }
+
+            badgesMoved = true;
         }
 
         if (!Milestones.SequenceEqual(milestones)) {
@@ -365,6 +376,8 @@ public sealed partial class ProfileBadgeGroup : ObservableObject {
             foreach (var milestone in milestones) {
                 Milestones.Add(milestone);
             }
+
+            milestonesMoved = true;
         }
 
         if (!Worlds.SequenceEqual(worlds)) {
@@ -373,6 +386,48 @@ public sealed partial class ProfileBadgeGroup : ObservableObject {
             foreach (var world in worlds) {
                 Worlds.Add(world);
             }
+
+            worldsMoved = true;
+        }
+
+        Announce(badgesMoved, milestonesMoved, worldsMoved);
+    }
+
+    /// <summary>
+    /// Says out loud which of the lines derived from these contents have moved.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A badge appearing in an <see cref="ObservableCollection{T}"/> redraws itself, which is why the tiles
+    /// on the achievements screen have always updated while the heading over them did not: the heading is
+    /// <i>computed</i> from the two collections, and a computed property is read once by a binding unless
+    /// something says it has changed. So one badge earned used to leave "unlocked 3 of 40 · 90 points", the
+    /// bar under the heading and the tick beside the name exactly as they were when the screen was opened.
+    /// </para>
+    /// <para>
+    /// Raised only for the lines whose own half moved, which is the same rule the collections follow: a look
+    /// at the player database that learns nothing must not redraw the screen under somebody reading it.
+    /// </para>
+    /// </remarks>
+    private void Announce(bool badgesMoved, bool milestonesMoved, bool worldsMoved) {
+        if (badgesMoved || milestonesMoved) {
+            // Unlocked, Total and Points are counted from both collections, so either one moving moves them.
+            OnPropertyChanged(nameof(Unlocked));
+            OnPropertyChanged(nameof(Total));
+            OnPropertyChanged(nameof(Points));
+            OnPropertyChanged(nameof(ProgressText));
+            OnPropertyChanged(nameof(PointsText));
+            OnPropertyChanged(nameof(Summary));
+            OnPropertyChanged(nameof(Fraction));
+            OnPropertyChanged(nameof(HasUnlocked));
+        }
+
+        if (milestonesMoved) {
+            OnPropertyChanged(nameof(HasMilestones));
+        }
+
+        if (worldsMoved) {
+            OnPropertyChanged(nameof(HasWorlds));
         }
     }
 

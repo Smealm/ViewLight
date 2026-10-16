@@ -28,6 +28,44 @@ public sealed partial class MainWindowViewModel {
     /// <summary>Whether the launcher itself is holding the database open right now.</summary>
     private bool _idleDatabaseIsUp;
 
+    /// <summary>The attempt at opening the player database that is running, if one is.</summary>
+    private Task? _idleDatabaseAttempt;
+
+    /// <summary>
+    /// Set when the launcher has decided it does not want the player database open after all.
+    /// </summary>
+    /// <remarks>
+    /// Opening it is a RavenDB start, which is tens of seconds in which the launcher has already moved on: the
+    /// user may have pressed Play, or the server may have been started from Settings. The open reads this at
+    /// every step and stops rather than answering a question nobody is asking any more - and the process it
+    /// had already spawned is killed rather than left holding the data directory the server is about to open.
+    /// </remarks>
+    private bool _idleDatabaseAbandoned;
+
+    /// <summary>
+    /// Whether the player database is in a state a copy can be taken of: nothing in this process is opening it
+    /// or holding it.
+    /// </summary>
+    /// <remarks>
+    /// This is what keeps a cloud backup away from a database that is being written: an open that is still
+    /// running is a directory something is writing, where a hash taken now would be recorded as the truth about
+    /// a database that was never in that state. Holding it open is not the same refusal - the sync stops it and
+    /// copies it - but an open in flight has to be stopped first, which is what
+    /// <see cref="ReleaseIdleDatabaseAsync"/> does.
+    /// </remarks>
+    private bool PlayerDatabaseIsSettled => _idleDatabaseAttempt is null or { IsCompleted: true };
+
+    /// <summary>
+    /// Whether letting go of the player database has anything to let go of.
+    /// </summary>
+    /// <remarks>
+    /// Pure, because the case it exists for is the one that used to be missed: an open that is still running
+    /// holds nothing the launcher has set a flag for, and is still a RavenDB on its way onto the very port and
+    /// data directory the server is about to take. It counts.
+    /// </remarks>
+    public static bool SomethingHoldsThePlayerDatabase(bool opening, bool isUp, bool isRunning)
+        => opening || isUp || isRunning;
+
     /// <summary>
     /// What the launcher's own database is doing, or why it is not doing anything. Shown on Profile, so a
     /// database that could not be started is explained rather than looking like an empty server.
@@ -42,8 +80,14 @@ public sealed partial class MainWindowViewModel {
     public bool IsHoldingDatabaseOpen => _idleDatabaseIsUp;
 
     /// <summary>Whether the server is on its way up, up, or coming down: the database is its business then.</summary>
-    private bool ServerIsBusyOrUp
-        => ServerState is ServerState.Starting or ServerState.WarmingUp or ServerState.Ready or ServerState.Stopping;
+    private bool ServerIsBusyOrUp => IsServerBusyOrUp(ServerState);
+
+    /// <summary>
+    /// Whether a server in this state is on its way up, up, or coming down - so the database is its business and
+    /// nobody else's. Pure, so the cloud sync's gate can ask it without a launcher around it.
+    /// </summary>
+    public static bool IsServerBusyOrUp(ServerState state)
+        => state is ServerState.Starting or ServerState.WarmingUp or ServerState.Ready or ServerState.Stopping;
 
     /// <summary>
     /// Opens the player database, if it can be opened without the server.
@@ -54,7 +98,20 @@ public sealed partial class MainWindowViewModel {
     /// installed, a launcher with no .NET host, or a database that will not come up all leave the launcher
     /// working - it just reads the database while the server is running, the way it used to.
     /// </remarks>
-    private async Task EnsureIdleDatabaseAsync() {
+    private Task EnsureIdleDatabaseAsync() {
+        // One open at a time: the caller of a second ask is answered with the first answer, which is what keeps
+        // two RavenDBs from being spawned onto the same port and the same data directory.
+        if (_idleDatabaseAttempt is { IsCompleted: false } attempt) {
+            return attempt;
+        }
+
+        _idleDatabaseAbandoned = false;
+        _idleDatabaseAttempt = OpenIdleDatabaseAsync();
+        return _idleDatabaseAttempt;
+    }
+
+    /// <summary>The open itself, which is what <see cref="EnsureIdleDatabaseAsync"/> remembers.</summary>
+    private async Task OpenIdleDatabaseAsync() {
         if (_config is null || ServerIsBusyOrUp || _idleDatabaseIsUp) {
             return;
         }
@@ -93,13 +150,30 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
+        // The process exists now, so a change of mind has to end it: leaving it running would have it come up
+        // onto the port and the data directory the server is about to need.
+        if (_idleDatabaseAbandoned) {
+            await _raven.StopAsync().ConfigureAwait(true);
+            return;
+        }
+
         if (!await _raven.WaitUntilAnsweringAsync(setup).ConfigureAwait(true)) {
             var why = _raven.Problem ?? "The database did not come up.";
             await _raven.StopAsync().ConfigureAwait(true);
 
+            // A database stopped on purpose is not a failure to report: whoever stopped it has said why.
+            if (_idleDatabaseAbandoned) {
+                return;
+            }
+
             IdleDatabaseStatus = $"{why} The database is read while the server is running instead.";
             AppendLog(LogLevel.Warning, IdleDatabaseStatus);
             RefreshDerived();
+            return;
+        }
+
+        if (_idleDatabaseAbandoned) {
+            await _raven.StopAsync().ConfigureAwait(true);
             return;
         }
 
@@ -116,6 +190,13 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
+        // Answered, waited for and made - and then thrown away, because something was started in the meantime
+        // that needs the data directory more than a screen does.
+        if (_idleDatabaseAbandoned) {
+            await _raven.StopAsync().ConfigureAwait(true);
+            return;
+        }
+
         _idleDatabaseIsUp = true;
         IdleDatabaseStatus = $"The server's own RavenDB is running on port {setup.Port}, so profiles and "
                              + "accounts are read without starting the server.";
@@ -124,6 +205,10 @@ public sealed partial class MainWindowViewModel {
         await ReadDatabaseAsync().ConfigureAwait(true);
         StartProfileWatch(ServerLogPath());
         RefreshDerived();
+
+        // The launcher has the player database back and no server is running, which is one of the two moments a
+        // cloud backup may take a copy: the other is its own database coming up, in EnsureLauncherDatabaseAsync.
+        MaybeSyncWithCloudInBackground();
     }
 
     /// <summary>
@@ -132,10 +217,27 @@ public sealed partial class MainWindowViewModel {
     /// <remarks>
     /// The server cannot open its data directory while this is open, and it would fail at boot with nothing
     /// but an exit code to show for it - so the handover happens before anything is started, and the port is
-    /// waited on rather than assumed free.
+    /// waited on rather than assumed free. That includes a database that is still being started: waiting for it
+    /// to finish would be waiting for a database the server is about to need, so it is stopped where it stands
+    /// and the open is told to give up - which is what stops it coming up a moment later, onto the very port
+    /// the server is taking.
     /// </remarks>
     private async Task ReleaseIdleDatabaseAsync() {
-        if (!_idleDatabaseIsUp) {
+        var attempt = _idleDatabaseAttempt;
+        var wasOpening = attempt is { IsCompleted: false };
+
+        if (wasOpening) {
+            _idleDatabaseAbandoned = true;
+            await _raven.StopAsync().ConfigureAwait(true);
+
+            // Let the open unwind before this returns, so it cannot decide to open the database after the
+            // launcher has let go of it.
+            await attempt!.ConfigureAwait(true);
+        }
+
+        // Nothing was being held: no open is in flight, the launcher is not holding it, and no process of ours
+        // is running. There is nothing to hand over - the server takes a free database either way.
+        if (!SomethingHoldsThePlayerDatabase(wasOpening, _idleDatabaseIsUp, _raven.IsRunning)) {
             return;
         }
 
@@ -144,7 +246,7 @@ public sealed partial class MainWindowViewModel {
 
         await _raven.StopAsync().ConfigureAwait(true);
 
-        IdleDatabaseStatus = _raven.Problem is { Length: > 0 } problem
+        IdleDatabaseStatus = !wasOpening && _raven.Problem is { Length: > 0 } problem
             ? $"{problem} Start the server and it takes the database from here."
             : "The launcher's copy of the player database is stopped; the server has it from here.";
 

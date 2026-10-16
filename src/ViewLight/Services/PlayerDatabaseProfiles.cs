@@ -163,18 +163,36 @@ internal static class PlayerProfileLayout {
     /// The school the wizard belongs to, named, or nothing when the document does not say.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <b>This is the one read here that never refuses.</b> Level and gold have to be readable, because a
     /// badge about progress is judged by multiplying against them and a zero read from a moved field would
     /// quietly stop every one of them from ever being earned. A school is different: it only ever adds,
     /// so a document that does not say - one that has not been given a school, or a revision that moved
-    /// the field, or a number that is not one of the seven a wizard can be - reads as no school and costs
+    /// the field, or a value that is not one of the seven a wizard can be - reads as no school and costs
     /// nothing but that wizard's school badges, which stay honestly locked. Refusing the document instead
     /// would switch off every badge about the account over a field nothing else depends on.
+    /// </para>
+    /// <para>
+    /// <b>Both spellings of the school are read, because the server writes the name.</b> The field is
+    /// Imlight's <c>MagicSchool</c> enum, and a database stores an enum as its name rather than as its value
+    /// - the admin account's own document says <c>"AuthLevel": "Administrator"</c>, where <c>AuthLevel</c> is
+    /// an enum too. Reading only a number is what left every wizard on a real server shown as "School not
+    /// read", with its school's ladder unable to move; see <see cref="WizardSchool"/>.
+    /// </para>
     /// </remarks>
-    private static string ReadSchool(JsonElement document)
-        => TryReadNumber(document, "MagicSchoolBehavior", "MagicSchool", out var id) == Field.Readable
-            ? WizardSchool.NameOf((uint) id)
-            : string.Empty;
+    private static string ReadSchool(JsonElement document) {
+        if (!document.TryGetProperty("MagicSchoolBehavior", out var behavior)
+            || behavior.ValueKind != JsonValueKind.Object
+            || !behavior.TryGetProperty("MagicSchool", out var school)) {
+            return string.Empty;
+        }
+
+        return school.ValueKind switch {
+            JsonValueKind.Number when school.TryGetInt64(out var id) => WizardSchool.NameOf((uint) id),
+            JsonValueKind.String => WizardSchool.NameOf(school.GetString()),
+            _ => string.Empty,
+        };
+    }
 
     /// <summary>
     /// The spells in the wizard's spellbook.

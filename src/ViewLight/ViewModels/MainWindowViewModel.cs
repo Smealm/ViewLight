@@ -215,8 +215,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
         if (IsPortable) {
             // A portable launcher starts with no game in its own folder, so where to copy one from is the
-            // first thing it needs - and the install is usually findable without asking.
-            PortableGameSource = GameFolderLocator.Detect()?.Path ?? string.Empty;
+            // first thing it needs - and the install is usually findable without asking. A launcher that has
+            // copied one in before remembers where from, and that remembered install is the one the copy is
+            // compared against as well: it is where an update would come from.
+            var copiedFrom = _store.Settings.PortableGameSourcePath;
+
+            PortableGameSource = !string.IsNullOrWhiteSpace(copiedFrom)
+                ? copiedFrom
+                : GameFolderLocator.Detect()?.Path ?? string.Empty;
         }
 
         RefreshDerived();
@@ -283,10 +289,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         => string.IsNullOrWhiteSpace(ClientPath) || string.IsNullOrWhiteSpace(ServerPath);
 
     /// <summary>
-    /// The launcher itself, which nothing gets to see until both first screens are satisfied: where the
-    /// folders are, and that there is an Imlight in the server folder to work with.
+    /// The launcher itself, which nothing gets to see until all three first screens are satisfied: where
+    /// the folders are, that there is an Imlight in the server folder to work with, and whose patch server
+    /// a session's files will come from.
     /// </summary>
-    public bool ShowMainInterface => !RequiresSetup && !RequiresImlight;
+    public bool ShowMainInterface => !RequiresSetup && !RequiresImlight && !RequiresPatchServerChoice;
 
     public bool CanContinueSetup => !RequiresSetup;
 
@@ -556,6 +563,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
                  + $"{GameFolderLocator.RelativeRootWad} both found.",
         };
 
+        // A portable launcher plays the game out of its own folder, so whether that copy is still the build
+        // this machine has is a question about the folder that just changed - see MainWindowViewModel.ClientUpdate.
+        RefreshPortableClientUpdate();
+
         // Everything derived from the executable path is rebuilt here, so the screens that read it - the
         // portable prompt included - change the moment the folder does.
         RefreshDerived();
@@ -591,11 +602,33 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     public bool HasCopyGameMessage => !string.IsNullOrWhiteSpace(CopyGameMessage);
 
-    /// <summary>The card on Home appears only while it has something to do or say.</summary>
-    public bool ShowPortableClientCard
-        => IsPortable && (PortableNeedsClient || IsCopyingGame || HasCopyGameMessage);
+    /// <summary>
+    /// Whether the card has anything to ask: nothing in the folder to play from, or a copy of one being
+    /// made right now.
+    /// </summary>
+    public bool ShowPortableClientPrompt => PortableNeedsClient || IsCopyingGame;
 
-    /// <summary>Whether the chosen folder is a Steam copy, which keeps needing Steam once copied.</summary>
+    /// <summary>The card on Home appears only while it has something to do or say.</summary>
+    public bool ShowPortableClientCard => IsPortable && (ShowPortableClientPrompt || HasCopyGameMessage);
+
+    /// <summary>
+    /// What the card is called: the question while there is one, and what happened once there is not.
+    /// </summary>
+    /// <remarks>
+    /// It changes because the card outlives the work it describes. A finished copy leaves a game in the
+    /// folder and one line saying so, and a card still headed <i>copy your game into this folder</i> would
+    /// be offering to do the thing it has just done - which reads as a launcher that did not notice its own
+    /// work. A copy that has fallen behind the machine's install is a different card rather than this one:
+    /// that is a game which is here and wants replacing, not one that is missing.
+    /// </remarks>
+    public string PortableClientCardTitle => ShowPortableClientPrompt
+        ? "Copy your game into this folder"
+        : "Your game is already in this folder";
+
+    /// <summary>
+    /// Whether the chosen folder is a Steam copy - one that may need Steam, at KingsIsle's discretion, and
+    /// that comes with the game's own cached patch files either way.
+    /// </summary>
     public bool HasPortableSteamWarning => GameFolderLocator.IsSteamInstall(PortableGameSource);
 
     public string PortableSteamWarning
@@ -718,9 +751,21 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             CopyGameMessage = result.Warning is { Length: > 0 } ? result.Warning : result.Message;
 
             if (result.Success) {
+                // Where it came from is written down, because that install is what the copy is compared
+                // against from now on - and it is the one an update would come from.
+                _store.Settings.PortableGameSourcePath = GameFolderLocator.NormaliseGameFolder(source);
+                _store.Save();
+
                 // Play points at the copy, because a launcher's own folder being the source of everything
                 // is the whole point of the mode. Stored relative in portable mode, so a move keeps it.
                 ClientPath = result.Destination;
+
+                // Read again rather than left to that assignment. In portable mode the launcher is already
+                // pointed at its own game folder, so writing the same path back is no change at all and
+                // nothing re-reads the folder - which is how a finished copy went on being reported as a
+                // missing game, in Settings and on Home alike, until the folder was set by hand.
+                RefreshClientState();
+
                 AppendLog(LogLevel.Success, result.Message);
             }
             else {
@@ -887,7 +932,9 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     public string[] LogLevels { get; } = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"];
 
     private void LoadServerConfig() {
-        _config = ImlightConfig.TryLoad(ServerPath);
+        var read = ImlightConfig.Read(ServerPath);
+
+        _config = read.Config;
         ServerInstalled = _config is not null;
 
         // Whether the launcher can work at all is a question about the folder and this machine rather than
@@ -895,9 +942,16 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         RefreshImlightRequirement();
 
         if (_config is null) {
-            ServerFolderStatus = Directory.Exists(ServerPath)
-                ? $"No server installed here yet ({ImlightConfig.RelativeConfigPath} not found)."
-                : "Folder does not exist yet — it is created when the server is downloaded.";
+            // Three answers rather than two, for the same reason the requirement screen has three: a config
+            // that is there and would not read is not a server that is not installed, and saying so was a
+            // report of its own. The folder being looked in is named, because a path that resolves somewhere
+            // else than the user thinks is the other way this looks like a missing install.
+            ServerFolderStatus = read.FileIsThere
+                ? $"{ImlightConfig.ConfigPathFor(ServerPath)} is there, but it could not be read just now - "
+                  + "something else has it open for the moment. Press Reload settings in a moment."
+                : Directory.Exists(ServerPath)
+                    ? $"No server installed here yet ({ImlightConfig.ConfigPathFor(ServerPath)} not found)."
+                    : "Folder does not exist yet — it is created when the server is downloaded.";
             SyncStarterKitFromIds([]);
             RefreshDerived();
             return;
@@ -1372,6 +1426,15 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             return;
         }
 
+        // A server that is up is holding the very binaries the overlay came to replace, and it is not the
+        // launcher's to stop on the way past a button: the install is refused, and the reason names the button
+        // that fixes it rather than the file Windows would have named.
+        if (ServerIsBusyOrUp) {
+            AppendLog(LogLevel.Error,
+                "The server is running, so its files cannot be replaced. Stop it and press Download latest again.");
+            return;
+        }
+
         var updating = ServerInstalled;
         var release = _latestRelease;
 
@@ -1389,8 +1452,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             : $"Downloading server {release.Tag} ({release.AssetSizeDisplay}).");
 
         try {
+            // The databases are let go inside the install, at the last moment before the writing starts: a
+            // download that fails is not worth having stopped them for.
             var result = await _installService
-                .InstallAsync(release, ServerPath, progress, _installCancellation.Token)
+                .InstallAsync(release, ServerPath, progress, ReleaseDatabasesForInstallAsync,
+                    _installCancellation.Token)
                 .ConfigureAwait(true);
 
             if (result.Success) {
@@ -1408,10 +1474,15 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
                 LogRepair(new ConfigRepair(result.EmbeddedDatabasePort, result.PatchServerUrl));
 
-                // A fresh install is what the launcher may have been waiting for, so the database is taken
-                // up now rather than at the next start. Nothing is held while there is no install.
+                // A fresh install is what the launcher may have been waiting for, and a new build is what the
+                // databases should be running - so the config is read again here, and the databases come back
+                // below with the new build's binaries rather than the ones they were started from.
                 LoadServerConfig();
-                _ = EnsureIdleDatabaseAsync();
+
+                // An install is what brings a new engine, and the launcher's own copy follows it - here, and
+                // not after the databases have been started again, because replacing the copy is replacing a
+                // folder a running database would have open.
+                await MakeOwnEngineAsync().ConfigureAwait(true);
             }
             else {
                 AppendLog(LogLevel.Error, result.Message);
@@ -1423,6 +1494,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             AppendLog(LogLevel.Error, $"Install failed: {ex.Message}");
         }
         finally {
+            // Whichever way it went, the launcher's databases come back - a failed install is worth less than
+            // the profiles and accounts they are read from, and half an overlay is a real thing. In the
+            // background rather than awaited: a RavenDB start is tens of seconds, and the button that started
+            // this is not the place to spend them. Both opens are single-flight, so a second ask is answered by
+            // the one already running rather than by a second database on the same port.
+            _ = EnsureLauncherDatabaseAsync();
+            _ = EnsureIdleDatabaseAsync();
+
             _installCancellation?.Dispose();
             _installCancellation = null;
             IsBusy = false;
@@ -2369,44 +2448,65 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         // request asks for. Reported rather than acted on - see the method.
         await WarnIfPatchServerIsStillFetchingAsync().ConfigureAwait(true);
 
-        // Before anything is started: the database the launcher has been holding open is the one the server
-        // is about to open, and only one process may have it.
-        await ReleaseIdleDatabaseAsync().ConfigureAwait(true);
-
-        var executable = ImlightConfig.ExecutablePathFor(ServerPath);
-
-        // Repaired here as well as on install, so an existing install is put right by pressing Play
-        // instead of by downloading the server again. Imlight dies during boot on a config that still
-        // points its patch server at nothing, reporting only an exit code.
-        var repair = ServerConfigRepair.Apply(ImlightConfig.ConfigPathFor(ServerPath));
-        if (repair.ChangedAnything) {
-            LogRepair(repair);
-        }
-
-        var config = ImlightConfig.TryLoad(ServerPath);
-        var logPath = config?.ResolveLogFilePath(ServerPath)
-                      ?? Path.Combine(ServerPath, "logs", "log.txt");
-
-        Phase = LauncherPhase.StartingServer;
-
-        // The port is probed on the configured server address: pinging the address itself would
-        // always succeed, whether or not the account server is listening.
-        var host = string.IsNullOrWhiteSpace(config?.GameServerIp) ? "127.0.0.1" : config.GameServerIp;
-        var port = config?.LoginServerPort ?? 12000;
+        // The databases are handed over from here, which makes this the last moment a copy of them can be taken:
+        // the sync closes both, does its work, and leaves the player's - the server's own database - for Imlight
+        // to open. It is the third of the three moments a sync runs, and the one that is asked for rather than
+        // waited for: an upload before a session is what makes the cloud's copy as new as this machine's, and a
+        // restore before one is the only chance to take the newer copy that is already there.
+        //
+        // The flag is what keeps the automatic path out of this window - it would take the database back, and
+        // start it again, underneath the boot this is standing in the middle of - and it stays up until the
+        // server has actually been spawned, which is what covers the config work between here and there.
+        _handingOverToServer = true;
 
         try {
-            _server.Start(new ServerStartOptions(ServerPath, executable, host, port, logPath));
-            AppendLog(LogLevel.Info, "Waiting for the server to finish warming up…");
+            await RunCloudBackupAsync(manual: false, force: null, handOverToServer: true).ConfigureAwait(true);
 
-            // Profiles are fed by this server and by nothing else, so the watch runs exactly as long as it
-            // does - and it reads from here on, not from whatever was already in the log.
-            StartProfileWatch(logPath);
+            // Before anything is started: the database the launcher has been holding open is the one the server
+            // is about to open, and only one process may have it. A sync that just ran has already let go of it,
+            // and this is what says so for the times there was nothing to sync.
+            await ReleaseIdleDatabaseAsync().ConfigureAwait(true);
+
+            var executable = ImlightConfig.ExecutablePathFor(ServerPath);
+
+            // Repaired here as well as on install, so an existing install is put right by pressing Play
+            // instead of by downloading the server again. Imlight dies during boot on a config that still
+            // points its patch server at nothing, reporting only an exit code.
+            var repair = ServerConfigRepair.Apply(ImlightConfig.ConfigPathFor(ServerPath));
+            if (repair.ChangedAnything) {
+                LogRepair(repair);
+            }
+
+            var config = ImlightConfig.TryLoad(ServerPath);
+            var logPath = config?.ResolveLogFilePath(ServerPath)
+                          ?? Path.Combine(ServerPath, "logs", "log.txt");
+
+            Phase = LauncherPhase.StartingServer;
+
+            // The port is probed on the configured server address: pinging the address itself would
+            // always succeed, whether or not the account server is listening.
+            var host = string.IsNullOrWhiteSpace(config?.GameServerIp) ? "127.0.0.1" : config.GameServerIp;
+            var port = config?.LoginServerPort ?? 12000;
+
+            try {
+                _server.Start(new ServerStartOptions(ServerPath, executable, host, port, logPath));
+                AppendLog(LogLevel.Info, "Waiting for the server to finish warming up…");
+
+                // Profiles are fed by this server and by nothing else, so the watch runs exactly as long as it
+                // does - and it reads from here on, not from whatever was already in the log.
+                StartProfileWatch(logPath);
+            }
+            catch (Exception ex) {
+                AppendLog(LogLevel.Error, $"Could not start the server: {ex.Message}");
+                FailureHeadline = "The server could not be started";
+                FailureDetail = ex.Message;
+                Phase = LauncherPhase.Failed;
+            }
         }
-        catch (Exception ex) {
-            AppendLog(LogLevel.Error, $"Could not start the server: {ex.Message}");
-            FailureHeadline = "The server could not be started";
-            FailureDetail = ex.Message;
-            Phase = LauncherPhase.Failed;
+        finally {
+            // Imlight has been spawned, or the attempt has failed and said so - either way the databases are
+            // no longer being handed over, and the automatic sync is allowed to ask again.
+            _handingOverToServer = false;
         }
 
         RefreshDerived();
@@ -2950,6 +3050,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(IsAboutSelected));
         OnPropertyChanged(nameof(RequiresSetup));
         OnPropertyChanged(nameof(RequiresImlight));
+        OnPropertyChanged(nameof(RequiresPatchServerChoice));
         OnPropertyChanged(nameof(ShowMainInterface));
         OnPropertyChanged(nameof(CanContinueSetup));
         OnPropertyChanged(nameof(ServerStateText));
@@ -3022,6 +3123,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(LauncherRoot));
         OnPropertyChanged(nameof(PortableGameFolder));
         OnPropertyChanged(nameof(PortableNeedsClient));
+        OnPropertyChanged(nameof(ShowPortableClientPrompt));
+        OnPropertyChanged(nameof(PortableClientCardTitle));
         OnPropertyChanged(nameof(ShowPortableClientCard));
         OnPropertyChanged(nameof(HasPortableSteamWarning));
         OnPropertyChanged(nameof(PortableSteamWarning));

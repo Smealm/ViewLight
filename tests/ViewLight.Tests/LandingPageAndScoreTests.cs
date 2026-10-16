@@ -133,9 +133,10 @@ public class AchievementScoreTests {
         // Playtime: each step earns the ones below it and no more than one rung above.
         var atSixHours = new LauncherProfile { AccountId = 1, PlaytimeSeconds = 6 * 3600 };
 
-        Assert.True(AchievementCatalog.ById("settling-in")!.Earned(atSixHours));
-        Assert.True(AchievementCatalog.ById("five-hours")!.Earned(atSixHours));
-        Assert.False(AchievementCatalog.ById("ten-hours")!.Earned(atSixHours));
+        Assert.True(AchievementCatalog.ById("playtime-30")!.Earned(atSixHours));
+        Assert.True(AchievementCatalog.ById("playtime-60")!.Earned(atSixHours));
+        Assert.True(AchievementCatalog.ById("playtime-300")!.Earned(atSixHours));
+        Assert.False(AchievementCatalog.ById("playtime-600")!.Earned(atSixHours));
 
         // Battles won: the same ladder shape, counted from the server's log rather than from playtime, and
         // running in tens all the way up.
@@ -169,7 +170,6 @@ public class AchievementScoreTests {
         // The cap is the server's to decide, so it is worth seeing the ladder rebuilt around one - a server
         // with a cap of sixty has twelve rungs per school, not forty.
         var wasLevel = AchievementCatalog.MaxLevel;
-        var wasCreatures = AchievementCatalog.CreatureCap;
 
         try {
             AchievementCatalog.UseMaxLevel(60);
@@ -187,37 +187,29 @@ public class AchievementScoreTests {
         }
         finally {
             AchievementCatalog.UseMaxLevel(wasLevel);
-            AchievementCatalog.UseCreatureCount(wasCreatures);
         }
     }
 
     [Fact]
-    public void TheCreatureLadderRunsToTheServersOwnList() {
+    public void TheCreatureLadderRunsToItsOwnTopWhateverTheServerSays() {
+        // This ladder counts creatures beaten rather than different creatures, so there is no list of them to
+        // be bounded by - and rebuilding the catalog around a server's level cap leaves it where it was.
         var wasLevel = AchievementCatalog.MaxLevel;
-        var wasCreatures = AchievementCatalog.CreatureCap;
 
         try {
-            // A list of 317 ordinary creatures has thirteen rungs of twenty-five, the last of them at 325:
-            // a top rung of 317 is not a milestone anybody would recognise.
-            AchievementCatalog.UseCreatureCount(317);
-
-            Assert.Equal(325, AchievementCatalog.CreatureCap);
-            Assert.NotNull(AchievementCatalog.ById("creatures-325"));
-            Assert.Null(AchievementCatalog.ById("creatures-350"));
+            AchievementCatalog.UseMaxLevel(60);
 
             var creatures = AchievementCatalog.Tracks.Single(t => t.Id == "creatures");
 
-            Assert.Equal(13, creatures.Rungs.Count);
-            Assert.Equal(325, creatures.Top);
-
-            // A list that did not come back sensible leaves the stock ladder alone rather than shrinking it
-            // to nothing.
-            AchievementCatalog.UseCreatureCount(0);
-            Assert.Equal(AchievementCatalog.DefaultCreatureCap, AchievementCatalog.CreatureCap);
+            Assert.Equal(AchievementCatalog.CreatureLadderTop, creatures.Top);
+            Assert.Equal(AchievementCatalog.CreatureLadderTop / AchievementCatalog.CreatureMilestoneStep,
+                creatures.Rungs.Count);
+            Assert.NotNull(AchievementCatalog.ById($"creatures-{AchievementCatalog.CreatureLadderTop}"));
+            Assert.Null(AchievementCatalog.ById(
+                $"creatures-{AchievementCatalog.CreatureLadderTop + AchievementCatalog.CreatureMilestoneStep}"));
         }
         finally {
             AchievementCatalog.UseMaxLevel(wasLevel);
-            AchievementCatalog.UseCreatureCount(wasCreatures);
         }
     }
 
@@ -247,7 +239,15 @@ public class AchievementScoreTests {
 
                 Assert.NotNull(badge);
                 Assert.Equal(track.Requirement(rung), badge!.Requirement);
-                Assert.StartsWith($"{track.Name}, ", badge.Name, StringComparison.Ordinal);
+
+                // Named for its ladder, except the last rung of a ladder whose top is a badge in its own
+                // right rather than one more rung of the same kind - which is the thousandth hour, and only
+                // the thousandth hour. See RungsFor.
+                var expected = track.IsTop(rung) && track.FinaleName is { } finale
+                    ? finale
+                    : $"{track.Name}, {track.Title(rung)}";
+
+                Assert.Equal(expected, badge.Name);
             }
         }
     }
@@ -281,7 +281,7 @@ public class AchievementScoreTests {
     public void ABadgeSaysWhatItIsWorthAndHowHardItWas() {
         var profile = new LauncherProfile { AccountId = 1 };
         var badge = ProfileBadge.For(profile, debugLogging: true, databaseAnswers: true)
-            .First(b => b.Id == "hundred-hours");
+            .First(b => b.Id == "level-50");
 
         Assert.Equal(AchievementDifficulty.Legendary, badge.Achievement.Difficulty);
 

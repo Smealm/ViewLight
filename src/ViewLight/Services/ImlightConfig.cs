@@ -13,6 +13,18 @@ namespace ViewLight.Services;
 /// than dropped.
 /// </para>
 /// </remarks>
+/// <summary>
+/// What reading the server's config found: the config when it could be read, and whether a config file was
+/// there at all - which is not the same thing, and is the difference one reported bug was made of.
+/// </summary>
+/// <param name="Config">The config, or <c>null</c> when there was nothing to read or nothing readable.</param>
+/// <param name="FileIsThere">Whether a config file was there, readable or not.</param>
+public sealed record ImlightConfigRead(ImlightConfig? Config, bool FileIsThere) {
+
+    /// <summary>There is no install here: no file, so nothing to read and nothing to read it with.</summary>
+    public bool NoInstall => Config is null && !FileIsThere;
+}
+
 public sealed class ImlightConfig {
 
     public const string RelativeConfigPath = "Config/Imlight.ini";
@@ -38,24 +50,78 @@ public sealed class ImlightConfig {
     public static string ExecutablePathFor(string serverPath)
         => Path.Combine(serverPath, ServerExecutableName);
 
-    /// <summary>Loads the server config, or returns <c>null</c> when the server is not installed yet.</summary>
-    public static ImlightConfig? TryLoad(string serverPath) {
+    /// <summary>How long a config that is there but busy is given to become readable.</summary>
+    /// <remarks>
+    /// Measured against the things that hold a file for a moment and no longer: an install unpacking a build
+    /// over the folder, the server writing its own settings as it boots, a scanner reading what was just
+    /// written. All of them let go in well under a second, and a launcher that waited for none of it reported
+    /// an install that is plainly there as an install that is not.
+    /// </remarks>
+    private static readonly TimeSpan ReadWindow = TimeSpan.FromMilliseconds(750);
+
+    private static readonly TimeSpan BetweenReads = TimeSpan.FromMilliseconds(75);
+
+    /// <summary>
+    /// Reads the server config, and says whether a config file was there to read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two questions, because they have two different answers.</b> "Is the server installed here?" and
+    /// "could its config be read?" are not the same question, and a read that failed used to be reported as
+    /// the first one - which sent somebody to download a server they already had, or to point the launcher at
+    /// a folder it was already pointed at.
+    /// </para>
+    /// <para>
+    /// <b>What the failure was is taken from the exception, not from asking the file system again.</b>
+    /// <c>File.Exists</c> answers <c>false</c> for a file another process is holding open with no sharing -
+    /// which is exactly the case this exists for - so a second look at the path would have called a busy
+    /// install a missing one twice over.
+    /// </para>
+    /// </remarks>
+    /// <param name="serverPath">The folder the launcher is pointed at, or nothing when it has none.</param>
+    /// <returns>The config when it could be read, and whether there was a file there at all.</returns>
+    public static ImlightConfigRead Read(string? serverPath) {
         if (string.IsNullOrWhiteSpace(serverPath)) {
-            return null;
+            return new ImlightConfigRead(null, false);
         }
 
         var path = ConfigPathFor(serverPath);
-        if (!File.Exists(path)) {
-            return null;
-        }
+        var giveUpAt = DateTime.UtcNow + ReadWindow;
 
-        try {
-            return new ImlightConfig(IniFile.Load(path));
-        }
-        catch (IOException) {
-            return null;
+        while (true) {
+            try {
+                return new ImlightConfigRead(new ImlightConfig(IniFile.Load(path)), true);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+                // Only these two say there is no file to read. A file that appears while the launcher waits -
+                // an install finishing - is picked up by the next attempt rather than missed.
+                if (DateTime.UtcNow >= giveUpAt) {
+                    return new ImlightConfigRead(null, false);
+                }
+
+                Thread.Sleep(BetweenReads);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                // There, and not readable: busy with something else, or not readable by this account at all.
+                // Waiting covers the first; the second is reported as what it is rather than as a missing
+                // install, and costs nothing to wait out.
+                if (DateTime.UtcNow >= giveUpAt) {
+                    return new ImlightConfigRead(null, true);
+                }
+
+                Thread.Sleep(BetweenReads);
+            }
         }
     }
+
+    /// <summary>
+    /// Loads the server config, or returns <c>null</c> when it cannot be had - for either reason.
+    /// </summary>
+    /// <remarks>
+    /// The plain form, for callers that only ever wanted the config: <see cref="Read"/> is what tells the two
+    /// kinds of <c>null</c> apart, and anything that reports to a person should use it.
+    /// </remarks>
+    public static ImlightConfig? TryLoad(string? serverPath) => Read(serverPath).Config;
 
     public void Save(string serverPath) => Ini.Save(ConfigPathFor(serverPath));
 

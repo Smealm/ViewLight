@@ -372,6 +372,104 @@ public class ServerInstallServiceTests {
         Assert.Equal("https://my-aurorium.test", updated.PatchServerUrl);
     }
 
+    // ------------------------------------------------------------------ the folder is in use
+
+    [Fact]
+    public async Task SaysWhatToDoAboutAFileAnotherProcessIsHolding() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        var v1 = BuildReleaseZip("v1", ReleaseConfig);
+        Assert.True((await new ServerInstallService(FakeHttpHandler.Serving(v1))
+            .InstallAsync(Release("r800000.Wizard_1_610", v1), serverPath)).Success);
+
+        // What a running Imlight holds, and what the launcher's own RavenDBs hold: a loaded binary in the
+        // install folder. Held with no sharing at all, which is the worst of it.
+        var v2 = BuildReleaseZip("v2", ReleaseConfig);
+        InstallResult result;
+
+        using (File.Open(ImlightConfig.ExecutablePathFor(serverPath), FileMode.Open, FileAccess.Read, FileShare.None)) {
+            result = await new ServerInstallService(FakeHttpHandler.Serving(v2))
+                .InstallAsync(Release("r810000.Wizard_1_610", v2), serverPath);
+        }
+
+        Assert.False(result.Success);
+
+        // Windows' own sentence names the file and nothing else, and the file is never the thing at fault -
+        // so the message says what is, and what to press.
+        Assert.Contains("in use by another process", result.Message);
+        Assert.Contains("stop it and press Download latest again", result.Message);
+        Assert.Contains(ImlightConfig.ServerExecutableName, result.Message);
+        Assert.Contains("exe:v1", ReadInstalledMarker(serverPath));
+    }
+
+    [Fact]
+    public async Task WaitsOutAFileThatIsBusyOnlyForAMoment() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        var v1 = BuildReleaseZip("v1", ReleaseConfig);
+        Assert.True((await new ServerInstallService(FakeHttpHandler.Serving(v1))
+            .InstallAsync(Release("r800000.Wizard_1_610", v1), serverPath)).Success);
+
+        // The window this is for: the launcher stops its databases before an update, and Windows can take a
+        // moment after the process is gone to let go of a mapped DLL. A hold that outlives the wait is a
+        // different thing and is reported - this one is a moment, and the update must simply survive it.
+        var held = File.Open(ImlightConfig.ExecutablePathFor(serverPath), FileMode.Open, FileAccess.Read, FileShare.None);
+        var released = Task.Run(async () => {
+            await Task.Delay(500);
+            held.Dispose();
+        });
+
+        var v2 = BuildReleaseZip("v2", ReleaseConfig);
+        var result = await new ServerInstallService(FakeHttpHandler.Serving(v2))
+            .InstallAsync(Release("r810000.Wizard_1_610", v2), serverPath);
+
+        await released;
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("exe:v2", ReadInstalledMarker(serverPath));
+    }
+
+    [Fact]
+    public async Task AsksForTheFolderBeforeItWritesAnythingAndNotForADownloadThatFailed() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        var v1 = BuildReleaseZip("v1", ReleaseConfig);
+        Assert.True((await new ServerInstallService(FakeHttpHandler.Serving(v1))
+            .InstallAsync(Release("r800000.Wizard_1_610", v1), serverPath)).Success);
+
+        // What was on disk at the moment the caller was asked to stand things down: this is what makes the
+        // handover a handover rather than an afterthought.
+        var atTheAsk = string.Empty;
+        var asked = 0;
+
+        var v2 = BuildReleaseZip("v2", ReleaseConfig);
+        var result = await new ServerInstallService(FakeHttpHandler.Serving(v2))
+            .InstallAsync(Release("r810000.Wizard_1_610", v2), serverPath, null, () => {
+                asked++;
+                atTheAsk = ReadInstalledMarker(serverPath);
+                return Task.CompletedTask;
+            });
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(1, asked);
+        Assert.Equal("exe:v1", atTheAsk);
+        Assert.Contains("exe:v2", ReadInstalledMarker(serverPath));
+
+        // A release that never arrives has disturbed nothing, so it must not cost a stopped database either.
+        var unreachable = 0;
+        var failed = await new ServerInstallService(FakeHttpHandler.Returning(HttpStatusCode.NotFound))
+            .InstallAsync(Release("r820000.Wizard_1_610", [1, 2, 3]), serverPath, null, () => {
+                unreachable++;
+                return Task.CompletedTask;
+            });
+
+        Assert.False(failed.Success);
+        Assert.Equal(0, unreachable);
+    }
+
     [Fact]
     public async Task CopesWithAnArchiveThatShipsNoConfigFile() {
         using var workspace = new TempWorkspace();

@@ -40,6 +40,17 @@ public sealed class LauncherSettings {
     /// <summary>Folder containing the Wizard101 client (the one with <c>Root.wad</c>).</summary>
     public string ClientPath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The install the game in the launcher's own folder was copied in from, for portable mode.
+    /// </summary>
+    /// <remarks>
+    /// Remembered because it is the only thing the copy can be compared against: the launcher's own folder holds
+    /// a complete game, so nothing about it says whether the machine's install has moved on since. Written when
+    /// a copy finishes and read when the launcher asks whether the copy is still the build this machine has;
+    /// stored through the launcher's own path rules, so a portable folder carried elsewhere keeps it.
+    /// </remarks>
+    public string PortableGameSourcePath { get; set; } = string.Empty;
+
     /// <summary>Folder the Imlight server is installed into.</summary>
     public string ServerPath { get; set; } = string.Empty;
 
@@ -153,6 +164,70 @@ public sealed class LauncherSettings {
     /// downloaded at all are per-revision, and somebody who said no to one has said nothing about the next.
     /// </remarks>
     public string? PatchServerPreloadDeclinedRevision { get; set; }
+
+    /// <summary>
+    /// Whether the launcher has asked whose patch server to use and been answered.
+    /// </summary>
+    /// <remarks>
+    /// Asked once, on a fresh install, between the server being downloaded and Home. It is a separate
+    /// setting from <see cref="UseLocalPatchServer"/> because the two are different things: that one is
+    /// which patch server is in use, and this is whether anybody was ever asked. Without it a fresh
+    /// machine keeps the default below, has nothing installed to answer with, and quietly ends up on the
+    /// public patch server - which is the state this exists to end.
+    /// </remarks>
+    public bool PatchServerChoiceAnswered { get; set; }
+
+    // ---------------------------------------------------------------- the cloud backup
+
+    /// <summary>
+    /// Whether the launcher keeps a copy of the databases that matter in the user's cloud drive, and restores
+    /// them when they have gone.
+    /// </summary>
+    /// <remarks>
+    /// Off by default: it is the user's Drive being written to, and it is only ever turned on from Settings.
+    /// On, the launcher syncs while it is idle - signing in is what authorises it, and nothing is uploaded or
+    /// restored before then.
+    /// </remarks>
+    public bool BackUpToCloud { get; set; }
+
+    /// <summary>
+    /// Whether the sign-in uses ViewLight's own Google client rather than one the user registered.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off by default, which is the <i>bring your own</i> side: a Desktop-app OAuth client the user registers
+    /// themselves, with its id and secret pasted in below. On, the launcher uses
+    /// <see cref="Services.GoogleOAuth.BuiltInClientId"/> - a client id only, because the PKCE verifier stands
+    /// in for a secret and a secret shipped in an application is not a secret - so signing in needs no setup
+    /// beyond pressing the button.
+    /// </para>
+    /// <para>
+    /// The built-in side is a choice that exists and works and is deliberately not offered until this build
+    /// has a client to name: <see cref="Services.GoogleOAuth.HasBuiltInClient"/> is what the Settings screen
+    /// greys it out on, and it is the only thing standing between the workflow that is written and a sign-in
+    /// that needs no setup at all.
+    /// </para>
+    /// </remarks>
+    public bool CloudBackupUsesBuiltInClient { get; set; }
+
+    /// <summary>
+    /// The user's own Google OAuth client id, for the <i>bring your own</i> workflow.
+    /// </summary>
+    /// <remarks>
+    /// Only read while <see cref="CloudBackupUsesBuiltInClient"/> is off. A Desktop-app OAuth client is
+    /// registered once and its id pasted here; see the readme for the two minutes that takes.
+    /// </remarks>
+    public string CloudBackupClientId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// That client's secret, when it has one.
+    /// </summary>
+    /// <remarks>
+    /// A desktop client that sends a PKCE verifier does not need a secret, and Google's own guidance says a
+    /// secret shipped in an installed application is not secret - so this may be left blank, and blank means
+    /// no secret is sent rather than an empty one.
+    /// </remarks>
+    public string CloudBackupClientSecret { get; set; } = string.Empty;
 
     /// <summary>
     /// Which theme to use: <see cref="ThemeChoices.System"/>, Light or Dark. Stored as text so a value

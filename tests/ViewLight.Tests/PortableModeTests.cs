@@ -1,4 +1,5 @@
 using ViewLight.Services;
+using ViewLight.ViewModels;
 using Xunit;
 
 namespace ViewLight.Tests;
@@ -128,6 +129,67 @@ public class PortableModeTests {
             var reopened = new LauncherSettingsStore(file).Settings;
             Assert.Equal(LauncherPaths.GameDirectory, reopened.ClientPath);
             Assert.Equal(LauncherPaths.DefaultServerPath, reopened.ServerPath);
+        }
+        finally {
+            LauncherPaths.DataRoot = original;
+            PortableMode.Apply(workspace.Root);
+        }
+    }
+
+    // ------------------------------------------------------------------ copying the game in
+
+    [Fact]
+    public async Task AFinishedCopyIsReadWhereItLandedAndIsNotOfferedAgain() {
+        using var workspace = new TempWorkspace();
+        var portableRoot = workspace.CreateDirectory("on-a-stick");
+        File.WriteAllText(Path.Combine(portableRoot, PortableMode.MarkerFileName), string.Empty);
+
+        var original = LauncherPaths.DataRoot;
+
+        try {
+            PortableMode.Apply(portableRoot);
+
+            // The machine's install, and the launcher's own game folder - which the launcher is already
+            // pointed at, because that is what a fresh portable launcher starts out doing.
+            var install = workspace.CreateDirectory("steam/steamapps/common/Wizard101");
+            workspace.WriteFile(Path.Combine("steam/steamapps/common/Wizard101",
+                GameFolderLocator.RelativeClientExecutable), "stub");
+            workspace.WriteFile(Path.Combine("steam/steamapps/common/Wizard101",
+                GameFolderLocator.RelativeRootWad), "wad");
+
+            var store = new LauncherSettingsStore(LauncherPaths.SettingsFile);
+            store.Settings.ClientPath = LauncherPaths.GameDirectory;
+            store.Settings.ServerPath = workspace.CreateDirectory("server");
+            store.Settings.CheckForUpdatesOnStartup = false;
+            store.Save();
+
+            var launcher = new MainWindowViewModel(store, fetchArt: false);
+            launcher.PortableGameSource = install;
+
+            // Nothing copied yet: the card asks, and its heading is the ask.
+            Assert.True(launcher.PortableNeedsClient);
+            Assert.True(launcher.ShowPortableClientPrompt);
+            Assert.Equal("Copy your game into this folder", launcher.PortableClientCardTitle);
+
+            await launcher.CopyGameIntoPortableCommand.ExecuteAsync(null);
+
+            Assert.True(launcher.HasCopyGameMessage);
+
+            // The folder the launcher plays from is the one it already pointed at - a portable launcher
+            // plays out of its own - so the copy has to be noticed rather than announced by the path
+            // changing. It was not noticed, and a finished copy went on being read as a missing game in
+            // Settings and on Home until the folder was set by hand.
+            Assert.Equal(LauncherPaths.GameDirectory, launcher.ClientPath);
+            Assert.NotNull(launcher.ClientExecutablePath);
+            Assert.Contains("both found", launcher.GameFolderStatus);
+            Assert.Contains("Found", launcher.RootWadStatus);
+
+            // And the asking is over: there is a game in the folder, so the card reports what happened
+            // rather than offering to do it again.
+            Assert.False(launcher.PortableNeedsClient);
+            Assert.False(launcher.ShowPortableClientPrompt);
+            Assert.Equal("Your game is already in this folder", launcher.PortableClientCardTitle);
+            Assert.True(launcher.ShowPortableClientCard);
         }
         finally {
             LauncherPaths.DataRoot = original;

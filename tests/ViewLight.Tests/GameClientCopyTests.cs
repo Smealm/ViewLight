@@ -101,7 +101,7 @@ public class GameClientCopyTests {
     // ------------------------------------------------------------------ the Steam caveat
 
     [Fact]
-    public async Task WarnsThatACopiedSteamClientStillNeedsSteam() {
+    public async Task WarnsAboutWhatASteamCopyMightNeedAndWhatWouldNot() {
         using var workspace = new TempWorkspace();
         var source = workspace.CreateDirectory("steam-install");
         MakeGame(workspace, "steam-install", steam: true);
@@ -113,7 +113,13 @@ public class GameClientCopyTests {
         Assert.NotNull(result.Warning);
         Assert.Contains("Steam", result.Warning);
 
-        // The point of the warning is that a standalone copy would not have the problem.
+        // It is a caveat rather than a refusal, and it is spelled out as one: the build plays without the
+        // Steam client today, so a warning that said it would not start would be wrong about the folder in
+        // front of the user - and about the one fact worth knowing, which is that KingsIsle can change it.
+        Assert.Contains("steam_api.dll", result.Warning);
+        Assert.Contains("may require", result.Warning, StringComparison.OrdinalIgnoreCase);
+
+        // The point of the warning is that a standalone copy would not have the problem at all.
         Assert.Contains("standalone", result.Warning, StringComparison.OrdinalIgnoreCase);
     }
 

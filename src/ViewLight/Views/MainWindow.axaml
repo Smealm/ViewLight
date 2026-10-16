@@ -27,6 +27,23 @@
                        Foreground="{DynamicResource TextMutedBrush}" />
           </StackPanel>
 
+          <!-- A sync has both databases closed, which means everything a page could be edited with is off until it
+               is done - so the corner of the window says what is happening and what is paused. In the sidebar
+               rather than over the page, and outside the panel that is turned off with it, so it stays readable
+               for exactly as long as it is true. -->
+          <Border DockPanel.Dock="Top" Classes="card" Margin="14,0,14,12" Padding="12"
+                  IsVisible="{Binding HasCloudSyncNotice}">
+            <StackPanel Spacing="4">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                         Fill="{DynamicResource AccentBrush}" />
+                <TextBlock Text="{Binding CloudSyncNotice}" FontSize="13" FontWeight="SemiBold"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+              <TextBlock Classes="muted" Text="{Binding CloudSyncNoticeDetail}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
           <!-- The sidebar says the same thing Home does, and says nothing at all while there is nothing
                to report: a launcher with no server running should not look like it needs attention. -->
           <Border DockPanel.Dock="Bottom" Classes="card" Margin="14,10,14,16" Padding="12"
@@ -69,7 +86,11 @@
           </StackPanel>
         </Border>
 
-        <Panel Margin="24">
+        <!-- Everything a page can be edited with is turned off while a sync has the databases closed: the
+             notes live in one of the databases it stopped, so a setting changed or a picture picked in that
+             window is a change the launcher would not be able to keep. The nav above is left alone - looking at
+             another page is not an edit. -->
+        <Panel Margin="24" IsEnabled="{Binding IsEditingAllowed}">
           <views:HomeView IsVisible="{Binding IsHomeSelected}" />
           <views:ProfileView IsVisible="{Binding ShowProfilePage}" />
           <views:AchievementsView IsVisible="{Binding ShowAchievementsPage}" />
@@ -182,6 +203,13 @@
          Over everything, the account card included, because nothing behind it is usable: the profiles that
          card shows are read from the database this screen is asking for. -->
     <views:ImlightRequiredView IsVisible="{Binding RequiresImlight}" />
+
+    <!-- ================================================ first run: whose patch server
+         The last of the three questions and the one that is easiest to leave unasked, because the answer to
+         "use a patch server or not" is always yes. Asked after the install rather than before it, since a
+         machine that cannot start at all has a bigger thing to be told about, and asked only while it has
+         not been answered - so it appears once per install and never again. -->
+    <views:PatchServerSetupView IsVisible="{Binding RequiresPatchServerChoice}" />
 
   </Panel>
 </Window>

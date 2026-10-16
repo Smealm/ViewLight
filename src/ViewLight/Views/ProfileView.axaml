@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ViewLight.ViewModels"
              xmlns:models="using:ViewLight.Models"
+             xmlns:services="using:ViewLight.Services"
              x:Class="ViewLight.Views.ProfileView"
              x:DataType="vm:MainWindowViewModel">
 
@@ -209,7 +210,7 @@
 
           <ItemsControl ItemsSource="{Binding ProfileWizards}">
             <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="models:ProfileWizard">
+              <DataTemplate x:DataType="services:ProfileWizardRow">
                 <Border Classes="list" Margin="0,4">
                   <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="5">

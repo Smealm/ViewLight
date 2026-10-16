@@ -27,14 +27,23 @@ public class PlayerProfileDataTests {
 
     private static string Wizard(
         object? accountId = null, object? charId = null, object? level = null, object? gold = null,
-        Dictionary<string, object?>? registry = null)
-        => Document("Wizards", new Dictionary<string, object?> {
+        Dictionary<string, object?>? registry = null, object? school = null) {
+        var magicSchool = new Dictionary<string, object?> { ["Level"] = level ?? 1 };
+
+        // Left out entirely when no test asks for one, which is also what a document that has never been
+        // given a school looks like.
+        if (school is not null) {
+            magicSchool["MagicSchool"] = school;
+        }
+
+        return Document("Wizards", new Dictionary<string, object?> {
             ["AccountId"] = accountId ?? AccountId,
             ["CharId"] = charId ?? CharId,
-            ["MagicSchoolBehavior"] = new Dictionary<string, object?> { ["Level"] = level ?? 1 },
+            ["MagicSchoolBehavior"] = magicSchool,
             ["GameStats"] = new Dictionary<string, object?> { ["m_currentGold"] = gold ?? 0 },
             ["QuestBehavior"] = new Dictionary<string, object?> { ["Registry"] = registry ?? [] },
         });
+    }
 
     private static string OnlinePlayer(object? accountId = null, object? charId = null)
         => Document("OnlinePlayers", new Dictionary<string, object?> {
@@ -98,6 +107,49 @@ public class PlayerProfileDataTests {
         Assert.Equal(45_678, wizard.Gold);
         Assert.Equal(2, wizard.CompletedQuests.Count);
         Assert.Contains("WC-TUT-C05-001", wizard.CompletedQuests);
+    }
+
+    [Fact]
+    public async Task ReadsTheSchoolTheServerStoresItUnder() {
+        // Imlight's school is an enum, and a real player database stores an enum as its name: the same
+        // document that holds an account says "AuthLevel": "Administrator", where AuthLevel is an enum too.
+        // So a wizard's MagicSchool arrives as "Storm" and never as 83375795, and reading only the number is
+        // what left every wizard on a real server shown as "School not read".
+        var data = await ReadAsync(Listing(Wizard(school: "Storm")));
+
+        Assert.True(data.IsUsable, data.Problem);
+        Assert.Equal("Storm", Assert.Single(data.Wizards).School);
+    }
+
+    [Fact]
+    public async Task ReadsASchoolWrittenAsTheGamesOwnTemplateIdToo() {
+        // The other spelling of the same thing, which is what the game's own tables are keyed by and what a
+        // document from somewhere else may carry.
+        var data = await ReadAsync(Listing(Wizard(school: 2448141u)));
+
+        Assert.True(data.IsUsable, data.Problem);
+        Assert.Equal("Myth", Assert.Single(data.Wizards).School);
+    }
+
+    [Fact]
+    public async Task ASchoolOnlyACreatureCanBeIsNotAWizardsSchool() {
+        // Sun, Moon, Star and Shadow are schools of creatures and cards rather than of players. Naming one as
+        // a wizard's school would put that wizard on a ladder nothing can move them up.
+        var data = await ReadAsync(Listing(Wizard(school: "Shadow")));
+
+        Assert.True(data.IsUsable, data.Problem);
+        Assert.Equal(string.Empty, Assert.Single(data.Wizards).School);
+    }
+
+    [Fact]
+    public async Task AWizardWithNoSchoolAtAllIsNotARefusal() {
+        // Nothing else depends on the school, so a document that does not say costs that wizard its school
+        // badges and nothing more - which is the opposite of what a level that will not read does.
+        var data = await ReadAsync(Listing(Wizard(level: 12)));
+
+        Assert.True(data.IsUsable, data.Problem);
+        Assert.Equal(string.Empty, Assert.Single(data.Wizards).School);
+        Assert.Equal(12, Assert.Single(data.Wizards).Level);
     }
 
     [Fact]

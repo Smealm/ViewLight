@@ -147,6 +147,105 @@ public class PatchServerWiringTests {
         Assert.Equal("Stopped", launcher.PatchServerRowState);
     }
 
+    // ---------------------------------------------------------------- the first-run question
+
+    [Fact]
+    public void AFreshInstallIsAskedWhosePatchServerBeforeHome() {
+        using var workspace = new TempWorkspace();
+
+        var launcher = new MainWindowViewModel(StoreWithImlight(workspace), fetchArt: false);
+
+        // Both folders are known and Imlight is installed, so the only thing left is whose patch server -
+        // and the launcher does not show itself until that has been answered.
+        Assert.False(launcher.RequiresSetup);
+        Assert.False(launcher.RequiresImlight);
+        Assert.True(launcher.RequiresPatchServerChoice);
+        Assert.False(launcher.ShowMainInterface);
+
+        // The local answer is the default and the recommendation, and on a machine with no patch server it
+        // cannot be carried on with yet: choosing the public one is a decision by itself, while choosing
+        // your own needs one to actually be there.
+        Assert.True(launcher.UseLocalPatchServer);
+        Assert.False(launcher.CanCompletePatchServerSetup);
+        Assert.False(launcher.CompletePatchServerSetupCommand.CanExecute(null));
+
+        launcher.UsesRemotePatchServer = true;
+        Assert.True(launcher.CanCompletePatchServerSetup);
+        Assert.True(launcher.CompletePatchServerSetupCommand.CanExecute(null));
+
+        launcher.UsesRemotePatchServer = false;
+        Assert.False(launcher.CanCompletePatchServerSetup);
+
+        var folder = workspace.CreateDirectory("patchserver");
+        File.WriteAllBytes(PatchServerRunner.ExecutablePathFor(folder), [0]);
+        launcher.PatchServerPath = folder;
+
+        Assert.True(launcher.CanCompletePatchServerSetup);
+    }
+
+    [Fact]
+    public void AnsweringTheQuestionIsRememberedAndOnlyAskedOnce() {
+        using var workspace = new TempWorkspace();
+        var file = workspace.Path("launcher.json");
+
+        var first = new MainWindowViewModel(StoreWithImlight(workspace, file), fetchArt: false);
+        Assert.True(first.RequiresPatchServerChoice);
+
+        first.UsesRemotePatchServer = true;
+        first.CompletePatchServerSetupCommand.Execute(null);
+
+        Assert.True(first.PatchServerChoiceAnswered);
+        Assert.False(first.RequiresPatchServerChoice);
+        Assert.True(first.ShowMainInterface);
+
+        // And it is the answer that is kept, not just the fact that somebody was asked: a launcher reopened
+        // on the same settings is on the public patch server still, and is not asked again.
+        var reopened = new MainWindowViewModel(new LauncherSettingsStore(file), fetchArt: false);
+
+        Assert.True(reopened.PatchServerChoiceAnswered);
+        Assert.True(reopened.UsesRemotePatchServer);
+        Assert.False(reopened.RequiresPatchServerChoice);
+        Assert.True(reopened.ShowMainInterface);
+    }
+
+    [Fact]
+    public void AMachineThatAlreadyHasAPatchServerIsNotAskedAtAll() {
+        using var workspace = new TempWorkspace();
+
+        // Somebody who installed one from Settings before this screen existed has answered the question by
+        // installing it, and a launcher that stopped to ask them anyway would be asking about a decision
+        // they have already made.
+        var store = StoreWithImlight(workspace);
+        var folder = workspace.CreateDirectory("patchserver");
+        File.WriteAllBytes(PatchServerRunner.ExecutablePathFor(folder), [0]);
+        store.Settings.PatchServerPath = folder;
+        store.Save();
+
+        var launcher = new MainWindowViewModel(store, fetchArt: false);
+
+        Assert.True(launcher.PatchServerInstalled);
+        Assert.False(launcher.PatchServerChoiceAnswered);
+        Assert.False(launcher.RequiresPatchServerChoice);
+        Assert.True(launcher.ShowMainInterface);
+    }
+
+    [Fact]
+    public void TheFolderItWouldUseIsShownBeforeAnythingIsDownloaded() {
+        using var workspace = new TempWorkspace();
+
+        var launcher = new MainWindowViewModel(StoreWithImlight(workspace), fetchArt: false);
+
+        // Nothing chosen yet, which is the state this screen is reached in - so it says where the download
+        // would land rather than showing an empty box it has no control for.
+        Assert.Equal(string.Empty, launcher.PatchServerPath);
+        Assert.Equal(LauncherPaths.DefaultPatchServerPath, launcher.PatchServerSetupFolder);
+
+        var elsewhere = workspace.CreateDirectory("elsewhere");
+        launcher.PatchServerPath = elsewhere;
+
+        Assert.Equal(elsewhere, launcher.PatchServerSetupFolder);
+    }
+
     [Fact]
     public void ThePatchServerPortMustNotBeImlightsOwnPatchPort() {
         using var workspace = new TempWorkspace();
@@ -228,6 +327,37 @@ public class PatchServerWiringTests {
         Assert.False(MainWindowViewModel.IsTheLocalPatchServerAddress("http://127.0.0.1:12370", local));
         Assert.False(MainWindowViewModel.IsTheLocalPatchServerAddress(string.Empty, local));
         Assert.False(MainWindowViewModel.IsTheLocalPatchServerAddress(null, local));
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    /// <summary>
+    /// Settings pointed at a game folder and at an Imlight install, with the update check off so nothing
+    /// here reaches GitHub - which is the state a fresh machine is in once the server has been downloaded.
+    /// </summary>
+    /// <remarks>
+    /// The install's database is written self-contained, so what this launcher needs from this machine's
+    /// .NET is not part of what any of these tests are about.
+    /// </remarks>
+    private static LauncherSettingsStore StoreWithImlight(TempWorkspace workspace, string? file = null) {
+        var server = workspace.CreateDirectory("server");
+        var raven = Path.Combine("server", ImlightConfig.RelativeRavenServerDirectory);
+
+        workspace.WriteFile(Path.Combine("server", ImlightConfig.RelativeConfigPath),
+            "[Global Settings]\nGameRevision = r806919.Wizard_1_610\n");
+        workspace.WriteFile(Path.Combine("server", ImlightConfig.ServerExecutableName), [0]);
+        workspace.WriteFile(Path.Combine(raven, "Raven.Server.dll"), [0]);
+        workspace.WriteFile(Path.Combine(raven, "Raven.Server.runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"includedFrameworks\":"
+            + "[{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.12\"}]}}");
+
+        var store = new LauncherSettingsStore(file ?? workspace.Path("launcher.json"));
+        store.Settings.ClientPath = workspace.CreateDirectory("game");
+        store.Settings.ServerPath = server;
+        store.Settings.CheckForUpdatesOnStartup = false;
+        store.Save();
+
+        return store;
     }
 
     [Fact]

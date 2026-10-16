@@ -1418,6 +1418,11 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(PatchServerPortClashWarning));
         OnPropertyChanged(nameof(MirrorPatchServerRevision));
         OnPropertyChanged(nameof(CanEditGameRevision));
+
+        // The first-run question hangs off the same state: whether one is installed is half of whether it
+        // has to be asked, and the folder it would go into is what the screen shows.
+        OnPropertyChanged(nameof(PatchServerSetupFolder));
+        OnPropertyChanged(nameof(CanCompletePatchServerSetup));
         OnPropertyChanged(nameof(PreloadSourceInUse));
         OnPropertyChanged(nameof(HasPreloadStatus));
         OnPropertyChanged(nameof(CanPreloadPatchServerCache));
@@ -1432,5 +1437,7 @@ public sealed partial class MainWindowViewModel {
         StartPatchServerCommand.NotifyCanExecuteChanged();
         StopPatchServerCommand.NotifyCanExecuteChanged();
         DownloadPatchServerCommand.NotifyCanExecuteChanged();
+        CompletePatchServerSetupCommand.NotifyCanExecuteChanged();
+        GetPatchServerForSetupCommand.NotifyCanExecuteChanged();
     }
 }

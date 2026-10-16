@@ -8,14 +8,19 @@ obj/
 /.tmp/
 /publish/
 
+## A runtime put beside the executable: a whole .NET installation, never committed
+/src/ViewLight/runtime/
+
 ## Rider / VS
 .idea/
 .vs/
 
-## Launcher runtime data (server installs, downloads, logs)
+## Launcher runtime data (server installs, downloads, logs, its own database and engine copy)
 /runtime/
 /servers/
 /downloads/
+/database/
+/ravendb/
 
 ## OS noise
 Thumbs.db
