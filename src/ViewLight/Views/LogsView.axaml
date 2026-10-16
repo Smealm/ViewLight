@@ -9,13 +9,18 @@
 
     <!-- ================================================================ what to show
          Three boxes rather than one list, because the question is which of the three things are worth
-         reading right now - all of them, or the one that is misbehaving. -->
+         reading right now - all of them, or the one that is misbehaving. The fourth is the other question
+         the Log gets asked: one program's lines, for its own developers, without the launcher's notes on
+         them coming too. -->
     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
       <Button Content="Clear" Command="{Binding ClearLogsCommand}" />
       <TextBlock Classes="muted" Text="Show:" VerticalAlignment="Center" />
       <CheckBox Content="Launcher" IsChecked="{Binding ShowLauncherLog, Mode=TwoWay}" />
       <CheckBox Content="Server" IsChecked="{Binding ShowServerLog, Mode=TwoWay}" />
       <CheckBox Content="Patch server" IsChecked="{Binding ShowPatchServerLog, Mode=TwoWay}" />
+      <CheckBox Content="Launcher's own notes"
+                IsChecked="{Binding ShowLauncherNotes, Mode=TwoWay}"
+                ToolTip.Tip="What ViewLight noticed about the server and the patch server - which file a fetch is on, why one stopped. Their own lines stay either way; turn this off to share one program's log with the people who wrote it." />
       <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScrollLogs, Mode=TwoWay}" />
     </StackPanel>
 

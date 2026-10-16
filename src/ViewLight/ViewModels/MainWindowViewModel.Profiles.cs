@@ -628,6 +628,7 @@ public sealed partial class MainWindowViewModel {
                     ReportPatchServerRefusals(lines);
                 }
 
+                CreditThePlayingSession();
                 await ReadProfilesAsync(token).ConfigureAwait(true);
             }
             catch (OperationCanceledException) {
@@ -696,7 +697,38 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// One look at the player database: who is signed in, what the wizards are, and what commands the
+    /// Adds one look's worth of playtime to the profile being played, and only while somebody is playing.
+    /// </summary>
+    /// <remarks>
+    /// The three conditions are the whole rule, and every one of them is something the launcher observed
+    /// itself rather than something it read off the server: it started the server, it started the game, and
+    /// it is sitting here watching both. That is why idling on Home earns nothing, and why switching to
+    /// another profile's screen earns nothing - on those, the game is not running, whatever the server's own
+    /// database still says about who was in it last.
+    /// </remarks>
+    private void CreditThePlayingSession() {
+        if (!ShouldCreditPlaytime(_ledger.SessionIsOn, ServerIsRunning, GameClientState)) {
+            return;
+        }
+
+        _ledger.CreditSessionTime(DateTimeOffset.Now);
+    }
+
+    /// <summary>
+    /// The rule behind what counts as playtime, stated once so it can be read and tested without a server
+    /// or a game running.
+    /// </summary>
+    /// <remarks>
+    /// All three have to hold, and each is something the launcher did itself rather than something it read:
+    /// a session Play started, the server it started still up, and the game it started still running. That
+    /// is what makes idling on the launcher worth nothing - and what makes a profile left switched to worth
+    /// nothing either, however the server's own database remembers who was in the game.
+    /// </remarks>
+    public static bool ShouldCreditPlaytime(bool sessionIsOn, bool serverIsRunning, ClientState client)
+        => sessionIsOn && serverIsRunning && client is ClientState.Starting or ClientState.Running;
+
+    /// <summary>
+    /// One look at the player database: what the wizards are, who is in the game, and what commands the
     /// server has logged.
     /// </summary>
     private async Task ReadProfilesAsync(CancellationToken token) {

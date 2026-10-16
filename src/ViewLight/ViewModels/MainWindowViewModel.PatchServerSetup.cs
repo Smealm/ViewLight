@@ -95,7 +95,9 @@ public sealed partial class MainWindowViewModel {
         PatchServerChoiceAnswered = true;
         Section = LauncherSection.Home;
 
-        AppendLog(LogLevel.Success, UseLocalPatchServer
+        // The launcher's own note about the patch server, filed with the patch server's lines: whose patch
+        // server this is, and what its first start costs.
+        NoteAboutPatchServer(LogLevel.Success, UseLocalPatchServer
             ? $"Patch server: this machine's own, at {LocalPatchServerUrl}. Play starts it before the server "
               + "and points Imlight at it, so the game's files come from here."
             : $"Patch server: the remote one — Imlight keeps {ImlightConfig.PublicPatchServerUrl} unless its "
@@ -104,7 +106,7 @@ public sealed partial class MainWindowViewModel {
         // Said on the way out because it is the one thing about the choice that is not visible from here:
         // what an empty patch server does on its first start is fetch a revision whole.
         if (PatchServerIsThisMachines) {
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Its first start fetches the revision Wizard101 is serving into {PatchServerSetupFolder}, "
                 + "which is thousands of files and tens of gigabytes. Play starts it and reports how far "
                 + "along it is while it works; the ones your game already has can be copied in from Settings "
@@ -137,7 +139,7 @@ public sealed partial class MainWindowViewModel {
     private async Task GetPatchServerForSetupAsync() {
         if (string.IsNullOrWhiteSpace(PatchServerPath)) {
             PatchServerPath = LauncherPaths.DefaultPatchServerPath;
-            AppendLog(LogLevel.Info, $"Patch server folder set to {PatchServerPath}");
+            NoteAboutPatchServer(LogLevel.Info, $"Patch server folder set to {PatchServerPath}");
         }
 
         await DownloadPatchServerAsync().ConfigureAwait(true);

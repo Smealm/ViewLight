@@ -267,7 +267,7 @@ public sealed partial class MainWindowViewModel {
             _store.Settings.UseLocalPatchServer = value;
             _store.Save();
 
-            AppendLog(LogLevel.Info, value
+            NoteAboutPatchServer(LogLevel.Info, value
                 ? $"Imlight's patch server is this machine's from now on: Play starts it and points Imlight "
                   + $"at {LocalPatchServerUrl}."
                 : "Imlight's patch server is a remote one from now on: this machine's is left alone, and the "
@@ -313,7 +313,7 @@ public sealed partial class MainWindowViewModel {
             _store.Settings.PatchServerManaged = value;
             _store.Save();
 
-            AppendLog(LogLevel.Info, value
+            NoteAboutPatchServer(LogLevel.Info, value
                 ? "The patch server will be started with the server and stopped when the server stops."
                 : "The patch server is left to you: ViewLight will not start or stop it.");
 
@@ -369,7 +369,7 @@ public sealed partial class MainWindowViewModel {
         _store.Settings.PatchServerRevisionSynced = synced;
 
         if (synced) {
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 "The server's accepted revision is kept in step with the patch server's from now on: "
                 + "GameRevision is set to the revision the patch server holds, so the server asks for files "
                 + "it actually has.");
@@ -383,7 +383,7 @@ public sealed partial class MainWindowViewModel {
         else {
             var restored = RestoreMirroredRevision();
 
-            AppendLog(LogLevel.Info, restored is null
+            NoteAboutPatchServer(LogLevel.Info, restored is null
                 ? "GameRevision is left as the server's own config has it from now on, and the patch server "
                   + "is not being kept in step with it: its files can only come from the hand-off in "
                   + "Settings, and only while this machine's client is the revision the server asks for."
@@ -395,6 +395,10 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(PatchServerRevisionSynced));
         OnPropertyChanged(nameof(CanEditGameRevision));
         RefreshDerived();
+
+        // The revision a copy would fill in has just changed hands - the patch server's rather than the
+        // config's, or the other way round - so the card is worked out again against the new one.
+        RefreshPreloadPlanIfTheRevisionMoved();
     }
 
     /// <summary>
@@ -412,7 +416,7 @@ public sealed partial class MainWindowViewModel {
             _store.Settings.PatchServerPort = port;
             _store.Save();
 
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Patch server port set to {port}. It is used the next time the patch server starts.");
 
             OnPropertyChanged();
@@ -432,7 +436,7 @@ public sealed partial class MainWindowViewModel {
     [RelayCommand]
     private void UseRecommendedPatchServerFolder() {
         PatchServerPath = LauncherPaths.DefaultPatchServerPath;
-        AppendLog(LogLevel.Info, $"Patch server folder set to {PatchServerPath}");
+        NoteAboutPatchServer(LogLevel.Info, $"Patch server folder set to {PatchServerPath}");
     }
 
     [RelayCommand]
@@ -447,7 +451,7 @@ public sealed partial class MainWindowViewModel {
         }
 
         PatchServerPath = picked;
-        AppendLog(LogLevel.Info, $"Patch server folder set to {picked}");
+        NoteAboutPatchServer(LogLevel.Info, $"Patch server folder set to {picked}");
     }
 
     // ---------------------------------------------------------------- download & install
@@ -480,11 +484,11 @@ public sealed partial class MainWindowViewModel {
             // A running patch server holds its own executable open, so it is stopped before the file
             // that is being replaced is written.
             if (PatchServerIsRunning) {
-                AppendLog(LogLevel.Info, "Stopping the patch server so its executable can be replaced…");
+                NoteAboutPatchServer(LogLevel.Info, "Stopping the patch server so its executable can be replaced…");
                 await _patch.StopAsync().ConfigureAwait(true);
             }
 
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Downloading patch server {release.Tag} ({release.AssetSizeDisplay}) into {PatchServerPath}.");
 
             var result = await _patchInstallService
@@ -497,14 +501,14 @@ public sealed partial class MainWindowViewModel {
                 _store.Settings.PatchServerInstalledAt = DateTimeOffset.Now;
                 _store.Save();
 
-                AppendLog(LogLevel.Success, result.Message);
+                NoteAboutPatchServer(LogLevel.Success, result.Message);
             }
             else {
-                AppendLog(LogLevel.Error, result.Message);
+                NoteAboutPatchServer(LogLevel.Error, result.Message);
             }
 
             if (result.Warning is { Length: > 0 }) {
-                AppendLog(LogLevel.Warning, result.Warning);
+                NoteAboutPatchServer(LogLevel.Warning, result.Warning);
             }
 
             RefreshPatchInstalledText();
@@ -512,13 +516,13 @@ public sealed partial class MainWindowViewModel {
             // A folder that refused the executable leaves nothing to run, and saying so here is better
             // than a Start button that quietly does nothing.
             if (result.Success && !PatchServerInstalled) {
-                AppendLog(LogLevel.Warning,
+                NoteAboutPatchServer(LogLevel.Warning,
                     $"{PatchServerRunner.ExecutableName} was not written to {PatchServerPath}.");
             }
         }
         catch (Exception ex) {
             PatchCheckError = ex.Message;
-            AppendLog(LogLevel.Error, $"Patch server download failed: {ex.Message}");
+            NoteAboutPatchServer(LogLevel.Error, $"Patch server download failed: {ex.Message}");
         }
         finally {
             _patchInstallCancellation?.Dispose();
@@ -533,7 +537,7 @@ public sealed partial class MainWindowViewModel {
     [RelayCommand]
     private void CancelPatchInstall() {
         _patchInstallCancellation?.Cancel();
-        AppendLog(LogLevel.Warning, "Cancelling the patch server download…");
+        NoteAboutPatchServer(LogLevel.Warning, "Cancelling the patch server download…");
     }
 
     [RelayCommand]
@@ -544,7 +548,7 @@ public sealed partial class MainWindowViewModel {
         try {
             _latestPatchRelease = await _patchReleaseService.GetLatestWindowsReleaseAsync().ConfigureAwait(true);
             LatestPatchReleaseText = _latestPatchRelease.Tag;
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Newest patch server build: {_latestPatchRelease.Tag} ({_latestPatchRelease.AssetName}).");
             RefreshPatchInstalledText();
         }
@@ -552,7 +556,7 @@ public sealed partial class MainWindowViewModel {
             _latestPatchRelease = null;
             LatestPatchReleaseText = "Could not reach GitHub.";
             PatchCheckError = ex.Message;
-            AppendLog(LogLevel.Error, $"Patch server release check failed: {ex.Message}");
+            NoteAboutPatchServer(LogLevel.Error, $"Patch server release check failed: {ex.Message}");
         }
         finally {
             RefreshDerived();
@@ -634,10 +638,15 @@ public sealed partial class MainWindowViewModel {
         var patchServer = PatchServerPath;
         var configured = PreloadSourcePath;
         var ownGameFolder = ClientPath;
-        var revision = ServerWantedRevision;
+        var synced = PatchServerRevisionSynced;
+        var configRevision = ServerWantedRevision;
 
         var (plan, source) = await Task
-            .Run(() => PlanPreload(patchServer, revision, configured, ownGameFolder))
+            .Run(() => PlanPreload(
+                patchServer,
+                PatchServerPreload.RevisionToFillIn(synced, configRevision, PatchServerPreload.RevisionsOnDisk(patchServer)),
+                configured,
+                ownGameFolder))
             .ConfigureAwait(true);
 
         _preloadPlan = plan;
@@ -664,6 +673,36 @@ public sealed partial class MainWindowViewModel {
     /// </remarks>
     public string? ServerWantedRevision
         => (_config ?? ImlightConfig.TryLoad(ServerPath))?.GameRevision ?? GameRevision;
+
+    /// <summary>
+    /// Works the copy out again when the revision it is aimed at is no longer the one on screen.
+    /// </summary>
+    /// <remarks>
+    /// The plan is built against the revision the server asks the patch server for, and that value moves
+    /// under it: the sync writes it, the box in Network sets it, and the toggle above decides whether it is
+    /// the patch server's or the config's. Without this the card in Settings can be describing the revision
+    /// the config held before - refusing a copy over a revision the server is not going to ask for.
+    /// </remarks>
+    private void RefreshPreloadPlanIfTheRevisionMoved() {
+        // Nothing has been worked out yet, and the caller that gets here first - loading the config on the
+        // way in - is followed by the constructor's own pass. One plan is enough.
+        if (_preloadPlan is not { } planned) {
+            return;
+        }
+
+        var wanted = PreloadRevision;
+
+        if (string.Equals(planned.Revision, wanted ?? string.Empty, StringComparison.OrdinalIgnoreCase)) {
+            return;
+        }
+
+        _ = RefreshPreloadPlanAsync();
+    }
+
+    /// <summary>The revision a copy into the patch server would fill in - see <see cref="PatchServerPreload.RevisionToFillIn"/>.</summary>
+    private string? PreloadRevision
+        => PatchServerPreload.RevisionToFillIn(
+            PatchServerRevisionSynced, ServerWantedRevision, PatchServerPreload.RevisionsOnDisk(PatchServerPath));
 
     /// <summary>
     /// The plan for the best install on this machine: the one that is set, and failing that the launcher's
@@ -794,7 +833,7 @@ public sealed partial class MainWindowViewModel {
         }
 
         PreloadSourcePath = picked;
-        AppendLog(LogLevel.Info, $"The patch server's files are copied from {picked}.");
+        NoteAboutPatchServer(LogLevel.Info, $"The patch server's files are copied from {picked}.");
     }
 
     /// <summary>Goes back to whichever install fits, rather than one that was picked.</summary>
@@ -802,7 +841,7 @@ public sealed partial class MainWindowViewModel {
     private void FindPreloadSource() {
         PreloadSourcePath = string.Empty;
 
-        AppendLog(LogLevel.Info,
+        NoteAboutPatchServer(LogLevel.Info,
             "The install to copy from is found again: whichever one is the revision the patch server holds.");
 
         _ = RefreshPreloadPlanAsync();
@@ -811,7 +850,7 @@ public sealed partial class MainWindowViewModel {
     [RelayCommand(CanExecute = nameof(IsPreloading))]
     private void CancelPreload() {
         _preloadCancellation?.Cancel();
-        AppendLog(LogLevel.Warning, "Stopping the copy into the patch server…");
+        NoteAboutPatchServer(LogLevel.Warning, "Stopping the copy into the patch server…");
     }
 
     [RelayCommand(CanExecute = nameof(CanPreloadPatchServerCache))]
@@ -844,7 +883,7 @@ public sealed partial class MainWindowViewModel {
         });
 
         try {
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Copying {plan.FilesToCopy:N0} files ({ServerInstallService.FormatBytes(plan.BytesToCopy)}) of "
                 + $"{plan.Revision} from {plan.SourceFolder} into the patch server…");
 
@@ -852,10 +891,10 @@ public sealed partial class MainWindowViewModel {
                 .RunAsync(plan, progress, _preloadCancellation.Token)
                 .ConfigureAwait(true);
 
-            AppendLog(result.Success ? LogLevel.Success : LogLevel.Warning, result.Message);
+            NoteAboutPatchServer(result.Success ? LogLevel.Success : LogLevel.Warning, result.Message);
 
             if (result.Warning is { Length: > 0 }) {
-                AppendLog(LogLevel.Warning, result.Warning);
+                NoteAboutPatchServer(LogLevel.Warning, result.Warning);
             }
 
             return result.Success;
@@ -973,7 +1012,7 @@ public sealed partial class MainWindowViewModel {
         catch (Exception ex) {
             // Never a failed session: a figure the launcher could not work out is not something the patch
             // server is doing wrong, and the fetch itself is unaffected either way.
-            AppendLog(LogLevel.Warning, $"Could not keep up with the patch server's fetch: {ex.Message}");
+            NoteAboutPatchServer(LogLevel.Warning, $"Could not keep up with the patch server's fetch: {ex.Message}");
         }
         finally {
             // The loop can also end by itself - the process went away - and the field must not be left
@@ -1068,7 +1107,7 @@ public sealed partial class MainWindowViewModel {
 
         // The file's own path is worth a line of its own: which file of a revision of thousands it is on is
         // exactly the detail a percentage leaves out.
-        AppendLog(LogLevel.Info,
+        NoteAboutPatchServer(LogLevel.Info,
             state.CurrentFile is { } currentFile && (fileChanged || revisionChanged)
                 ? $"Fetching {currentFile.RelativePath}: "
                   + $"{ServerInstallService.FormatBytes(currentFile.BytesSoFar)}"
@@ -1083,8 +1122,8 @@ public sealed partial class MainWindowViewModel {
         }
 
         _fetchMismatchReported = true;
-        AppendLog(LogLevel.Warning, mismatch);
-        AppendLog(LogLevel.Warning,
+        NoteAboutPatchServer(LogLevel.Warning, mismatch);
+        NoteAboutPatchServer(LogLevel.Warning,
             "Play waits for the patch server to have "
             + $"{PatchServerServing.BootFile} before it starts the server, and it can be sent on without "
             + "one with the button on Home.");
@@ -1141,7 +1180,7 @@ public sealed partial class MainWindowViewModel {
                   + "revision its own config has - and a pinned revision can only be filled in by the hand-off "
                   + "on that card.");
 
-        AppendLog(LogLevel.Error, PatchServerRefusalNotice);
+        NoteAboutPatchServer(LogLevel.Error, PatchServerRefusalNotice);
         OnPropertyChanged(nameof(HasPatchServerRefusalNotice));
     }
 
@@ -1223,7 +1262,7 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
-        AppendLog(LogLevel.Warning,
+        NoteAboutPatchServer(LogLevel.Warning,
             "Playing without waiting for the patch server's files. Imlight asks for "
             + $"{PatchServerServing.BootFile} during its own boot, and a patch server that does not have it "
             + "yet answers 404 - the session loads Root.wad from Imlight's own cache if it has one, and stops "
@@ -1281,7 +1320,7 @@ public sealed partial class MainWindowViewModel {
         RefreshDerived();
         OnPropertyChanged(nameof(HasWaitingForPatchServerFilesText));
 
-        AppendLog(LogLevel.Info,
+        NoteAboutPatchServer(LogLevel.Info,
             $"The patch server at {LocalPatchServerUrl} does not have {revision}'s "
             + $"{PatchServerServing.BootFile} yet, which is the first thing Imlight asks it for when it "
             + "starts. Waiting for it rather than starting a server that cannot fetch its own files - press "
@@ -1301,7 +1340,7 @@ public sealed partial class MainWindowViewModel {
                 await Task.Delay(PatchServerBootFilePollInterval, cancellation.Token).ConfigureAwait(true);
 
                 if (await PatchServerServingAsync().ConfigureAwait(true)) {
-                    AppendLog(LogLevel.Success,
+                    NoteAboutPatchServer(LogLevel.Success,
                         $"The patch server has {revision}'s {PatchServerServing.BootFile} now, so the server "
                         + "is being started.");
                     return;
@@ -1310,7 +1349,7 @@ public sealed partial class MainWindowViewModel {
                 // A patch server that has gone away cannot be waited for, and one that is being written into
                 // is still worth waiting on - so only the first of those ends the wait.
                 if (!PatchServerIsRunning) {
-                    AppendLog(LogLevel.Warning,
+                    NoteAboutPatchServer(LogLevel.Warning,
                         "The patch server stopped while the launcher was waiting for its files, so the "
                         + "server is being started without them.");
                     return;
@@ -1409,7 +1448,7 @@ public sealed partial class MainWindowViewModel {
 
     private async Task<bool> StartPatchServerCoreAsync() {
         if (!PatchServerInstalled) {
-            AppendLog(LogLevel.Warning,
+            NoteAboutPatchServer(LogLevel.Warning,
                 $"There is no {PatchServerRunner.ExecutableName} in the patch server folder, so there is "
                 + "nothing to start. Download it under Settings.");
             return false;
@@ -1418,7 +1457,7 @@ public sealed partial class MainWindowViewModel {
         // The config is what decides which port it listens on, so it is brought in line before the
         // process starts - and written only when it says something else.
         if (PatchServerConfig.EnsureConfig(PatchServerPath, PatchServerPort)) {
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Wrote the patch server's config for endpoint {PatchServerConfig.Host}:{PatchServerPort} "
                 + $"and a {PatchServerConfig.FetchIntervalSeconds / 60}-minute retry interval. A fetch that "
                 + "cannot finish is one that waits hours between attempts.");
@@ -1432,7 +1471,7 @@ public sealed partial class MainWindowViewModel {
                 PatchServerPort));
         }
         catch (Exception ex) {
-            AppendLog(LogLevel.Error, $"Could not start the patch server: {ex.Message}");
+            NoteAboutPatchServer(LogLevel.Error, $"Could not start the patch server: {ex.Message}");
             return false;
         }
 
@@ -1443,7 +1482,7 @@ public sealed partial class MainWindowViewModel {
             return true;
         }
 
-        AppendLog(LogLevel.Warning, PatchServerState == ServerState.Faulted
+        NoteAboutPatchServer(LogLevel.Warning, PatchServerState == ServerState.Faulted
             ? "The patch server did not stay up. Imlight keeps its own cached copy of Root.wad, so the "
               + "server is started anyway."
             : "The patch server has not answered yet. Imlight keeps its own cached copy of Root.wad, so "
@@ -1485,7 +1524,7 @@ public sealed partial class MainWindowViewModel {
         }
 
         if (revisions.Count == 0) {
-            AppendLog(LogLevel.Warning,
+            NoteAboutPatchServer(LogLevel.Warning,
                 $"The patch server at {LocalPatchServerUrl} did not list a revision, so GameRevision is "
                 + "left as the config has it. It is asked again the next time the patch server starts.");
         }
@@ -1525,12 +1564,12 @@ public sealed partial class MainWindowViewModel {
             _config = config;
             PatchServerUrl = wanted;
 
-            AppendLog(LogLevel.Info,
+            NoteAboutPatchServer(LogLevel.Info,
                 $"Imlight's patch server is now the local one at {wanted}, so Root.wad comes from this "
                 + "machine.");
         }
         catch (Exception ex) {
-            AppendLog(LogLevel.Warning,
+            NoteAboutPatchServer(LogLevel.Warning,
                 $"Could not point Imlight at {wanted} ({ex.Message}), so it will use whatever its config "
                 + "already says.");
         }
@@ -1617,7 +1656,7 @@ public sealed partial class MainWindowViewModel {
             if (fetch is { IsComplete: false } unfinished) {
                 var revision = config?.GameRevision ?? GameRevision;
 
-                AppendLog(LogLevel.Warning,
+                NoteAboutPatchServer(LogLevel.Warning,
                     $"The patch server at {LocalPatchServerUrl} is still fetching {revision}'s files: it "
                     + $"has {unfinished.HeldFiles:N0} of {unfinished.TotalFiles:N0} "
                     + $"({ServerInstallService.FormatBytes(unfinished.FetchedBytes)} of "
@@ -1632,7 +1671,7 @@ public sealed partial class MainWindowViewModel {
 
         var wanted = config?.GameRevision ?? GameRevision;
 
-        AppendLog(LogLevel.Warning,
+        NoteAboutPatchServer(LogLevel.Warning,
             $"The patch server at {LocalPatchServerUrl} has not fetched {wanted}'s files yet, so it does "
             + $"not have {PatchServerServing.BootFile} to serve. This session loads Root.wad from "
             + "Imlight's own cache, or stops on it if it has none - and while this launcher is open the "
@@ -1699,7 +1738,7 @@ public sealed partial class MainWindowViewModel {
     [RelayCommand]
     private void UseThisMachinesPatchServer() {
         PatchServerUrl = LocalPatchServerUrl;
-        AppendLog(LogLevel.Info,
+        NoteAboutPatchServer(LogLevel.Info,
             $"Patch server set to {PatchServerUrl}. Save settings to apply it.");
     }
 
@@ -1708,7 +1747,7 @@ public sealed partial class MainWindowViewModel {
     /// files - but the local assets have stopped being served, which is worth saying.
     /// </summary>
     private void OnPatchServerExited(int exitCode) {
-        AppendLog(LogLevel.Warning, exitCode == 0
+        NoteAboutPatchServer(LogLevel.Warning, exitCode == 0
             ? "The patch server stopped on its own."
             : $"The patch server stopped on its own (exit code {exitCode}).");
 
@@ -1752,7 +1791,7 @@ public sealed partial class MainWindowViewModel {
         catch (Exception ex) {
             // A read-only config is not a failed session: Imlight keeps whatever revision it already
             // reads, which is the behaviour the mirror is off for.
-            AppendLog(LogLevel.Warning,
+            NoteAboutPatchServer(LogLevel.Warning,
                 $"Could not set Imlight's revision from the patch server ({ex.Message}).");
             return false;
         }
@@ -1764,7 +1803,7 @@ public sealed partial class MainWindowViewModel {
         // Setting it is what puts it on screen, the same way a reload of the config would.
         GameRevision = wanted;
 
-        AppendLog(LogLevel.Success,
+        NoteAboutPatchServer(LogLevel.Success,
             $"Imlight now asks the patch server for {wanted} and accepts clients on it, which is what the "
             + "patch server holds (GameRevision).");
 
@@ -1799,7 +1838,7 @@ public sealed partial class MainWindowViewModel {
             return wanted;
         }
         catch (Exception ex) {
-            AppendLog(LogLevel.Warning, $"Could not put GameRevision back ({ex.Message}).");
+            NoteAboutPatchServer(LogLevel.Warning, $"Could not put GameRevision back ({ex.Message}).");
             return null;
         }
     }
@@ -1890,7 +1929,7 @@ public sealed partial class MainWindowViewModel {
             _store.Settings.PatchServerRevisionCleanup = chosen;
             _store.Save();
 
-            AppendLog(LogLevel.Info, chosen == PatchServerCleanupChoices.Automatic
+            NoteAboutPatchServer(LogLevel.Info, chosen == PatchServerCleanupChoices.Automatic
                 ? "The patch server's revisions are looked after automatically from now on: the revision the "
                   + "server asks for and the one your game is are kept, and any other is removed."
                 : "The patch server's revisions are yours to manage from now on: ViewLight will not remove "
@@ -2139,10 +2178,10 @@ public sealed partial class MainWindowViewModel {
                 .ConfigureAwait(true);
 
             if (log && result.RemovedAnything) {
-                AppendLog(LogLevel.Success, result.Describe());
+                NoteAboutPatchServer(LogLevel.Success, result.Describe());
             }
             else if (log && result.Kept.Count > 0) {
-                AppendLog(LogLevel.Info, result.Describe());
+                NoteAboutPatchServer(LogLevel.Info, result.Describe());
             }
 
             // A revision that has just gone changes what is left, so the list is read again. The refresh
@@ -2158,7 +2197,7 @@ public sealed partial class MainWindowViewModel {
         catch (Exception ex) {
             // Never a failed session: a folder that would not go is a folder that stays.
             if (log) {
-                AppendLog(LogLevel.Warning, $"Could not clean up the patch server's revisions: {ex.Message}");
+                NoteAboutPatchServer(LogLevel.Warning, $"Could not clean up the patch server's revisions: {ex.Message}");
             }
         }
         finally {
@@ -2205,7 +2244,7 @@ public sealed partial class MainWindowViewModel {
                 + "it is gone.";
         }
 
-        AppendLog(LogLevel.Info, PatchServerRevisionsStatus);
+        NoteAboutPatchServer(LogLevel.Info, PatchServerRevisionsStatus);
         OnPropertyChanged(nameof(HasPatchServerRevisionsStatus));
     }
 
@@ -2252,7 +2291,7 @@ public sealed partial class MainWindowViewModel {
         PatchServerPrepareAnswered = true;
         RefreshDerived();
 
-        AppendLog(LogLevel.Info,
+        NoteAboutPatchServer(LogLevel.Info,
             $"Starting the patch server now so it can fetch the revision Wizard101 is serving into "
             + $"{PatchServerSetupFolder}. It is thousands of files, and the line below says how far along "
             + "it is.");
@@ -2267,7 +2306,7 @@ public sealed partial class MainWindowViewModel {
         PatchServerPrepareAnswered = true;
         RefreshDerived();
 
-        AppendLog(LogLevel.Info,
+        NoteAboutPatchServer(LogLevel.Info,
             "The patch server's first fetch is left for Play: it starts the patch server before the server, "
             + "and the fetch runs while the launcher is open.");
     }

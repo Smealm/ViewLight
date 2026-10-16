@@ -382,6 +382,104 @@ public class PatchServerPreloadTests {
         Assert.Equal(PatchServerPreload.NoRevisionMessage, result.Message);
     }
 
+    // ---------------------------------------------------------------- which revision is filled in
+
+    [Fact]
+    public void TheRevisionFilledInFollowsTheTwoRevisionsBeingKeptInStep() {
+        var held = $"V_{Revision}";
+
+        // In step: the patch server's revision is the one the server will ask for, whatever the config
+        // still says - the launcher writes it into GameRevision when the patch server starts.
+        Assert.Equal(Revision,
+            PatchServerPreload.RevisionToFillIn(synced: true, "r803238.Wizard_1_610", [held]));
+        Assert.Equal(Revision,
+            PatchServerPreload.RevisionToFillIn(synced: true, "r803238.Wizard_1_610", ["V_r803238.Wizard_1_610", held]));
+
+        // Out of step: the server is pinned to its own config, so that value is the one.
+        Assert.Equal("r803238.Wizard_1_610",
+            PatchServerPreload.RevisionToFillIn(synced: false, "r803238.Wizard_1_610", [held]));
+
+        // A patch server holding nothing yet has no revision of its own to offer, so the config's stands -
+        // which is what lets the refusal name the revision nothing has arrived for.
+        Assert.Equal("r803238.Wizard_1_610",
+            PatchServerPreload.RevisionToFillIn(synced: true, "r803238.Wizard_1_610", []));
+        Assert.Null(PatchServerPreload.RevisionToFillIn(synced: true, null, []));
+    }
+
+    [Fact]
+    public void TheRevisionsOnDiskAreTheFoldersThePatchServerKeeps() {
+        using var workspace = new TempWorkspace();
+        var patchServer = workspace.CreateDirectory("patchserver");
+
+        // Nothing fetched yet, and a patch server folder nobody has installed one into.
+        Assert.Empty(PatchServerPreload.RevisionsOnDisk(patchServer));
+        Assert.Empty(PatchServerPreload.RevisionsOnDisk(null));
+        Assert.Empty(PatchServerPreload.RevisionsOnDisk(workspace.Path("nowhere")));
+
+        // Its own data folder, as it is named by default...
+        workspace.CreateDirectory($"patchserver/data/{RevisionFolderName}");
+        workspace.CreateDirectory("patchserver/data/V_r803238.Wizard_1_610");
+        workspace.CreateDirectory("patchserver/data/notes-by-hand");
+
+        Assert.Equal(
+            ["V_r803238.Wizard_1_610", RevisionFolderName, "notes-by-hand"],
+            [.. PatchServerPreload.RevisionsOnDisk(patchServer).OrderBy(name => name, StringComparer.Ordinal)]);
+
+        // ...and as its own config moves it, because that is where Aurorium will look.
+        workspace.WriteFile("patchserver/config.toml", "[fetcher]\nsave_directory = \"data-elsewhere\"\n");
+        workspace.CreateDirectory("patchserver/data-elsewhere/V_r900000.Wizard_1_700");
+
+        Assert.Equal(["V_r900000.Wizard_1_700"], PatchServerPreload.RevisionsOnDisk(patchServer));
+    }
+
+    [Fact]
+    public async Task TheCopyIsAimedAtTheRevisionThePatchServerHoldsRatherThanTheOldOneInTheConfig() {
+        using var workspace = new TempWorkspace();
+
+        // This machine: the game is up to date, and the patch server has fetched the revision the game is.
+        var source = GameBuild(workspace, "game", ("Data/GameData/Needed.wad", 20));
+        var patchServer = workspace.CreateDirectory("patchserver");
+        var revisionFolder = PatchServerPreload.RevisionFolderFor(patchServer, Revision);
+
+        workspace.WriteFile(Path.Combine(revisionFolder, PatchServerManifest.FileName),
+            FileList(("Data/GameData/Needed.wad", 20)));
+
+        // The server's config still holds the revision the build was published with, because the launcher
+        // writes the patch server's into it when the patch server starts - and this one is not running.
+        var server = workspace.CreateDirectory("server");
+        workspace.WriteFile(Path.Combine("server", "Config", "Imlight.ini"),
+            "[Global Settings]\r\nGameRevision = r803238.Wizard_1_610\r\n");
+
+        var store = new LauncherSettingsStore(workspace.Path("launcher.json"));
+        store.Settings.ClientPath = source;
+        store.Settings.ServerPath = server;
+        store.Settings.PatchServerPath = patchServer;
+        store.Save();
+
+        var launcher = new MainWindowViewModel(store, fetchArt: false);
+
+        await launcher.RefreshPreloadPlanAsync();
+
+        // With the two kept in step, the old value in the config is not what the server is going to ask
+        // for, so it is not what the copy is planned against: the install is the revision the patch server
+        // holds, and it is handed over.
+        Assert.True(launcher.PatchServerRevisionSynced);
+        Assert.Equal(source, launcher.PreloadSourceInUse);
+        Assert.True(launcher.CanPreloadPatchServerCache);
+        Assert.Contains($"0 of 1 files of {Revision}", launcher.PreloadStatus);
+        Assert.DoesNotContain("r803238", launcher.PreloadStatus);
+
+        // Turned off, the server is pinned to its own config - and then the honest answer is that this
+        // install is not that revision, which the line says by name.
+        launcher.PatchServerRevisionSynced = false;
+
+        await launcher.RefreshPreloadPlanAsync();
+
+        Assert.False(launcher.CanPreloadPatchServerCache);
+        Assert.Contains("r803238.Wizard_1_610", launcher.PreloadStatus);
+        Assert.Contains("same revision", launcher.PreloadStatus);
+    }
+
     // ---------------------------------------------------------------- what the launcher says about it
 
     [Fact]

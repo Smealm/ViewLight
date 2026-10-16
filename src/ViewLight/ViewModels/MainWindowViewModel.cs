@@ -155,7 +155,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         });
         _server.Ready += (_, reason) => Post(() => {
             // The technical reason goes to the Log; the status rows say it in plain words.
-            AppendLog(LogLevel.Success, $"The server is ready — {reason}");
+            NoteAboutServer(LogLevel.Success, $"The server is ready — {reason}");
             SyncPhaseWithServer();
             RefreshDerived();
 
@@ -185,7 +185,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             }
         });
         _patch.Ready += (_, reason) => Post(() => {
-            AppendLog(LogLevel.Success, $"The patch server is ready — {reason}");
+            NoteAboutPatchServer(LogLevel.Success, $"The patch server is ready — {reason}");
             RefreshDerived();
         });
         _patch.Exited += (_, code) => Post(() => OnPatchServerExited(code));
@@ -446,16 +446,49 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     [ObservableProperty] private bool _showServerLog = true;
     [ObservableProperty] private bool _showPatchServerLog = true;
 
+    /// <summary>
+    /// Whether the launcher's own lines about the two programs are shown.
+    /// </summary>
+    /// <remarks>
+    /// On to begin with, because they are part of the running account the Log is: a patch server does not
+    /// log which file it is on, and the launcher saying so is the only way to watch a fetch. Turning it off
+    /// is for the other use the Log has - pasting one program's lines to the people who wrote it, without
+    /// the launcher's notes on them arriving too.
+    /// </remarks>
+    [ObservableProperty] private bool _showLauncherNotes = true;
+
     partial void OnShowLauncherLogChanged(bool value) => ApplyLogFilters();
     partial void OnShowServerLogChanged(bool value) => ApplyLogFilters();
     partial void OnShowPatchServerLogChanged(bool value) => ApplyLogFilters();
+    partial void OnShowLauncherNotesChanged(bool value) => ApplyLogFilters();
 
     private void ApplyLogFilters() {
         Log.SetVisible(LogSource.Launcher, ShowLauncherLog);
         Log.SetVisible(LogSource.Server, ShowServerLog);
         Log.SetVisible(LogSource.Patcher, ShowPatchServerLog);
+        Log.SetDerivedVisible(ShowLauncherNotes);
         RefreshLogSummary();
     }
+
+    /// <summary>
+    /// One of the launcher's own lines about a program, filed under that program.
+    /// </summary>
+    /// <remarks>
+    /// The launcher's commentary goes where the program's own output goes, so a box for one of the three is
+    /// about one thing rather than about who typed the sentence - and so the notes can be hidden on their
+    /// own, which is the one difference that matters when a program's lines are being handed to whoever
+    /// maintains it.
+    /// </remarks>
+    public void AppendDerivedLog(LogLevel level, string message, LogSource source)
+        => AppendLog(new LogEntry(DateTimeOffset.Now, level, message, source, Derived: true));
+
+    /// <summary>The launcher's own note about the patch server, filed with the patch server's lines.</summary>
+    private void NoteAboutPatchServer(LogLevel level, string message)
+        => AppendDerivedLog(level, message, LogSource.Patcher);
+
+    /// <summary>The launcher's own note about the server, filed with the server's lines.</summary>
+    private void NoteAboutServer(LogLevel level, string message)
+        => AppendDerivedLog(level, message, LogSource.Server);
 
     /// <summary>Opens a folded run of the same line so it can be read and copied, or folds it back up.</summary>
     public void ToggleLogRepeat(LogBlock block) {
@@ -1067,9 +1100,16 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     /// <summary>
-    /// Applies the starter configuration in one click: change the admin credentials, skip the tutorial,
-    /// and narrow the starter kit to a Tier 1 wand plus the tutorial deck.
+    /// Applies the recommended configuration in one click: change the admin credentials and narrow the
+    /// starter kit to a Tier 1 wand plus the tutorial deck.
     /// </summary>
+    /// <remarks>
+    /// It deliberately does not touch <c>TutorialDisabled</c>. Skipping the tutorial is a choice the game
+    /// itself offers - a button on the character-creation screen - so leaving a new character in it is not
+    /// a lesser experience, while turning the tutorial off by default costs the character its school's
+    /// first spell and its equipped starter kit. The tick box for it is right below, which is where the
+    /// decision belongs.
+    /// </remarks>
     [RelayCommand]
     private void ApplyStarterPreset() {
         if (_config is null) {
@@ -1078,10 +1118,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         }
 
         try {
-            TutorialDisabled = true;
             DefaultItemsText = StarterPresetItems;
 
-            _config.TutorialDisabled = true;
             _config.DefaultItems = StarterPresetItems;
 
             // Keep the explanatory comment above DefaultItems in sync with the values we wrote,
@@ -1100,10 +1138,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             _config.Save(ServerPath);
             LoadServerConfig();
 
-            AppendLog(LogLevel.Success, "Applied starter settings:");
-            AppendLog(LogLevel.Success, "  TutorialDisabled = true  (skip the tutorial)");
+            AppendLog(LogLevel.Success, "Applied recommended settings:");
             AppendLog(LogLevel.Success, $"  DefaultItems = {StarterPresetItems}  (starter kit)");
             AppendLog(LogLevel.Success, $"  AdminAccountUsername = {_config.AdminUsername}");
+            AppendLog(LogLevel.Info,
+                "Skipping the tutorial is left as it is; the tick box under New characters is where that is set.");
 
             if (string.Equals(_config.AdminPassword, "compsci", StringComparison.Ordinal)) {
                 AppendLog(LogLevel.Warning,
@@ -1111,7 +1150,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             }
         }
         catch (Exception ex) {
-            AppendLog(LogLevel.Error, $"Could not apply the starter settings: {ex.Message}");
+            AppendLog(LogLevel.Error, $"Could not apply the recommended settings: {ex.Message}");
         }
     }
 
@@ -1637,7 +1676,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     // Turning the revision check on or off changes what the mismatch means, so the sentence is rebuilt.
     partial void OnEnforceRevisionChanged(bool value) => RefreshDerived();
-    partial void OnGameRevisionChanged(string value) => RefreshDerived();
+    partial void OnGameRevisionChanged(string value) {
+        RefreshDerived();
+
+        // A copy into the patch server is planned against the revision the server asks it for, so the card
+        // under Settings is worked out again rather than left describing the value the config held before -
+        // the sync writing a new one is the case that matters.
+        RefreshPreloadPlanIfTheRevisionMoved();
+    }
 
     /// <summary>The one line under the Play button. About the game, not about the server.</summary>
     public string HomeHint => IsRemoteSession
@@ -2134,10 +2180,33 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
             case ClientState.Closed:
                 AppendLog(LogLevel.Info, "Wizard101 was closed.");
+
+                // The game is over, so the session is too: what has been played is added up now rather than
+                // left to a poll that will never come, and nothing else is credited to that profile until
+                // Play starts another one.
+                EndPlayingSession();
                 break;
         }
 
         RefreshDerived();
+    }
+
+    /// <summary>
+    /// Ends the playing session, if one is on: the game went away, so the time it was up is added up and
+    /// the next Play starts a new sign-in.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent, and called from every way a session can end - the client exiting, the server stopping, the
+    /// window closing - because more than one of them usually happens and none of them should be able to
+    /// credit the same minute twice.
+    /// </remarks>
+    private void EndPlayingSession() {
+        if (!_ledger.SessionIsOn) {
+            return;
+        }
+
+        _ledger.EndSession(DateTimeOffset.Now);
+        RefreshProfiles();
     }
 
     /// <summary>
@@ -2150,6 +2219,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         FailureDetail = exitCode == 0
             ? "It stopped before you asked it to. The Log has the last thing it said."
             : $"It exited with code {exitCode}. The Log has the last thing it said.";
+
+        // The server nobody is playing on any more is not a session: the game cannot be in a world whose
+        // server has gone, so playtime stops here rather than at the next look that will never happen.
+        EndPlayingSession();
 
         Phase = LauncherPhase.Failed;
         RefreshDerived();
@@ -2503,14 +2576,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
             try {
                 _server.Start(new ServerStartOptions(ServerPath, executable, host, port, logPath));
-                AppendLog(LogLevel.Info, "Waiting for the server to finish warming up…");
+                NoteAboutServer(LogLevel.Info, "Waiting for the server to finish warming up…");
 
                 // Profiles are fed by this server and by nothing else, so the watch runs exactly as long as it
                 // does - and it reads from here on, not from whatever was already in the log.
                 StartProfileWatch(logPath);
             }
             catch (Exception ex) {
-                AppendLog(LogLevel.Error, $"Could not start the server: {ex.Message}");
+                NoteAboutServer(LogLevel.Error, $"Could not start the server: {ex.Message}");
                 FailureHeadline = "The server could not be started";
                 FailureDetail = ex.Message;
                 Phase = LauncherPhase.Failed;
@@ -2532,7 +2605,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         // stopped responding - and a read that fails keeps the remembered list rather than clearing it.
         await RefreshAccountsAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(true);
 
+        // Stopping the server ends the session: a game with no server behind it is over, whether or not
+        // the client has noticed yet.
         StopProfileWatch();
+        EndPlayingSession();
         await _server.StopAsync().ConfigureAwait(true);
 
         // The patch server is part of what the launcher started, so it goes down with the server rather
@@ -2614,6 +2690,16 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             // session follows the process so the launcher can say whether the game is up.
             _client.Launch(executable, endpoint.Host, endpoint.Port, null, login, steamRequired);
             Phase = LauncherPhase.StartingClient;
+
+            // A session begins here: this is the one moment the launcher knows that somebody is playing,
+            // and on which account. Starting the game on this machine's own server is a sign-in for the
+            // profile it signs in as - one per session, with playtime credited to it while the game runs.
+            // Nothing else begins one: not opening the launcher, not switching profiles, and not reading
+            // the server's database, which says an account is in the game whether or not it is.
+            if (allowAutoLogin && (SelectedAccount?.AccountId ?? _store.Settings.AutoLoginAccountId) is { } playingAs) {
+                Announce(_ledger.BeginSession(playingAs, DateTimeOffset.Now), null);
+                RefreshProfiles();
+            }
 
             AppendLog(LogLevel.Info,
                 $"Started {Path.GetFileName(executable)} {DescribeLaunchArguments(endpoint, login, steamRequired)}"
@@ -3015,7 +3101,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
                 }
             }
             else {
-                AppendLog(LogLevel.Info, "The server is already running, so the game is starting.");
+                NoteAboutServer(LogLevel.Info, "The server is already running, so the game is starting.");
             }
 
             // Wait for readiness without blocking the UI thread. Time spent waiting for the patch server's
@@ -3034,7 +3120,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
                 FailureDetail = "It never reported ready, so the game was not started. "
                                 + "The Log has the last thing it said.";
                 Phase = LauncherPhase.Failed;
-                AppendLog(LogLevel.Error, "The server never reported ready, so the game was not started.");
+                NoteAboutServer(LogLevel.Error, "The server never reported ready, so the game was not started.");
                 return;
             }
 
@@ -3172,6 +3258,9 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     public void Shutdown() {
+        // Before the watch goes: whatever the last look saw of a session that is still running is added up,
+        // so closing the launcher mid-game does not leave the last minute of play uncounted.
+        EndPlayingSession();
         StopProfileWatch();
 
         // Closing the launcher stops the whole stack it started: the patch server and the private server

@@ -377,9 +377,15 @@ public sealed class PatchServerRunner : IDisposable {
         StateChanged?.Invoke(this, state);
     }
 
-    /// <summary>Reported as the patch server's, the same way the server's runner reports its own.</summary>
+    /// <summary>
+    /// Reported as the patch server's, the same way the server's runner reports its own - and marked as the
+    /// launcher's when it is the launcher's sentence. Only <see cref="LogLevel.Server"/> is a line the
+    /// process printed; everything else here was written by this runner about it, which is the difference
+    /// somebody pasting the patch server's own log needs to be able to make.
+    /// </summary>
     private void Log(LogLevel level, string message)
-        => Output?.Invoke(this, new LogEntry(DateTimeOffset.Now, level, message, LogSource.Patcher));
+        => Output?.Invoke(this,
+            new LogEntry(DateTimeOffset.Now, level, message, LogSource.Patcher, Derived: level != LogLevel.Server));
 
     public void Dispose() {
         _disposed = true;

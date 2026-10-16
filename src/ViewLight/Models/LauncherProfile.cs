@@ -55,30 +55,37 @@ public sealed class LauncherProfile {
     /// <summary>Banner image file inside the profile's own folder, or null for the plain banner.</summary>
     public string? BannerFile { get; set; }
 
-    /// <summary>The first time this launcher saw the account signed in.</summary>
+    /// <summary>The first time Play started a session on this account.</summary>
     public DateTimeOffset? FirstPlayedAt { get; set; }
 
-    /// <summary>The most recent moment the account was seen signed in to the local server.</summary>
+    /// <summary>The most recent moment this account was playing - a session starting, or one being credited.</summary>
     public DateTimeOffset? LastPlayedAt { get; set; }
 
     /// <summary>
-    /// Time spent signed in to the server this launcher runs, in seconds, added up across sessions.
+    /// Time spent playing on the server this launcher runs, in seconds, added up across sessions.
     /// </summary>
     /// <remarks>
-    /// Measured from the server's own list of who is online, so it is time on the server rather than time
-    /// the game window was open - and it is only ever this launcher's own server, because that is the only
-    /// one it can read. Sessions that happened while ViewLight was closed, or against another machine's
-    /// server, are not counted and cannot be: nothing tells this launcher about them.
+    /// Measured from the launcher's own session - the server it started and the game it started, both of
+    /// them still running - rather than from the server's database saying the account is in the game, which
+    /// is still true of a machine that is only idling on the profile screen. It is only ever this launcher's
+    /// own server, because that is the only one it can observe. Sessions that happened while ViewLight was
+    /// closed, or against another machine's server, are not counted and cannot be: nothing tells this
+    /// launcher about them.
     /// </remarks>
     public long PlaytimeSeconds { get; set; }
 
-    /// <summary>How many times the account has been seen signing in to the local server.</summary>
+    /// <summary>How many sessions Play has started on this account.</summary>
     public int SessionCount { get; set; }
 
     /// <summary>
-    /// The last moment the account was seen online, used to add up playtime between polls. Kept so a
-    /// launcher that is closed mid-session does not lose the part of the session it did see.
+    /// The last look at a running session, which is what playtime is measured between.
     /// </summary>
+    /// <remarks>
+    /// Kept so a launcher closed mid-session does not lose the part of the session it did see, and cleared
+    /// when a session ends or when the game connection goes: playtime is only ever counted between two looks
+    /// that both found the game running. The name is a leftover from when it was the last look at the
+    /// server's online list, and it is kept as it is because that is the field profiles are stored under.
+    /// </remarks>
     public DateTimeOffset? LastSeenOnlineAt { get; set; }
 
     /// <summary>The zones this profile's wizard has been seen entering, by the server's own zone names.</summary>

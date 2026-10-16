@@ -190,69 +190,98 @@ public class ProfileLedgerTests : IDisposable {
     // ------------------------------------------------------------------ playtime
 
     [Fact]
-    public void PlaytimeIsCountedFromBeingInTheServersOnlineList() {
-        _ledger.ApplyDatabase(Online(Start), Start);
+    public void PlaytimeIsCountedFromTheSessionPlayStarted() {
+        _ledger.BeginSession(AccountId, Start);
 
+        // The sign-in is counted at the moment Play starts the game, before a second of it has been played.
         Assert.Equal(1, Profile.SessionCount);
         Assert.Equal(0, Profile.PlaytimeSeconds);
+        Assert.Equal(Start, Profile.FirstPlayedAt);
 
-        _ledger.ApplyDatabase(Online(Start.AddSeconds(10)), Start.AddSeconds(10));
+        _ledger.CreditSessionTime(Start.AddSeconds(10));
 
         Assert.Equal(10, Profile.PlaytimeSeconds);
         Assert.Equal(1, Profile.SessionCount);
-        Assert.Equal(Start, Profile.FirstPlayedAt);
+    }
+
+    [Fact]
+    public void NothingIsCountedWhileNobodyIsPlaying() {
+        // The launcher open on the profile screen, its own read-only view of the server's database being
+        // read, the account still listed as in the game: none of that is anybody playing, and none of it
+        // may count as a sign-in or as a second of playtime.
+        _ledger.ApplyDatabase(Online(Start), Start);
+        _ledger.ApplyDatabase(Online(Start.AddSeconds(10)), Start.AddSeconds(10));
+        _ledger.CreditSessionTime(Start.AddSeconds(10));
+
+        Assert.Equal(0, Profile.SessionCount);
+        Assert.Equal(0, Profile.PlaytimeSeconds);
+        Assert.Null(Profile.FirstPlayedAt);
+        Assert.Null(Profile.LastPlayedAt);
     }
 
     [Fact]
     public void TimeNobodyWasWatchingIsNotCountedAsPlaytime() {
-        // A launcher that was closed sees the account still signed in when it comes back. The two hours in
-        // between are not something it observed, so it credits one poll's worth and calls it a new session.
-        _ledger.ApplyDatabase(Online(Start), Start);
-        _ledger.ApplyDatabase(Online(Start.AddHours(2)), Start.AddHours(2));
+        // A session the launcher stopped watching - it was closed, or the machine slept - is credited one
+        // look's worth at most: the game was running at both ends, and nothing observed the two hours
+        // between them. One sign-in, not two: the session never ended, the launcher was simply not there.
+        _ledger.BeginSession(AccountId, Start);
+        _ledger.CreditSessionTime(Start.AddHours(2));
 
         Assert.Equal(ProfileLedger.MaxCreditedGap.TotalSeconds, Profile.PlaytimeSeconds);
-        Assert.Equal(2, Profile.SessionCount);
+        Assert.Equal(1, Profile.SessionCount);
     }
 
     [Fact]
-    public void PlaytimeIsMeasuredBetweenTheLooksThatSawTheAccountOnline() {
-        // A session is the time between two looks that both found the account signed in, because that is
-        // when it was provably there. The look that finds it gone ends the session without claiming the
-        // interval since the previous one: signing out could have happened a second later, and a badge is
-        // not worth inventing time for.
-        _ledger.ApplyDatabase(Online(Start), Start);
-        _ledger.ApplyDatabase(Online(Start.AddSeconds(10)), Start.AddSeconds(10));
-        _ledger.ApplyDatabase(NobodyOnline, Start.AddSeconds(20));
+    public void EndingTheSessionStopsTheClock() {
+        _ledger.BeginSession(AccountId, Start);
+        _ledger.CreditSessionTime(Start.AddSeconds(5));
+        _ledger.EndSession(Start.AddSeconds(8));
 
-        Assert.Equal(10, Profile.PlaytimeSeconds);
+        Assert.Equal(8, Profile.PlaytimeSeconds);
         Assert.Null(Profile.LastSeenOnlineAt);
-        Assert.Equal(Start.AddSeconds(20), Profile.LastPlayedAt);
+        Assert.Equal(Start.AddSeconds(8), Profile.LastPlayedAt);
+        Assert.False(_ledger.SessionIsOn);
 
-        // And nothing more is counted while they are away.
-        _ledger.ApplyDatabase(NobodyOnline, Start.AddSeconds(80));
+        // And nothing more is counted while it is over.
+        _ledger.CreditSessionTime(Start.AddSeconds(80));
 
-        Assert.Equal(10, Profile.PlaytimeSeconds);
+        Assert.Equal(8, Profile.PlaytimeSeconds);
     }
 
     [Fact]
-    public void TheGameConnectionEndingClosesTheSessionToTheSecond() {
-        _ledger.ApplyDatabase(Online(Start), Start);
+    public void TheGameConnectionEndingStopsCountingThroughTheGap() {
+        _ledger.BeginSession(AccountId, Start);
+        _ledger.CreditSessionTime(Start.AddSeconds(5));
 
+        // The server's own line, to the second - and it is not the end of the session, because the game's
+        // client is still running: somebody is at the character screen, or coming back in.
         _ledger.ApplyLogLines([ConnectionLost(Start.AddSeconds(8))]);
 
         Assert.Equal(8, Profile.PlaytimeSeconds);
         Assert.Null(Profile.LastSeenOnlineAt);
+        Assert.True(_ledger.SessionIsOn);
+
+        // Back in the game: the minutes spent out of it are not claimed, and counting resumes from here.
+        _ledger.CreditSessionTime(Start.AddMinutes(2));
+        Assert.Equal(8, Profile.PlaytimeSeconds);
+
+        _ledger.CreditSessionTime(Start.AddMinutes(2).AddSeconds(10));
+
+        Assert.Equal(18, Profile.PlaytimeSeconds);
+        Assert.Equal(1, Profile.SessionCount);
     }
 
     [Fact]
-    public void ADatabaseThatDidNotAnswerEndsNobodysSession() {
-        _ledger.ApplyDatabase(Online(Start), Start);
+    public void ADatabaseThatDidNotAnswerChangesNothing() {
+        _ledger.BeginSession(AccountId, Start);
+        _ledger.CreditSessionTime(Start.AddSeconds(10));
 
-        _ledger.ApplyDatabase(PlayerProfileData.Unreadable("the database did not answer"), Start.AddMinutes(5));
+        _ledger.ApplyDatabase(PlayerProfileData.Unreadable("the database did not answer"), Start.AddSeconds(20));
 
-        // A read that failed says nothing about who is signed in, so it must not look like a sign-out.
-        Assert.NotNull(Profile.LastSeenOnlineAt);
-        Assert.Equal(0, Profile.PlaytimeSeconds);
+        // A read that failed says nothing about the session either way: what was credited stays credited,
+        // and the session is still the one Play started.
+        Assert.Equal(10, Profile.PlaytimeSeconds);
+        Assert.True(_ledger.SessionIsOn);
     }
 
     // ------------------------------------------------------------------ who gets credited
@@ -437,14 +466,16 @@ public class ProfileLedgerTests : IDisposable {
     [Fact]
     public void PlaytimeEarnsBadgesAsItAddsUp() {
         var at = Start;
-        _ledger.ApplyDatabase(Online(at), at);
+        _ledger.BeginSession(AccountId, at);
 
         Assert.True(Profile.Has("first-steps"));
         Assert.False(Profile.Has("playtime-60"));
 
-        // Ten seconds at a time, which is what the launcher does: an hour of play is an hour of looks.
+        // Ten seconds at a time, which is what the launcher does: an hour of play is an hour of looks, each
+        // of them crediting the time and then judging the badges against what the profile now holds.
         for (var i = 0; i < 360; i++) {
             at = at.AddSeconds(10);
+            _ledger.CreditSessionTime(at);
             _ledger.ApplyDatabase(Online(at), at);
         }
 
@@ -502,6 +533,46 @@ public class ProfileListTests {
         var unlisted = MainWindowViewModel.UnlistedProfiles(remembered, []);
         Assert.Equal(2, unlisted.Count);
         Assert.Contains("2 profiles", MainWindowViewModel.DescribeUnlistedProfiles(unlisted));
+    }
+}
+
+/// <summary>
+/// What counts as playtime, as one rule: a session the launcher started, its own server still up, and its
+/// own game still running.
+/// </summary>
+/// <remarks>
+/// All three are things the launcher did rather than things it read, which is the whole point of the rule.
+/// What it replaced - presence in the server's own online list - said an account was playing whenever the
+/// database said it was in the game, which is a fact about the last session rather than about this one.
+/// </remarks>
+public class PlaytimeRuleTests {
+
+    [Fact]
+    public void TimeCountsOnlyWhileTheGameAndTheServerAreBothRunning() {
+        Assert.True(MainWindowViewModel.ShouldCreditPlaytime(
+            sessionIsOn: true, serverIsRunning: true, ClientState.Running));
+
+        // The game is starting up, which is still part of the session.
+        Assert.True(MainWindowViewModel.ShouldCreditPlaytime(
+            sessionIsOn: true, serverIsRunning: true, ClientState.Starting));
+    }
+
+    [Fact]
+    public void IdlingOnTheLauncherCountsForNothing() {
+        // No session: nothing Play started, so the launcher being open - or a profile being looked at, or
+        // the server's database being read - is not anybody playing.
+        Assert.False(MainWindowViewModel.ShouldCreditPlaytime(
+            sessionIsOn: false, serverIsRunning: true, ClientState.Running));
+
+        // A session, but the game is not running: the client was never started, or it has exited.
+        Assert.False(MainWindowViewModel.ShouldCreditPlaytime(
+            sessionIsOn: true, serverIsRunning: true, ClientState.NotRunning));
+        Assert.False(MainWindowViewModel.ShouldCreditPlaytime(
+            sessionIsOn: true, serverIsRunning: true, ClientState.Closed));
+
+        // A session and a game, but the server is gone: there is no world to be in.
+        Assert.False(MainWindowViewModel.ShouldCreditPlaytime(
+            sessionIsOn: true, serverIsRunning: false, ClientState.Running));
     }
 }
 
