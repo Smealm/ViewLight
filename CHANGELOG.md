@@ -8,6 +8,35 @@ The version number in the window, on the **About** tab, matches the tag and the 
 
 ---
 
+## v1.4.0 - 2026-10-16
+
+### Fixed
+
+- **Playtime and sign-ins are now your sessions, not the server's database.** Opening ViewLight, or looking at
+  a profile, counted as signing in and started the playtime clock - so starting the launcher, playing once and
+  closing it again came to three sign-ins, and idling on the launcher counted as playtime. **Play is now the
+  sign-in**: one per session, on the profile it signs you in as, with playtime counted only while ViewLight's
+  own server and its own game are both running. Signing back in after a disconnection inside one session is
+  not a second sign-in.
+- **Filling the patch server in from your game no longer refuses a game that is the right version.** The copy
+  was aimed at the version in the server's config, which with the two kept in step is not the version the
+  server is going to ask for - so it refused a client that *is* the version the patch server holds.
+- **A warning the server repeats over and over now folds into one line.** It only folded when the whole line
+  was identical, and the server puts its own timestamp inside every line - so the one warning that arrives a
+  thousand times, each with a later millisecond in front of it, never folded at all.
+- **The launcher's own lines about the patch server are now filed as the patch server's** - including the one
+  that says which file a fetch is on, which the patch server's box did not show. A new **Launcher's own
+  notes** box takes them out again, for pasting one program's log to the people who wrote it.
+
+### Changed
+
+- **Apply starter settings is now Apply recommended settings, and it leaves the tutorial alone.** It narrowed
+  the starter kit *and* turned the tutorial off; the game has its own skip-tutorial button on the
+  character-creation screen, so a server-wide default was never needed. Skipping the tutorial is the tick box
+  directly below the button, and the Log says what the preset left as it was.
+
+---
+
 ## v1.3.0 - 2026-10-16
 
 ### Added

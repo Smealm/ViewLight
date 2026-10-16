@@ -181,6 +181,62 @@ public sealed class PatchServerPreload {
         return Path.Combine(root, dataFolder, name);
     }
 
+    // ---------------------------------------------------------------- which revision is filled in
+
+    /// <summary>
+    /// The revision names the patch server has on its disk, e.g. <c>V_r806919.Wizard_1_610</c>.
+    /// </summary>
+    /// <remarks>
+    /// The folders it has already written rather than its own <c>GET /revisions</c>: the answer is wanted
+    /// when the patch server is not running, which is exactly when its card in Settings is being read, and
+    /// the data folder is what it would list. Read through its config, because a patch server that keeps
+    /// its revisions somewhere else keeps them somewhere else.
+    /// </remarks>
+    public static IReadOnlyList<string> RevisionsOnDisk(string? patchServerFolder) {
+        var root = (patchServerFolder ?? string.Empty).Trim();
+        if (root.Length == 0) {
+            return [];
+        }
+
+        var dataFolder = Path.Combine(root, PatchServerConfig.TryReadSaveDirectory(root) ?? DefaultDataFolder);
+
+        try {
+            return Directory.Exists(dataFolder)
+                ? [.. Directory.EnumerateDirectories(dataFolder).Select(Path.GetFileName).OfType<string>()]
+                : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // A data folder that cannot be walked names no revision, which reads as "nothing to fill in" -
+            // the safe direction, since the copy is refused rather than aimed somewhere guessed at.
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The revision a copy into the patch server would fill in: the one the server is actually going to ask
+    /// the patch server for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>With the two kept in step, that is the revision the patch server holds, not the config's.</b>
+    /// <c>GameRevision</c> is written from the patch server whenever one starts, so the config can be
+    /// holding an older value - the one the server build shipped with - while the arrangement that is on
+    /// moves it. Planning a copy against the config's value would then refuse a client that <i>is</i> the
+    /// revision the server will ask for, which is the whole of what the copy is for.
+    /// </para>
+    /// <para>
+    /// With the sync off the server is pinned to its own config, and the config's value is the answer. The
+    /// config's value is the fallback while the patch server holds nothing either way, so a patch server
+    /// that has not fetched a revision yet is told about the revision nothing has arrived for rather than
+    /// about there being no revision at all.
+    /// </para>
+    /// </remarks>
+    public static string? RevisionToFillIn(
+        bool synced, string? configRevision, IReadOnlyList<string>? patchServerRevisions)
+        => synced
+            ? PatchServerConfig.NewestGameRevision(patchServerRevisions) ?? configRevision
+            : configRevision;
+
     // ---------------------------------------------------------------- what a preload would do
 
     /// <summary>There is nothing to copy from.</summary>

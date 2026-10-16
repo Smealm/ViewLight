@@ -136,7 +136,12 @@ button says *Stop the server* rather than *Stop the servers*.
 **The Log reads like a terminal.** You can drag across it and copy as much as you like at once. The boxes
 above it choose whether to show the launcher's lines, the server's, or the patch server's. A line that
 repeats thirty times is folded into one line with a count next to it; press it to see every one of them, and
-press it again to fold it back.
+press it again to fold it back. That includes a warning the server repeats with a later timestamp in front of
+it - the timestamp is not a difference worth a line of its own.
+
+The fourth box, **Launcher's own notes**, is the odd one out: with it off, the lines ViewLight wrote *about*
+the server and the patch server go, and those programs' own lines stay. It is there for pasting one program's
+log to the people who wrote it without ViewLight's remarks on it coming too.
 
 **Home shows two versions**: the server build that is installed, and the build the game itself reports. When
 they do not match, ViewLight says so - that mismatch is the usual reason a login gets refused.
@@ -174,8 +179,11 @@ City* means the real Wizard City on your server, not a list hard-coded into the 
 Milestones can arrive in runs while you are levelling. **Settings → ViewLight Settings** has a switch to stop
 announcing them; the badge is still earned and still counted.
 
-**Where this all comes from.** Playtime, zones, duels and creature kills are read from your own server while
-ViewLight is running it. Join somebody else's server and nothing is earned here. Play with the launcher
+**Where this all comes from.** Pressing Play on a profile is one sign-in, and it is the account ViewLight
+signs you in as - so a session is counted when you actually start playing, not when the launcher opens or
+when you look at a profile. Playtime is counted while ViewLight's own server and its own game are both
+running, and only for that profile. Zones, duels and creature kills are read from your own server while
+ViewLight is running it; join somebody else's server and nothing is earned here. Play with the launcher
 closed and that time is not recorded. Creature counts need the server's logging turned up to `DEBUG`, which
 the Profile tab offers to do for you.
 
@@ -265,6 +273,11 @@ change, so it happens only when three things hold, and it says which one failed 
 1. the revision being filled is the one **your server asks for** - not the one your game happens to be;
 2. the copy it comes from **is that same revision**, read from the game itself;
 3. **not one file of it is a different length** from what the revision's own file list says.
+
+**Which version that first one is follows the switch further down the card**, and this matters: with the two
+kept in step it is the version the patch server holds, because ViewLight writes that into the server's own
+setting whenever it starts a patch server. A machine whose config still names the version the server build
+was published with is therefore not refusing the copy over a version the server is not going to ask for.
 
 That third one is what makes it a hand-off rather than a guess: a file of the right name at the wrong size
 is another build's file, and the patch server never looks at a file it already has, so a wrong one in there

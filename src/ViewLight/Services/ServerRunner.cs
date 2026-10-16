@@ -576,9 +576,12 @@ public sealed class ServerRunner : IDisposable {
     /// <summary>
     /// Everything this runner reports - the process's output and the launcher's own narration about it -
     /// is tagged as the server's, because that is where somebody quietening one thing down looks for it.
+    /// The two are told apart all the same: only <see cref="LogLevel.Server"/> is a line the process
+    /// printed, and everything else was written by this runner about it.
     /// </summary>
     private void Log(LogLevel level, string message)
-        => Output?.Invoke(this, new LogEntry(DateTimeOffset.Now, level, message, LogSource.Server));
+        => Output?.Invoke(this,
+            new LogEntry(DateTimeOffset.Now, level, message, LogSource.Server, Derived: level != LogLevel.Server));
 
     public void Dispose() {
         _disposed = true;

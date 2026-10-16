@@ -54,11 +54,17 @@ public sealed record LogRepeatBlock(IReadOnlyList<LogEntry> Lines, bool Expanded
         => lines.Count > 1 && lines.All(line => Same(line, lines[0]));
 
     /// <summary>
-    /// Whether two lines are the same line arriving again. The time is not part of it: a line that comes
-    /// back a second later is still the same line, and that is the whole of what folding is for.
+    /// Whether two lines are the same line arriving again.
     /// </summary>
+    /// <remarks>
+    /// Neither the launcher's own timestamp nor a clock a process printed inside the message is part of it:
+    /// a line that comes back a second later, or a warning the server repeats with a later millisecond in
+    /// front of it, is still the same line - which is the whole of what folding is for. See
+    /// <see cref="LogLines.Essence"/> for what is taken out and what is deliberately left in.
+    /// </remarks>
     public static bool Same(LogEntry line, LogEntry other)
-        => line.Level == other.Level && line.Source == other.Source && line.Message == other.Message;
+        => line.Level == other.Level && line.Source == other.Source
+           && LogLines.Essence(line.Message) == LogLines.Essence(other.Message);
 }
 
 /// <summary>
@@ -86,6 +92,16 @@ public sealed class LogDocument {
 
     private readonly List<LogEntry> _entries = [];
     private readonly HashSet<LogSource> _hidden = [];
+
+    /// <summary>
+    /// Whether the launcher's own lines about the programs are being hidden.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, because they are part of the running account the Log is for. On is the reading a
+    /// line is being pasted for: what the launcher noticed about the patch server is the launcher's, and a
+    /// report to that program's own developers should be their lines and nobody else's.
+    /// </remarks>
+    private bool _hiddenDerived;
 
     /// <summary>
     /// The runs the reader has opened, by the first line of the run they opened. Held here rather than on
@@ -125,6 +141,30 @@ public sealed class LogDocument {
 
     public bool IsVisible(LogSource source) => !_hidden.Contains(source);
 
+    /// <summary>Whether the launcher's own lines about the programs are being shown.</summary>
+    public bool DerivedLinesAreVisible => !_hiddenDerived;
+
+    /// <summary>
+    /// Shows or hides every line the launcher wrote about a program rather than taking from it.
+    /// </summary>
+    /// <remarks>
+    /// The same deal as the source boxes, for the same reason: hiding is not throwing away, and unticking - 
+    /// or ticking again, here - brings back what the Log is still holding. What is on one of the program's
+    /// own screens stays: this is about who a line came from, not about what it is filed under.
+    /// </remarks>
+    public void SetDerivedVisible(bool visible) {
+        if (_hiddenDerived == !visible) {
+            return;
+        }
+
+        _hiddenDerived = !visible;
+        _hiddenLines = _entries.Count(entry => !IsDrawn(entry));
+        Rebuild();
+    }
+
+    /// <summary>Whether a line has a place on screen: neither its source nor its author is filtered out.</summary>
+    private bool IsDrawn(LogEntry entry) => !_hidden.Contains(entry.Source) && !(_hiddenDerived && entry.Derived);
+
     /// <summary>Shows or hides everything one of the three writes.</summary>
     /// <remarks>
     /// Hidden lines are still held: unchecking a box is asking not to look at something, not asking for it
@@ -138,18 +178,18 @@ public sealed class LogDocument {
             return;
         }
 
-        _hiddenLines = _entries.Count(entry => _hidden.Contains(entry.Source));
+        _hiddenLines = _entries.Count(entry => !IsDrawn(entry));
         Rebuild();
     }
 
     public void Append(LogEntry entry) {
         _entries.Add(entry);
 
-        if (_hidden.Contains(entry.Source)) {
-            _hiddenLines++;
+        if (IsDrawn(entry)) {
+            AppendToLastBlock(entry);
         }
         else {
-            AppendToLastBlock(entry);
+            _hiddenLines++;
         }
 
         DropOldest();
@@ -246,7 +286,7 @@ public sealed class LogDocument {
         Blocks.Clear();
 
         foreach (var entry in _entries) {
-            if (!_hidden.Contains(entry.Source)) {
+            if (IsDrawn(entry)) {
                 AppendToLastBlock(entry);
             }
         }
@@ -263,7 +303,7 @@ public sealed class LogDocument {
             var dropped = _entries[0];
             _entries.RemoveAt(0);
 
-            if (_hidden.Contains(dropped.Source)) {
+            if (!IsDrawn(dropped)) {
                 _hiddenLines--;
                 continue;
             }

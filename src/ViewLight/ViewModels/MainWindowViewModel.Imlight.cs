@@ -119,11 +119,11 @@ public sealed partial class MainWindowViewModel {
         LoadServerConfig();
 
         if (!_imlightRequirement.IsMet) {
-            AppendLog(LogLevel.Warning, _imlightRequirement.Missing);
+            NoteAboutServer(LogLevel.Warning, _imlightRequirement.Missing);
             return;
         }
 
-        AppendLog(LogLevel.Success, $"Imlight is usable from {ServerPath}.");
+        NoteAboutServer(LogLevel.Success, $"Imlight is usable from {ServerPath}.");
         _ = EnsureIdleDatabaseAsync();
         _ = EnsureLauncherDatabaseAsync();
     }

@@ -24,13 +24,13 @@ namespace ViewLight.Services;
 public sealed class ProfileLedger {
 
     /// <summary>
-    /// The longest gap between two looks at the server's online list that may be credited as playtime.
+    /// The longest gap between two looks at a running session that may be credited as playtime.
     /// </summary>
     /// <remarks>
-    /// A launcher that was closed and opened again finds the account still signed in, and the gap between
-    /// its last look and its next one is not something it observed. Crediting it would be inventing time;
-    /// crediting one poll's worth is the honest maximum, and what the user was actually playing for in that
-    /// gap is simply not counted.
+    /// The launcher only ever counts time between two looks it made itself while the game was running under
+    /// it, so this is the ceiling on one look rather than the shape of a normal one - a poll is ten seconds
+    /// apart, and anything past half a minute means the launcher was not watching and the time in between
+    /// was not observed. Crediting it would be inventing time.
     /// </remarks>
     public static readonly TimeSpan MaxCreditedGap = TimeSpan.FromSeconds(30);
 
@@ -182,7 +182,31 @@ public sealed class ProfileLedger {
     private string _loadingZone = string.Empty;
 
     /// <summary>The accounts seen online at the last look, in the order the database listed them.</summary>
+    /// <remarks>
+    /// Read for one thing only: telling one player from two. A duel's own lines say who won but never which
+    /// account fought it, so it is credited when exactly one account is in the game - and that question is
+    /// answered by the server's online list, which is the only place that knows.
+    /// </remarks>
     private IReadOnlyList<ulong> _online = [];
+
+    /// <summary>
+    /// The account the launcher's current session is being played as, or <c>null</c> when there is none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A session is something the launcher starts and stops, and that is the whole point of it being here:
+    /// it begins when Play starts the game on an account and ends when that game goes away. Nothing about
+    /// switching profiles, opening the launcher or reading the server's database begins one, because none
+    /// of those is anybody playing.
+    /// </para>
+    /// <para>
+    /// It used to be worked out from the server's online list instead - being in that list was being signed
+    /// in - which was wrong in a way that showed: the server's database keeps saying an account is online
+    /// from the moment the launcher reads it, so an idle launcher counted playtime, and one session counted
+    /// a sign-in for every look that found the account there.
+    /// </para>
+    /// </remarks>
+    private ulong? _playingAccountId;
 
     public ProfileLedger(ProfileStore store) {
         _store = store;
@@ -278,10 +302,15 @@ public sealed class ProfileLedger {
     }
 
     /// <summary>
-    /// Folds in what the player database says: which wizards an account has, who is signed in, and every
-    /// command the server has logged. Also where playtime is counted from, because presence in that online
-    /// list <i>is</i> being signed in.
+    /// Folds in what the player database says: which wizards an account has, who is in the game, and every
+    /// command the server has logged.
     /// </summary>
+    /// <remarks>
+    /// Playtime is deliberately not counted from here any more - see <see cref="BeginSession"/>. The online
+    /// list this reads is who the server has in the game, which is worth knowing for telling one player from
+    /// two, and is not evidence that anybody is playing this machine's server right now: the database says
+    /// the same thing whether the server is running or the launcher is idling on the profile screen.
+    /// </remarks>
     public IReadOnlyList<ProfileAward> ApplyDatabase(PlayerProfileData data, DateTimeOffset at) {
         if (!data.IsUsable) {
             // Nothing may be concluded from a read that did not look right - including that someone who
@@ -295,11 +324,6 @@ public sealed class ProfileLedger {
         MergeCommands(data.Commands);
 
         _online = data.Online.Select(o => o.AccountId).Distinct().ToList();
-
-        foreach (var profile in _store.Profiles) {
-            var online = _online.Contains(profile.AccountId);
-            ApplyPresence(profile, online, at);
-        }
 
         MatchWizardNames(data.Online, at, earned);
 
@@ -317,25 +341,114 @@ public sealed class ProfileLedger {
     }
 
     /// <summary>
-    /// Ends a session at the moment the server says the game connection went, which is more exact than the
-    /// next look at the online list.
+    /// Play has started the game on <paramref name="accountId"/>: one sign-in for that profile, and the one
+    /// profile playtime is credited to while the session lasts.
     /// </summary>
-    private void EndSession(DateTimeOffset at) {
-        // Only when it can only be one profile: the line names the address the session came from, not the
-        // account, so two people playing at once is not something this can be told apart.
-        if (_online.Count != 1) {
+    /// <remarks>
+    /// One sign-in per session is the whole of it. The game's own log says a wizard arrived, and the server's
+    /// database says an account is in the game, but neither says a session began: a reconnect says the first
+    /// again and the second is still true of a server nobody is playing. Pressing Play on a profile is the
+    /// one unambiguous "I am playing as this account", which is why it is the one counted.
+    /// </remarks>
+    /// <returns>The achievements this made true, so the caller can say so.</returns>
+    public IReadOnlyList<ProfileAward> BeginSession(ulong accountId, DateTimeOffset at) {
+        var profile = _store.GetOrCreate(accountId, string.Empty);
+
+        _playingAccountId = accountId;
+
+        profile.SessionCount++;
+        profile.FirstPlayedAt ??= at;
+        profile.LastPlayedAt = at;
+        profile.LastSeenOnlineAt = at;
+
+        var earned = new List<ProfileAward>();
+        Award(profile, at, string.Empty, earned);
+
+        _store.Save();
+        return earned;
+    }
+
+    /// <summary>
+    /// Adds the time since the last look to the profile being played, and counts nothing at all when no
+    /// session is on.
+    /// </summary>
+    /// <remarks>
+    /// Called on the same poll that reads the server, so a session is measured in looks rather than by what
+    /// a clock says afterwards - and a session the launcher stopped watching is never credited past the last
+    /// look it made, because <see cref="MaxCreditedGap"/> caps a single one.
+    /// </remarks>
+    public void CreditSessionTime(DateTimeOffset at) {
+        if (PlayingProfile() is not { } profile) {
             return;
         }
 
-        var profile = _store.Profiles.FirstOrDefault(p => p.AccountId == _online[0]);
-        if (profile is null || profile.LastSeenOnlineAt is null) {
+        // No marker means time is not being credited from anywhere - the session was closed off, by the game
+        // connection ending or by a stop - so the count starts again from this look rather than claiming the
+        // time since. A player who reconnects inside one session therefore loses the seconds they were out.
+        if (profile.LastSeenOnlineAt is null) {
+            profile.LastSeenOnlineAt = at;
+            profile.LastPlayedAt = at;
             return;
         }
 
         Credit(profile, at);
-        profile.LastSeenOnlineAt = null;
+        profile.LastSeenOnlineAt = at;
         profile.LastPlayedAt = at;
     }
+
+    /// <summary>
+    /// The server's own log says the game connection went, so nothing is counted through the gap.
+    /// </summary>
+    /// <remarks>
+    /// More exact than waiting for the next look, and deliberately not the end of the session: the game's
+    /// client keeps running while somebody sits at the character screen or comes back in, and a session is
+    /// the launcher's own game process rather than one connection inside it. So what has been seen of the
+    /// session is added up to the second the server named, and counting starts again at the next look -
+    /// which means the seconds between the two are not credited, because nobody was in the game for them.
+    /// </remarks>
+    public void NoteGameConnectionEnded(DateTimeOffset at) {
+        if (PlayingProfile() is not { } profile || profile.LastSeenOnlineAt is null) {
+            return;
+        }
+
+        Credit(profile, at);
+        profile.LastPlayedAt = at;
+        profile.LastSeenOnlineAt = null;
+    }
+
+    /// <summary>
+    /// The session is over: credit what has been seen of it and stop counting.
+    /// </summary>
+    /// <remarks>
+    /// Called from every way a session can end - the game's client exiting, the server stopping, the window
+    /// closing - and idempotent, because more than one of those usually happens. Nothing more is credited to
+    /// that profile until Play starts another session. The game connection ending early is not one of these;
+    /// see <see cref="NoteGameConnectionEnded"/>, which stops the clock without ending the session.
+    /// </remarks>
+    public void EndSession(DateTimeOffset at) {
+        if (PlayingProfile() is not { } profile) {
+            _playingAccountId = null;
+            return;
+        }
+
+        if (profile.LastSeenOnlineAt is not null) {
+            Credit(profile, at);
+            profile.LastPlayedAt = at;
+        }
+
+        profile.LastSeenOnlineAt = null;
+        _playingAccountId = null;
+        _store.Save();
+    }
+
+    /// <summary>Whether a session is on, so the launcher can tell an ending from nothing happening.</summary>
+    public bool SessionIsOn => _playingAccountId is not null;
+
+    /// <summary>The profile the launcher's current session is being played as, or <c>null</c>.</summary>
+    private LauncherProfile? PlayingProfile()
+        => _playingAccountId is { } accountId
+            ? _store.Profiles.FirstOrDefault(p => p.AccountId == accountId)
+            : null;
 
     private bool Apply(ServerLogFact fact, List<ProfileAward> earned) {
         switch (fact) {
@@ -361,9 +474,9 @@ public sealed class ProfileLedger {
                 return true;
             }
 
-            // -------------------------------------------------------- a game session ended
+            // -------------------------------------------------------- the game connection went
             case ServerConnectionLost { Game: true } connectionLost:
-                EndSession(connectionLost.At);
+                NoteGameConnectionEnded(connectionLost.At);
                 return true;
 
             // -------------------------------------------------------- a zone began loading
@@ -534,41 +647,12 @@ public sealed class ProfileLedger {
     }
 
     /// <summary>
-    /// Counts the time a profile has been signed in, from whether the server's online list holds it now.
+    /// Adds the time since the last look at the running session, capped at one poll's worth.
     /// </summary>
-    private void ApplyPresence(LauncherProfile profile, bool online, DateTimeOffset at) {
-        if (!online) {
-            if (profile.LastSeenOnlineAt is not null) {
-                // Signed out between two looks. The time since the last look is not credited: the account
-                // was there then, and signing out could have been a second later - so playtime is measured
-                // between the looks that saw the account online at both ends, and each session is accurate
-                // to within one look rather than padded to it.
-                profile.LastPlayedAt = at;
-                profile.LastSeenOnlineAt = null;
-            }
-
-            return;
-        }
-
-        if (profile.LastSeenOnlineAt is not null) {
-            // A gap longer than the poll interval means this launcher was not watching for a while, so it
-            // counts as a new session rather than as a continuation nobody saw.
-            if (at - profile.LastSeenOnlineAt.Value > MaxCreditedGap) {
-                profile.SessionCount++;
-            }
-
-            Credit(profile, at);
-        }
-        else {
-            profile.SessionCount++;
-            profile.FirstPlayedAt ??= at;
-        }
-
-        profile.LastSeenOnlineAt = at;
-        profile.LastPlayedAt = at;
-    }
-
-    /// <summary>Adds the time since the last sighting, capped at one poll's worth.</summary>
+    /// <remarks>
+    /// The cap is what keeps a launcher that stopped watching from inventing the gap: the account was in the
+    /// game at both ends, and how much of the time in between it was there for is not something this saw.
+    /// </remarks>
     private static void Credit(LauncherProfile profile, DateTimeOffset at) {
         if (profile.LastSeenOnlineAt is not { } last) {
             return;

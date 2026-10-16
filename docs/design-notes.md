@@ -340,12 +340,18 @@ The other end is capped too: RavenDB batches at 16, so 16 is the maximum.
 
 ### Starter settings
 
-**Settings -> Apply starter settings** does the three things a fresh server wants:
+**Settings -> Apply recommended settings** does the two things a fresh server wants:
 
-- sets `TutorialDisabled = true`, so new characters skip the tutorial;
 - narrows `DefaultItems` to `87256,126983` (a Tier 1 wand and the tutorial deck) and rewrites the
   comment above it to explain what was removed;
 - writes the admin username and password currently in the form.
+
+**It deliberately leaves `TutorialDisabled` alone.** It used to set it, and the button was called *Apply
+starter settings*; both were changed (entry 25) because the tutorial does not need skipping from here. The
+game offers its own skip button on the character-creation screen, so a new character reaches the same place
+without the three omissions below - and a preset that quietly turns the tutorial off for every character
+ever made is a setting nobody chose. The tick box is directly below the button for anyone who does want it,
+and the preset says in the Log what it left as it was rather than changing it silently.
 
 The stock config hands out QA and resist gear through the tutorial
 (`1317124`-`1317133`, `1317234`, `284071`). Applying the preset removes those from a normal
@@ -1170,11 +1176,12 @@ never offered as one.
 | The player database, read every 10 seconds while the server is up | Accounts, wizards (level, school, gold, quest registry, spellbook, and the packed name key behind a name), who is signed in right now, and the server's own command log |
 | The server's log file, watched for new lines only | Wizard sign-ins, zone entries, duel results, the commands that went by, and which world each zone belongs to |
 
-Playtime is measured from the database's **online list** rather than from the game window being open, and a
-gap longer than one poll interval is never credited: a launcher that was closed and opened again finds the
-account still signed in, and the time in between is time it did not see. Sessions are counted from the same
-list. A log watched for the first time starts at the end of the current file, so an earlier run's lines in
-today's log are not folded in again.
+**Playtime and sign-ins are the launcher's own session, not the database's online list** (entry 25). Pressing
+Play on a profile is one sign-in, and time is credited to that profile while the launcher's own server and its
+own game are both running. A gap longer than one poll interval is never credited, so a launcher that was
+closed and opened again does not invent the time in between. The online list is still read, but for one thing
+only: telling one player from two when a duel is credited. A log watched for the first time starts at the end
+of the current file, so an earlier run's lines in today's log are not folded in again.
 
 **Refusing to guess is most of the work.** The database names accounts and characters, so what is read
 there is attributed exactly. The log names a wizard, a zone and a duel's winner, but never says which
@@ -1659,6 +1666,11 @@ settle it.
 out of using the launcher, each with the reason it exists, in the order they will be done. Anything picked
 up later starts there.
 
+The other end of the same file is [When it stops working](#when-it-stops-working-the-potential-issues-and-the-checklist):
+what the launcher is standing on in each of the three programs it drives, what would break if that moved, and
+which things to check first when something has - written so a fault starts from a checklist rather than a
+hunch.
+
 - A Linux build (above) - nothing started, the seams recorded so it stays cheap
 - Real `root.wad` item decoding (above)
 - Selecting a specific older release instead of always taking the newest
@@ -1773,7 +1785,12 @@ patch server, the launcher's own database, and the screen that stands down when 
 needs is missing; `v1.2.0` adds the cloud backup, the live profile and achievement updates, and the runtime
 the launcher carries rather than asks for; `v1.3.0` makes the patch server something the launcher manages
 rather than merely runs - the wait for its files before the server starts, the fetch it reports while it
-works, the revision the two are kept on together, and the cleanup of the revisions it has finished with.
+works, the revision the two are kept on together, and the cleanup of the revisions it has finished with;
+`v1.4.0` makes a session the launcher's own - Press Play is the sign-in, and playtime is counted only while
+both the server and the game it started are up - fixes the copy into the patch server against a revision the
+sync has moved, folds a warning the server repeats with its own timestamp in front of it, files the
+launcher's notes about a program alongside that program's lines, and leaves the tutorial to the game's own
+skip button.
 
 **Three accounts of every build, for three different readers.** `CHANGELOG.md` is the plain one - per
 release, what was added, changed, fixed and removed, in the language of somebody who uses the launcher
@@ -1789,7 +1806,7 @@ The build shipped in a release is produced by exactly these commands:
 dotnet publish src/ViewLight/ViewLight.csproj -c Release -r win-x64 --self-contained true -o publish
 curl -fsSL https://dot.net/v1/dotnet-install.ps1 -o .tmp/dotnet-install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .tmp/dotnet-install.ps1 -Runtime aspnetcore -Channel 10.0 -InstallDir publish/runtime
-7z a ViewLight-win-x64.zip ./publish/*
+(cd publish && 7z a ../.tmp/ViewLight-win-x64.zip *)   # run inside publish, so the zip root is the launcher folder
 ```
 
 The two in the middle are the runtime the database in the launcher's own folder runs in:
@@ -1895,6 +1912,10 @@ the setting should say so *before* it is turned on rather than leaving it to be 
 
 **What came out of it.** A description under the checkbox, and a warning that appears while the tutorial is
 disabled. Written up under [starter settings](#starter-settings).
+
+**Follow-up, from a report:** the recommended preset no longer turns the tutorial off. The game's own skip
+button makes a launcher-side default of it redundant, and the three consequences above are what a machine
+inherits from it - so `TutorialDisabled` is now a setting only the tick box changes.
 
 ### 4. The launcher's own data moves into a launcher database - *done*
 
@@ -3066,3 +3087,459 @@ all: that revision cannot be fetched again and the server cannot serve its clien
 | `ServerLogFacts.PatchServerRefusedAFile` | the server's own account of it, read out of its log |
 | `MainWindowViewModel.ReportPatchServerRefusal` | the notice on Home, once per address, with the way out |
 | `PatchServerRevisionCatalogue.RoleOf` | server's revision, the newest, or spare - the client's case removed |
+
+### 25. Five reported faults: the preset, the handout's revision, folded near-duplicates, who writes which log line, and what a sign-in is - *done*
+
+Five issues, reported from playing, that turned out to belong to five different parts of the launcher. Each
+one is small on its own and each one is a rule rather than a screen, so they are written up together here.
+
+**"Apply starter settings" was two decisions wearing one button** (#19). It narrowed the starter kit *and*
+turned the tutorial off, and the second of those is not a fresh server's business: the game offers its own
+**skip tutorial** button on the character-creation screen, so a new character can reach the starting zone
+without the three omissions that `TutorialDisabled` leaves behind - the school's first spell, the equipped
+starter gear, and the tutorial's items arriving twice. It is now **Apply recommended settings**, it writes the
+kit and the admin account and nothing else, and the Log says in as many words what it left as it was. The tick
+box is directly below the button, which is where a decision about the tutorial belongs.
+
+**The handout was aimed at the wrong revision** (#26). The copy in Settings fills in *the revision the server
+asks the patch server for*, and that was read from `GameRevision` in the config. With the two revisions kept
+in step - which is the default - that is exactly the wrong source: the launcher writes the *patch server's*
+revision into `GameRevision` when the patch server starts, so a machine whose config still held the revision
+the server build shipped with was refusing to copy a client that **is** the revision the server is going to
+ask for. `PatchServerPreload.RevisionToFillIn` states the rule: with the sync on the revision is the newest
+the patch server holds - read off its own disk, which answers while it is not running, which is when the card
+is read - and with the sync off it is the config's. The plan is also worked out again when the revision it was
+built against moves, because the card had been able to keep describing the value from before.
+
+**Folding missed the lines worth folding** (#21). The Log folded a run only when the whole message was
+identical, and a server timestamps its own lines - `2026-10-15 23:26:55.031 WRN ... : No handler found for
+requirement type: ReqMagicLevel` - so the one warning that arrives a thousand times, with a later millisecond
+in front of each, never folded at all. `LogLines.Essence` now takes a clock out of the message before the
+comparison: a date, a time of day, or both, and a time has to be hours under 24 and minutes and seconds under
+60, so a number that merely has colons in it is left alone. Nothing is rewritten - the lines are folded and
+counted, and opening the run prints every one of them exactly as it arrived.
+
+**The launcher's own lines were filed as the launcher's** (#27). `LogSource` already said *whose* subject a
+line is about, and the two runners already filed their own narration under the process it is about - but the
+launcher's commentary about the patch server (which file a fetch is on, and how far along it is) was filed as
+a launcher line, so the box for the patch server did not show the one line that makes a fetch watchable, and
+pasting the patch server's log brought the launcher's notes along with it. `LogEntry.Derived` marks a line the
+launcher wrote *about* a program: the runners set it for everything but the process's own output, the view
+model's patch-server lines carry it, and the fourth box on the Log page - **Launcher's own notes**, on by
+default - hides exactly those and nothing else. Two boxes taken together therefore hand over one process's log
+and nobody else's.
+
+**A sign-in was being counted from the server's database** (#16). Presence in the player database's online
+list was being read as *signed in*, and the launcher reads that list from its own idle copy of the database
+while no server is running - so opening the launcher, or switching to a profile, counted a sign-in and
+started the playtime clock. The report's own arithmetic is the proof: starting the launcher, playing once and
+closing it again came to three sign-ins. A session is now what the launcher itself does, which is also the
+only thing it can honestly observe: **Play starts the game on the profile it signs in as, that is one
+sign-in, and playtime is credited to that profile while the launcher's server and its game are both up.**
+`ProfileLedger.BeginSession` / `CreditSessionTime` / `EndSession` hold the session, `ShouldCreditPlaytime`
+states the three conditions, and the server's log ending the game connection stops the clock through the gap
+without ending the session - a player who reconnects inside one Play has not signed in twice.
+
+| Piece | What it does |
+| --- | --- |
+| `ApplyStarterPreset` | the recommended settings, and no opinion about the tutorial |
+| `PatchServerPreload.RevisionToFillIn` | the revision a copy is aimed at: the patch server's when the two are kept in step, the config's when they are not |
+| `PatchServerPreload.RevisionsOnDisk` | the revisions the patch server holds, read from its own data folder so the answer is there while it is not running |
+| `MainWindowViewModel.RefreshPreloadPlanIfTheRevisionMoved` | works the card out again when that revision changes hands |
+| `LogLines.Essence` | a message with its clock taken out, so a repeated warning folds |
+| `LogEntry.Derived` / `LogDocument.SetDerivedVisible` | the launcher's own notes about a program, and the box that hides them |
+| `MainWindowViewModel.NoteAboutPatchServer` | the launcher's patch server lines, filed under the patch server |
+| `ProfileLedger.BeginSession` / `CreditSessionTime` / `EndSession` / `NoteGameConnectionEnded` | one sign-in per Play, and the clock that starts and stops with it |
+| `MainWindowViewModel.ShouldCreditPlaytime` | the rule: a session, this server up, and this game running |
+
+---
+
+## When it stops working: the potential issues, and the checklist
+
+Everything above was measured against the software as it is **today**: a real `WizardGraphicalClient.exe`, a
+booted `Imlight.Director.exe`, a fetched Aurorium revision and a real `root.wad`. That is the baseline this
+section is written from, and it is worth more than it looks: today's behaviour is the reference, so a
+question like "did it always say that?" has an answer.
+
+The launcher is a third party to all three of those programs. Every one of them can be updated by somebody
+who has never heard of ViewLight, and none of them owes the launcher a stable interface. So what is worth
+having in advance is not a prediction but a map:
+
+- **what the launcher is standing on** - the exact file, key, sentence, route or port it depends on;
+- **how likely each of those is to move**, worst first;
+- **what to look at first** when something has stopped working, so the search starts from a checklist
+  instead of a hunch.
+
+One rule for reading it: **none of this is happening now.** If any of it were, the launcher would be broken
+today. Each entry names a change on the other side of an interface, what it would break here, and the check
+to run before believing any theory about it.
+
+### The interfaces, and exactly what the launcher is standing on
+
+#### 1. The client, through its launch arguments
+
+The whole of the client contract, as established by handing a real client argument combinations and reading
+what it sent (`ClientLauncher`, `AutoLogin`):
+
+| What is passed | Why it is that value |
+| --- | --- |
+| `-L {GameServerIP} {LoginServerPort}` | the address the client dials instead of Wizard101's own |
+| `-ST` | "Steam required", and only for an account that is a Steam one - a standalone account must not be given it |
+| `-U ..{accountId} {sessionKey}` | continuation of a sign-in, and the id only takes if it parses as `..%llu` |
+| working directory `bin\` | the client reads `PatchConfig.xml`, its message tables and writes `WizardClient.log` relative to it |
+
+Arguments go through `ProcessStartInfo.ArgumentList`, so nothing is quoted by hand.
+
+**What would have to change and what it would do.** Every one of these is KingsIsle's to change, and the
+dangerous direction is *silent*: a value the client does not recognise is ignored, and the client puts up
+its own login screen. On screen that is "the launcher did not sign me in" rather than "the client stopped
+understanding the argument", which is why the first check is the client's own
+`bin\WizardClient.log`.
+
+- A new required argument (a patch-client id, a locale, an account of a different shape) that the launcher
+  does not pass.
+- `-ST` changing meaning, or the Steam build starting to insist that Steam is installed and signed in.
+  That is KingsIsle's call and nothing the launcher can answer: it can only pass the flag it was told to.
+- The client moving out of `bin\`, or being renamed to something the two fallback globs
+  (`*GraphicalClient*.exe`, `wizard101*.exe`, inside `bin\` only) do not cover.
+- The client wanting a different working directory, or `PatchConfig.xml` moving out of `bin\`.
+- The client's own session handshake changing - what `-U` is compared against server-side is `PassKey3`,
+  the machine id and the stored `ClientKey2`, and that is Imlight's side of a two-sided arrangement.
+
+#### 2. The client's own files the launcher reads
+
+| File | What is taken from it |
+| --- | --- |
+| `bin\revision.dat` | one line, `r806919.Wizard_1_610` - the client's own statement of its build |
+| `bin\WizardClient.log` | the same revision, from `revision 'r806919.Wizard_1_610'`, when `revision.dat` is not there |
+| `bin\PatchConfig.xml` | nothing is read from it; its existence is what the working-directory rule rests on |
+| `Data\GameData\root.wad` | "is this a game folder at all" (`GameFolderLocator.LooksLikeGameFolder`) |
+| `bin\steam_api.dll`, `bin\steam_appid.txt` | which kind of copy this is - Steam, or the standalone installer |
+
+Edge cases: a revision written in another spelling - the comparison is case- and space-tolerant, but
+`\br(\d{4,})` is what it needs in order to have a *number* to order two builds by; a client log that has
+been cleared or truncated, which is when the `revision.dat` source is the only one left; the game folder
+gaining or losing a `bin\` level, which is what `NormaliseGameFolder` exists for; and a client that is there
+but half-patched, whose build is simply unknown - which is a state the preload refuses rather than guesses
+at.
+
+#### 3. The server's config: `Config/Imlight.ini`
+
+`ImlightConfig` is the typed view of it, and every key below is a dependency. The INI stays the single
+source of truth - the launcher keeps no shadow copy, and `IniFile` preserves keys it does not know about.
+
+| Section | Keys the launcher reads or writes |
+| --- | --- |
+| `Global Settings` | `GameRevision`, `EnforceRevision` |
+| `Login Server` | `LoginServerPort` |
+| `Game Server` | `GameServerIP`, `GameServerPort`, `GameServerCount`, `RealmNames` |
+| `Character` | `TutorialDisabled`, `DefaultItems`, `StartingLevel`, `MaxLevel`, `StartingZone`, `BaseGoldPouch` |
+| `Database` | `AdminAccountUsername`, `AdminAccountPassword`, `SpiralDBAutoFetch`, `EmbeddedDatabaseDataDirectory`, `EmbeddedDatabasePort`, `EmbeddedDatabaseTimeoutTime`, `EmbeddedDatabaseUseFull`, `EmbeddedDatabaseFullPath` |
+| `Patch Server` | `PatchServerInternalUrl`, `PatchServerPort` |
+| `Logging` | `LogLevel`, `LogPath` |
+
+Things the launcher *writes* back into it, each of which is a place a change upstream lands on the launcher's
+side: the embedded database port (only when the stock `8080` is not available), the patch server URL (only
+when the value is blank or the stock address with nothing listening), `GameRevision` (while the revision
+sync is on), and whatever the user types in Settings.
+
+**What would have to change and what it would do.** A renamed key or section, a default whose meaning moves,
+a new key a boot requires, the file moving or changing format: each of these makes the launcher read a
+fallback as though it were the real value. Two of them fail especially quietly:
+
+- `ResolveLogFilePath` resolves `LogPath` and then *assumes Serilog's daily rolling name*
+  (`log.txt` → `log20261013.txt`). A different interval, or a log that stops rolling, means the readiness
+  marker and every crash line are never seen - the server boots, and the launcher waits for a line in a file
+  nobody writes.
+- `ServerConfigRepair` deliberately never overwrites a value the user set. A config that has been
+  hand-edited to something broken, but not to the *stock* broken value, is left exactly as it is and fails
+  at boot with a message the launcher cannot improve on.
+
+#### 4. The server's database, over its embedded RavenDB port
+
+While Imlight runs it hosts the embedded RavenDB in server mode on `Database.EmbeddedDatabasePort`, so the
+launcher reads it over HTTP. Every read is verified before it is believed (`PlayerDatabaseLayout`), anchored
+on the admin account from the config and on its password hash being `base64(SHA512(…))` - 88 characters
+decoding to 64 bytes. Anything that does not look right turns a feature off and says why, rather than acting
+on a guess.
+
+| What is read | Where from |
+| --- | --- |
+| documents, a page at a time | `GET /databases/Playerdata/docs?start=&pageSize=512`, `Results` array |
+| accounts | `@metadata.@collection` = `Accounts`: `AccountId`, `Username`, `PasswordHash` |
+| session keys | `SessionKeys`: `AccountId`, `MachineId`, `ClientKey2`, `@metadata.@expires` |
+| wizards, presence and commands | the wizard and command documents, through `PlayerDatabaseProfiles` |
+
+It is not read-only, and the three writes are themselves a dependency: the session key used for `-U`
+(delete-then-write, so `GetSessionKey`, which takes the first match, cannot find a stale one), the same
+route to put the configured admin password on the admin account, and the deletion of stale keys. Writes only
+ever happen after the guard has passed.
+
+**Edge cases worth having written down.** A RavenDB upgrade that changes the route or the response
+envelope; a collection renamed; a new required field on an account or session-key document; the expiry
+metadata moving or disappearing; ids no longer being 64-bit GIDs (they are read as integers on purpose,
+because a GID does not survive a `double`); a second database name; the server not being in server mode at
+all; and the database being busy while the launcher reads it - `ImlightConfig.Read` already waits out a busy
+*config*, and a busy database is reported as unreadable rather than retried.
+
+There is a second instance of this dependency that is easy to forget: when no server is running, the
+launcher starts **the server's own `RavenDBServer\Raven.Server.dll`** against the same data directory
+(`EmbeddedRaven`), resolving that path exactly the way Raven resolves it - stock
+`../ImlightEmbeddedDatabase/`, relative to the Raven server's own folder. So a change to where Imlight keeps
+its embedded copy, or to the layout of the `RavenDBServer` folder it ships, breaks the launcher's idle read
+as well as the server. It is also why the release carries a .NET runtime beside the executable: the RavenDB
+the server ships is framework-dependent even though Imlight's own build is not.
+
+#### 5. The server's log
+
+The launcher matches **sentences**, not a schema (`ServerLogFacts`). This is stated in the code as a
+deliberate choice - the log format is a setting and the spellings in the wild already differ, so nothing
+depends on where the level sits - but it means the contract is prose, and prose is what a refactor rewrites.
+
+| What the launcher is watching for | What it is used for |
+| --- | --- |
+| `Imlight may now be connected to.` | the server is ready - the one signal taken at its word, with no settle window |
+| `Sending wizard {name} to game server {host}:{port}` | a wizard got into the game |
+| `{logger} lost connection to {host}` | a session paused or ended; `.Game` in the logger name is what makes it a game server rather than the login server |
+| `Duel {id}`, then `Created. Grace period over in …` | a duel began, so a repeated sigil id is a new fight |
+| `Duel ended. Players win.` / `Creatures win.` | half of a counted creature kill |
+| `Slot {n}`, then `Smart:` | a slot holds a creature - the only line that says so |
+| `Spell {id} hits targets [..]` | the other half of a counted creature kill |
+| `{name} added to zone {z}` | where a wizard went |
+| `Game world starting zone load: {path}` / `Game world created new zone: {path}` | which world a zone is in |
+| `Zone {name} loaded in {ms}` | the zone's own name, deliberately at INFO |
+| `{user} Uses command: {command}` | commands, for the achievements that count them |
+| `Error while downloading file {url} from patch server endpoint: …` | the revision mismatch, read out of the URL's `V_` segment |
+
+It also depends on the shape of the front of a line: a timestamp is required - `yyyy-MM-dd HH:mm:ss.fff`,
+with an optional ` zzz` - and is read from the *start* of the line. A line whose timestamp cannot be read
+yields nothing at all, deliberately, because a badge dated "now" would be a claim about when something
+happened.
+
+**This is the most likely thing in the whole list to break.** A reworded sentence has no version number and
+no compile error: achievements simply stop moving, playtime stops, the `404` report never appears, and
+nothing says why. The check is to take the sentence from `ServerLogFacts.Parse`, paste it into the server's
+log as a search, and see whether it is still there - a one-line change on their side, a one-line change on
+this one.
+
+#### 6. The server's own patch listener, and its boot fetch
+
+Imlight runs a patch listener of its own for the *client* to talk to: `PatchServerPort`, stock `12500`,
+which is not the same thing as the patch server Imlight *downloads from*. Nothing else may hold it, and the
+launcher's Settings card warns when its own patch server endpoint is set to the same port
+(`PatchServerPortClashes`).
+
+During boot the Director fetches `{PatchServerInternalUrl}/V_{GameRevision}/{path}` - the file that matters
+first being `Data/GameData/Root.wad`, about 281 MB - and falls back to its own cached copy when it cannot.
+The two failures the launcher has seen: a first boot that fetches and then stops by itself (unreproduced,
+and pressing Play again works), and the `404` that ends a warm-up forever when the revision the server asks
+for is not the revision the patch server holds.
+
+#### 7. The patch server's config: `config.toml`
+
+Aurorium writes its own defaults when it finds none, and every one of them is its author's rather than this
+machine's. The launcher writes the file itself, in the shape Aurorium documents:
+
+| Section | Keys |
+| --- | --- |
+| `[server]` | `endpoint` - the one value the launcher has an opinion about |
+| `[fetcher]` | `concurrent_downloads`, `save_directory`, `fetch_interval` |
+| `[patch]` | `host`, `port` - upstream, Wizard101's own |
+| `[database]` | `path` |
+| `[debug]` | `level`, `file_logging` |
+
+Only two values are ever read back, and both by a **line scan rather than a TOML parser** - `endpoint`'s
+port (`ParsePort`) and `save_directory` (`TryReadSaveDirectory`) - because the launcher needs one value and a
+config it cannot fully parse must still yield it. Three rules decide when the file is written: the endpoint
+differs, or the file byte-matches one of the launcher's own templates and is out of date, or it is not
+written at all. **A config somebody has grown by hand is never rewritten** - the file stops being ours the
+moment it is edited.
+
+**Edge cases.** Renaming or re-scoping a key: the launcher keeps writing a config Aurorium ignores, and the
+endpoint silently is not the one the launcher believes it set up. Changing what `save_directory` means:
+`RevisionsOnDisk`, `RevisionFolderFor`, `PatchServerRevisionCatalogue` and the whole preload aim at the
+wrong folder - and being wrong there means either copying tens of gigabytes into a directory nothing reads,
+or offering to delete revisions that are actually a running fetch. And a user's hand-edit that goes wrong is
+never repaired, by design, so the Log's account of what the launcher wrote is the thing to read.
+
+#### 8. The patch server's HTTP surface
+
+Three requests, and nothing else:
+
+| Request | Used for |
+| --- | --- |
+| `GET {endpoint}/revisions` | the JSON array of names (`V_r806919.Wizard_1_610`) that the revision sync reads |
+| `GET {endpoint}/V_{revision}/Data/GameData/Root.wad` | the status only - whether the boot can be started at all |
+| `{endpoint}/V_{revision}/{path}` | what Imlight itself fetches in boot |
+
+`PatchServerRevisions.ListAsync` returns an empty list for anything that is not a JSON array of strings -
+refused, unreachable, timed out, wrong content type, wrong shape. That is deliberate ("a patch server that
+is not up has nothing to say about a revision") but it has a consequence worth knowing: **a changed JSON
+shape reads as "no revision", so the sync quietly stops moving instead of reporting a fault.** The Log does
+say it - "did not list a revision, so GameRevision is left as the config has it" - and that line is the one to
+look for. A new auth header, a moved `/revisions` route, or a `V_` naming change would all land here
+the same way.
+
+#### 9. The patch server's disk
+
+| What is on disk | What the launcher does with it |
+| --- | --- |
+| `{root}/{save_directory}/V_{revision}/` | one folder per revision; the names are read to answer "what does the patch server hold" while it is not running |
+| `…/V_{revision}/LatestFileList.xml` | KingsIsle's own file list - `RECORD` / `SrcFileName` / `Size` - read to plan a preload |
+| `*.part` | Aurorium's own name for a download in flight: a revision with one may not be deleted |
+| `*.preloadpart` | the launcher's own staging name, deliberately different so a preload and a fetch cannot collide |
+
+Two properties of this arrangement are load-bearing and both belong to Aurorium: **it only ever downloads
+what is missing, and never checks what is already there** - which is why the preload refuses to copy
+anything at all when the client build is not exactly the server's revision, and why one file of the right
+name at the wrong length refuses the whole copy. A wrong file placed in a revision is permanent until the
+folder is deleted. And **a fetch writes into the folder continuously**, which is what the cleanup's
+"recently written to" window is standing in for.
+
+Edge cases: the file list being renamed, compressed, versioned, or written somewhere else; `Size` going
+missing or becoming a string (entries without a readable size are dropped, so a preload would see nothing to
+copy rather than the wrong thing); Aurorium's temp suffix changing (cleanup would stop noticing a fetch in
+flight); and the first moments of a brand new revision, where its folder looks exactly like an unused one.
+
+#### 10. The revision chain: patch server → server → client
+
+This is the most fragile *chain* in the product even though each link is simple, because every arrow is a
+place two independent programs have to agree:
+
+1. Wizard101's patch server serves a revision.
+2. Aurorium fetches whatever is newest there - it cannot be asked for another.
+3. With the sync on, the launcher writes the patch server's newest revision into `GameRevision`
+   (`ApplyMirroredRevision`), remembering the value it replaced so turning the sync off puts the server's own
+   value back.
+4. Imlight asks the patch server for `V_{GameRevision}` during boot, and `404`s for its own files until the
+   two agree.
+5. With `EnforceRevision` on, Imlight accepts clients on that same revision, so the client's own
+   `revision.dat` has to match - or the client is told to update.
+6. Play can hand the patch server the files from a client that is *exactly* that revision and has no file of
+   it at another length; anything else copies nothing.
+
+Break any arrow and the symptom is the same shape - a server that never finishes warming up - which is why
+the Log's `V_` line and the three revision values (the client's `revision.dat`, the config's `GameRevision`,
+and the patch server's folder names) are the first three things to compare. With the sync **off** the server
+is pinned to its own config, and then the only thing that can fill that revision in is the hand-off; a
+pinned revision with no client of the same build is a revision the patch server will fetch whole.
+
+#### 11. Processes, ports and the leftover guard
+
+| Port | Whose |
+| --- | --- |
+| `12000` | the login server (`LoginServerPort`), also what the LAN sweep probes |
+| `12333` (`GameServerPort`), `GameServerCount` of them | the game realms |
+| `12500` | Imlight's *own* patch listener (`PatchServerPort`) - the one the client talks to |
+| `12369` | the launcher's own patch server endpoint (`PatchServerPort` in `launcher.json`) |
+| `8080`, or a random port below 49152 | the embedded RavenDB |
+
+The guard stops a leftover server only when it was started from **this install's own executable path**, and
+a process whose path cannot be read is never killed. Edge cases: a port taken by an unrelated program; two
+launchers pointed at the same install; a server started *by hand* from this folder, which the guard stops on
+purpose because it is the same executable, and which is the one case a user is likely to call a bug; the job
+object being refused (the launcher then says it could not tie the process); and the clash check being
+between two settings that mean different things to two different programs.
+
+#### 12. The release feeds
+
+The launcher fetches Imlight's Windows build and `aurorium.exe` from GitHub releases, caches the download as
+`{tag}-{asset}`, and installs the patch server by copying one file over. Edge cases: an asset renamed, a
+release whose contents become an archive instead of a single executable, a rate-limited or changed feed, and
+an install attempted while the program is running (Windows will not replace a running executable - that one
+is explained rather than reported as a bare IO error).
+
+### The watch list, most likely first
+
+Ranked by how likely the change is and how quietly it would fail, not by how bad it would be. The quiet ones
+come first for that reason: they cost the most time.
+
+1. **A line in the server's log is reworded or moved to another level.** Achievements stop counting, playtime
+   stops, the `404` report never appears. Nothing errors. Check by searching the server's log for the exact
+   sentence in `ServerLogFacts` and comparing where it sits in the line.
+2. **Something about the client's arguments changes.** The signature is a login screen where the launcher
+   said it was signing in. Check the client's own `bin\WizardClient.log`, then pass the arguments by hand.
+3. **Imlight's config keys move.** The launcher reads a fallback as though it were the value - a wrong port,
+   a wrong revision, a config that looks fine. Check `Config/Imlight.ini` against the table in §3.
+4. **Imlight's database layout moves.** The layout guard is what notices, and it says what it did not
+   recognise; that message is the whole diagnosis. Check the read-only half first, because it fails loudly.
+5. **The revision values stop agreeing.** A server that never leaves "warming up". Compare the client's
+   `revision.dat`, the config's `GameRevision` and the patch server's folder names.
+6. **Aurorium's config or executable changes.** The launcher writes a config it believes in and starts an
+   executable that ignores it: a patch server on the wrong port is a patch server nothing can reach.
+7. **The patch server's HTTP answers change shape.** The sync stops moving and says "did not list a
+   revision"; every file request becomes a `404` the server reports in its own log.
+8. **`LatestFileList.xml` changes shape.** Nothing is copied into the patch server, with the plan refused
+   rather than attempted - and a revision with no readable file list looks like one that has not been
+   fetched yet.
+9. **The server's readiness line or startup order changes.** The launcher waits for a marker that never
+   arrives and falls back to the login-port probe, which is only a guess and carries a 10-second settle
+   window. Worth knowing: there is **no timeout** on a server start, so if the port has moved too
+   (`LoginServerPort`), nothing ever says ready and Play waits with the phase still on "starting" - an
+   indefinite wait is the symptom to look for, not an error message.
+10. **RavenDB itself moves a major version**, on either side: the server's embedded copy, the copy the
+    launcher runs from `RavenDBServer`, or the launcher's own store, which is a different database with the
+    same problem.
+11. **Aurorium's release changes shape**, so installing or updating the patch server fails where it used to
+    work.
+12. **The server starts populating its own database with more than its owner's accounts.** The next section.
+
+### The scenario worth naming: a server that fills its own database
+
+Imlight's database is the server's, and the launcher reads it as *the* list of people. Two habits the server
+could pick up are worth writing down in advance, because both land on the launcher's own data model rather
+than on anything the launcher controls:
+
+**Bulk accounts.** If the server ever creates accounts of its own - a hundred seeded characters to make a
+world feel populated, a test harness, an import - the launcher will do exactly what it is told: `NoteAccounts`
+gives every account it can see a profile, so a hundred accounts become a hundred profiles, and the picker
+offers all of them because `OfferedProfiles` offers a profile whenever the server has the account. Nothing is
+lost and nothing is corrupted. What breaks is *findability*: the account that matters is somewhere in a list
+of a hundred, and the only things distinguishing them are `FirstPlayedAt`/`LastPlayedAt` (a profile that has
+actually been played has a date, a seeded one does not) and whatever is remembered as the auto-login account.
+This is a launcher-side design consequence and worth knowing before it happens: the fix, when it is wanted,
+is a filter on the picker - `OfferedProfiles` / `UnlistedProfiles` / `RefreshProfiles` is where it would go -
+not a change to how profiles are stored. The reverse case is also handled and worth knowing about: accounts
+the server no longer holds stop being offered, and their history is kept rather than deleted.
+
+**Simulated presence.** The database's online list is read as *who is in the game*
+(`_online = data.Online`), and it is what several things hang on - matching a wizard name to a profile, and,
+most sharply, crediting a duel. A duel is credited **only when exactly one account was online when it
+ended**; two at once and the kill is written down as an uncredited duel rather than given to somebody. So a
+server that simulates a second player being online while the launcher's own player is playing would take
+creature kills away without any error anywhere: the count stops moving, the badges stop arriving, and the
+only number that moves is `UncreditedDuels`. That is the check - if duel credit has stopped and the server
+has started reporting other people online, that is why.
+
+### The checklist: what to look at first
+
+Ordered by how quickly each step can rule something out. The pattern is the same throughout: **the launcher's
+Log first, because it records what it asked and what answered** - then the program's own log, then the file,
+then the state.
+
+| What it looks like | Look here first | Which side most likely moved |
+| --- | --- | --- |
+| A login screen appears after Play said it was signing in | the Log's launch-argument line, then the client's `WizardClient.log` | the client |
+| The server never leaves "warming up" | the server's log for the readiness marker, and for `Error while downloading file …` | the server, or the revision chain |
+| "your server asks for X and the patch server holds Y" | `GameRevision`, `/revisions`, and the revision folder names | the revision chain |
+| Achievements have stopped arriving, with nothing wrong on screen | the server's log, against the sentences in `ServerLogFacts` | the server's log |
+| Playtime is not counting | the three conditions of `ShouldCreditPlaytime`, then whether a session actually began | the launcher's own session rule, or presence |
+| Creature kills have stopped counting, but duels are being won | the online list, and `UncreditedDuels` | the database |
+| "Invalid username or password" when the launcher handed over a key | whether the session-key write was refused; then the admin-password drift note | the database, or its layout guard |
+| The picker is full of accounts nobody made | the account list the database returns | the server's own data |
+| Cards that say the server is not installed, on an install that is there | `ImlightConfig.Read`'s two answers - no file, versus a file that is busy | the file system, not the install |
+| The patch server is "up" but serving nothing | its own `logs\` (file logging is on), and `config.toml`'s endpoint | the patch server, or its config |
+| Two revisions on disk and one of them is huge | `PatchServerRevisionCatalogue.List` and the roles it assigns | the sync, or the cleanup window |
+| No boss badge ever moves | already known: `creature.manifest` is never written - see [rough edges](#rough-edges-in-imlight-itself) | Imlight itself |
+| The first boot fetches its assets and then stops | already known, unreproduced; pressing Play again boots it - see [rough edges](#rough-edges-in-imlight-itself) | Imlight itself |
+
+### What is deliberately not in this list
+
+- **The launcher's own third parties.** Its profile store is RavenDB as well, and its cloud backup talks to
+  Google Drive. Both have the same class of problem against their own upstreams and deserve their own list;
+  this one is about the three programs the launcher drives.
+- **Things already known to be broken.** Those live in [rough edges in
+  Imlight itself](#rough-edges-in-imlight-itself), with the honest statement of what is wrong. This section
+  is for what works today.
+- **Predictions about which will happen first.** The ranking above is about likelihood and how quietly a
+  change would fail. Nothing here has been observed happening; the baseline above is the observation.

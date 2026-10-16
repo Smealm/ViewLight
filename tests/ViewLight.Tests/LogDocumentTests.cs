@@ -16,8 +16,9 @@ public class LogDocumentTests {
         string message,
         LogSource source = LogSource.Launcher,
         LogLevel level = LogLevel.Info,
-        int second = 0)
-        => new(Noon.AddSeconds(second), level, message, source);
+        int second = 0,
+        bool derived = false)
+        => new(Noon.AddSeconds(second), level, message, source, derived);
 
     private static LogEntry ServerLine(string message, int second = 0)
         => Line(message, LogSource.Server, LogLevel.Server, second);
@@ -408,6 +409,111 @@ public class LogDocumentTests {
         Assert.Equal("0 lines", log.Summary);
     }
 
+    [Fact]
+    public void FoldsAWarningTheServerRepeatedWithABetterClockInFrontOfIt() {
+        var log = new LogDocument();
+
+        // The shape a real server writes: its own timestamp inside the message, a few milliseconds apart.
+        // The words are the same sentence every time, and that is what folding is for.
+        log.Append(ServerLine("2026-10-15 23:26:55.031 WRN No handler found for requirement type: ReqMagicLevel"));
+        log.Append(ServerLine("2026-10-15 23:26:55.033 WRN No handler found for requirement type: ReqMagicLevel", 1));
+        log.Append(ServerLine("2026-10-15 23:26:55.036 WRN No handler found for requirement type: ReqMagicLevel", 2));
+
+        var fold = Assert.IsType<LogRepeatBlock>(Assert.Single(log.Blocks));
+
+        Assert.Equal(3, fold.Count);
+        Assert.True(fold.IsFolded);
+
+        // Opening it shows all three exactly as the server wrote them: nothing was rewritten to fold them.
+        log.Toggle(fold);
+
+        Assert.False(Assert.IsType<LogRepeatBlock>(Assert.Single(log.Blocks)).IsFolded);
+
+        // The header line, then the three the server wrote, each with its own millisecond - which is the
+        // point: nothing was rewritten to fold them, they were only counted.
+        Assert.Contains("23:26:55.033", Screen(log)[2]);
+    }
+
+    [Fact]
+    public void LinesThatSaySomethingDifferentAreStillTwoLines() {
+        var log = new LogDocument();
+
+        // A clock is not the only way two lines differ, and the ones that mean different things stay apart:
+        // the requirement each names is what makes them different events rather than one event repeated.
+        log.Append(ServerLine("2026-10-15 23:26:55.031 WRN No handler found for requirement type: ReqMagicLevel"));
+        log.Append(ServerLine("2026-10-15 23:26:56.031 WRN No handler found for requirement type: ReqHealth"));
+        log.Append(ServerLine("2026-10-15 23:26:57.031 WRN No handler found for requirement type: ReqMana"));
+
+        Assert.Equal(3, log.LineCount);
+        Assert.Equal(3, log.DrawnLineCount);
+        Assert.Equal(0, log.FoldedRunCount);
+
+        // One of them arriving again, and that pair is a run - which is what the run of a real server's
+        // warning is made of, rather than the three different sentences above.
+        log.Append(ServerLine("2026-10-15 23:26:58.031 WRN No handler found for requirement type: ReqMana", 4));
+
+        Assert.Equal(4, log.LineCount);
+        Assert.Equal(1, log.FoldedRunCount);
+        Assert.Equal(3, log.DrawnLineCount);
+    }
+
+    [Fact]
+    public void TheClockIsTakenOutOfADateAndATimeAndNothingElse() {
+        // Dates and times of day, and the fractional parts they carry.
+        Assert.Equal("<time> WRN doing something",
+            LogLines.Essence("2026-10-15 23:26:55.031 WRN doing something"));
+        Assert.Equal("<time> [DBG] entered", LogLines.Essence("23:26:55 [DBG] entered"));
+        Assert.Equal("at <time>", LogLines.Essence("at 2026-10-15T23:26:55"));
+
+        // Numbers that merely look like a clock are left where they are: a time of day is hours under 24 and
+        // minutes and seconds under 60, so a plain count of colons is not something to fold on.
+        Assert.Equal("[INF] zone 99:88:77 loaded", LogLines.Essence("[INF] zone 99:88:77 loaded"));
+        Assert.Equal("[INF] 12:99:00 done", LogLines.Essence("[INF] 12:99:00 done"));
+
+        // A date is a date by its shape, and what a machine calls its own timestamps is not this rule's to
+        // judge: a year-month-day is taken out whatever the three numbers are.
+        Assert.Equal("[INF] <time> shipped", LogLines.Essence("[INF] 2026-13-45 shipped"));
+        Assert.Equal(string.Empty, LogLines.Essence(string.Empty));
+    }
+
+    // ------------------------------------------------------------------ the launcher's own notes
+
+    [Fact]
+    public void TheLaunchersNotesOnAProgramAreFiledUnderItAndCanBeHiddenOnTheirOwn() {
+        var log = new LogDocument();
+
+        // The patch server's own line, and the launcher's note about it: one box for the patch server,
+        // because that is what somebody reading about the patch server wants together.
+        log.Append(Line("the fetch moved on to Equipment-WorldData.wad", LogSource.Patcher, LogLevel.Info, 0, derived: true));
+        log.Append(ServerLine("a line the server printed", 1));
+
+        Assert.Equal(2, log.DrawnLineCount);
+        Assert.Equal(LogSource.Patcher, log.Blocks[0].Source);
+
+        // Hidden, the launcher's note goes and the program's own lines stay.
+        log.SetDerivedVisible(false);
+
+        Assert.False(log.DerivedLinesAreVisible);
+        Assert.Equal(1, log.HiddenLineCount);
+        Assert.DoesNotContain(Screen(log), line => line.Contains("Equipment-WorldData"));
+        Assert.Contains(Screen(log), line => line.Contains("a line the server printed"));
+        Assert.Equal(1, log.DrawnLineCount);
+        Assert.Contains("1 hidden by the filters", log.Summary);
+
+        // And having both filters on is the two of them together.
+        log.SetVisible(LogSource.Server, false);
+
+        Assert.Empty(log.Blocks);
+        Assert.Equal(2, log.HiddenLineCount);
+
+        // Ticking it again brings back what the Log is still holding.
+        log.SetDerivedVisible(true);
+        log.SetVisible(LogSource.Server, true);
+
+        Assert.Equal(2, log.DrawnLineCount);
+        Assert.Equal(0, log.HiddenLineCount);
+    }
+
     // ------------------------------------------------------------------ the boxes on the view
 
     [Fact]
@@ -444,6 +550,28 @@ public class LogDocumentTests {
         launcher.ToggleLogRepeat(fold);
 
         Assert.True(Assert.IsType<LogRepeatBlock>(launcher.Log.Blocks[^1]).Expanded);
+
+        // The fourth box is the launcher's own notes: they are the patch server's lines as far as the boxes
+        // above are concerned, and this is what takes them out of a log being pasted to somebody else.
+        launcher.AppendDerivedLog(LogLevel.Info, "Fetching Root.wad", LogSource.Patcher);
+
+        // Four lines held, four drawn: the run above was opened to be read, so its two lines count.
+        Assert.Equal(4, launcher.Log.LineCount);
+        Assert.Equal(4, launcher.Log.DrawnLineCount);
+
+        launcher.ShowLauncherNotes = false;
+
+        Assert.Equal(3, launcher.Log.DrawnLineCount);
+        Assert.Equal(1, launcher.Log.HiddenLineCount);
+        Assert.DoesNotContain(launcher.Log.Blocks, block => block.Body.Contains("Fetching Root.wad"));
+
+        // The patch server's box is the other way of taking that line out, and it takes the patch server's
+        // own lines with it - so between the two boxes the whole of one process's log can be handed over.
+        // The line was already hidden by the fourth box, and hiding one line twice is still one line gone.
+        launcher.ShowPatchServerLog = false;
+
+        Assert.Equal(3, launcher.Log.DrawnLineCount);
+        Assert.Equal(1, launcher.Log.HiddenLineCount);
     }
 
     /// <summary>Distinct lines, all of them the launcher's, to fill a Log with.</summary>
