@@ -95,10 +95,14 @@ public sealed partial class MainWindowViewModel {
     partial void OnIsCloudSyncRunningChanged(bool value) {
         OnPropertyChanged(nameof(IsEditingAllowed));
         OnPropertyChanged(nameof(HasCloudSyncNotice));
+        RefreshNotifications();
     }
 
-    /// <summary>Whether the launcher may be edited at all: not while a sync has the databases closed.</summary>
-    public bool IsEditingAllowed => !IsCloudSyncRunning;
+    /// <summary>
+    /// Whether the launcher may be edited at all: not while a sync has the databases closed, and not while a
+    /// full reset is deleting them.
+    /// </summary>
+    public bool IsEditingAllowed => !IsCloudSyncRunning && !IsResetting;
 
     /// <summary>The line the window shows while a sync is running, in the corner the user is looking at.</summary>
     public string CloudSyncNotice => $"Syncing your backup with {CloudBackupProviderName}…";
@@ -620,10 +624,7 @@ public sealed partial class MainWindowViewModel {
             _cloudRefreshToken = refresh;
             IsCloudBackupSignedIn = true;
 
-            var credentials = new GoogleCredentials(
-                CloudBackupUsesBuiltInClient ? GoogleOAuth.BuiltInClientId : CloudBackupClientId,
-                CloudBackupUsesBuiltInClient ? null : CloudBackupClientSecret,
-                refresh);
+            var credentials = CloudCredentials(refresh);
 
             // A refusal that is about the sign-in itself rather than about the network, kept out of the store's
             // own problem field so it can be told apart afterwards - see the end of this method.
@@ -687,6 +688,18 @@ public sealed partial class MainWindowViewModel {
             AppendLog(LogLevel.Warning, CloudBackupStatus);
         }
     }
+
+    /// <summary>
+    /// The Google client a backup is made with, from the choice the user made about whose it is.
+    /// </summary>
+    /// <remarks>
+    /// Stated once because two things need it now - the sync, and the full reset deleting the copy it made - and
+    /// a second copy of the rule would be a second answer to "whose app is this being signed in with".
+    /// </remarks>
+    private GoogleCredentials CloudCredentials(string refresh)
+        => new(CloudBackupUsesBuiltInClient ? GoogleOAuth.BuiltInClientId : CloudBackupClientId,
+               CloudBackupUsesBuiltInClient ? null : CloudBackupClientSecret,
+               refresh);
 
     /// <summary>The plan, and then the one thing it names - or the one thing a person named.</summary>
     private async Task SyncWithCloudAsync(CloudBackup cloud, BackupSyncAction? force, bool manual) {

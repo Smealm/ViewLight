@@ -37,7 +37,7 @@
             <TextBlock Classes="muted" Text="{Binding HighestScoreText}" />
             <!-- Why the score is what it is: a doubled total with nothing to explain it is a total the
                  badges underneath cannot account for. -->
-            <TextBlock Classes="muted" FontSize="11" Text="{Binding ProfileMultiplierText}" />
+            <TextBlock Classes="muted note" FontSize="11" Text="{Binding ProfileMultiplierText}" />
           </StackPanel>
         </Grid>
       </Border>

@@ -128,6 +128,18 @@ public sealed partial class MainWindowViewModel {
     [ObservableProperty] private Bitmap? _profileBanner;
 
     /// <summary>
+    /// Whether the profile is being dressed: its picture and banner are clickable, and nothing else on the
+    /// screen has moved.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, because a picture that opens a menu when it is clicked is a picture that is hard to
+    /// simply look at. Ticking it turns the two pictures into the only two buttons for changing them, which
+    /// is why there is no row of picture and banner buttons above the card: the thing being changed is the
+    /// thing that is clicked.
+    /// </remarks>
+    [ObservableProperty] private bool _isProfileEditing;
+
+    /// <summary>
     /// The last thing the launcher learned about a profile, or why it is not learning anything just now.
     /// </summary>
     [ObservableProperty] private string _profileNotice = string.Empty;
@@ -291,6 +303,165 @@ public sealed partial class MainWindowViewModel {
     public string ProfileWizardsSummary => HasProfileWizards
         ? string.Empty
         : "No wizards have been read yet — they come from the player database while the server runs.";
+
+    /// <summary>
+    /// What the account has earned lately, newest first: achievements and the milestones of the ladders.
+    /// </summary>
+    /// <remarks>
+    /// A window onto the badges rather than a second record of them - see <see cref="ProfileTimeline"/> - so
+    /// the profile reads as a person with a past: the account at the top, its wizards on a shelf under it,
+    /// and what has happened underneath. Refilled only when something has moved, for the same reason the
+    /// badges and the wizards are.
+    /// </remarks>
+    public ObservableCollection<ProfileTimelineEntry> ProfileHistory { get; } = [];
+
+    public bool HasProfileHistory => ProfileHistory.Count > 0;
+
+    /// <summary>
+    /// How much has been earned, and where the rest of it is read, in the line above the history.
+    /// </summary>
+    public string ProfileHistoryCaption
+        => ProfileTimeline.Caption(Badges.Count(badge => badge.IsEarned), ProfileHistory.Count);
+
+    // ---------------------------------------------------------------- signing in
+
+    /// <summary>
+    /// Whether the launcher has been signed out of a profile and is waiting for one to be chosen.
+    /// </summary>
+    /// <remarks>
+    /// Not the same thing as "there is no profile". A launcher that has never had an account, or whose server
+    /// holds none, says so on the profile page rather than covering itself with a sign-in screen; this is only
+    /// ever set by the Log out button, and only ever cleared by choosing a profile.
+    /// </remarks>
+    [ObservableProperty] private bool _isSignedOut;
+
+    /// <summary>
+    /// The profiles the sign-in screen offers, one tile each.
+    /// </summary>
+    /// <remarks>
+    /// Tiles rather than the profiles themselves, for the reason a badge is a value: a score moves as badges
+    /// are earned and a wizard moves as the database is read, and a tile that has changed <i>is</i> a different
+    /// tile. See <see cref="AccountCard"/>.
+    /// </remarks>
+    public ObservableCollection<AccountCard> AccountCards { get; } = [];
+
+    public bool HasAccountCards => AccountCards.Count > 0;
+
+    /// <summary>What the sign-in screen says above the row of accounts: whose list it is.</summary>
+    public string SignInSubtitle => AccountCards.Count switch {
+        0 => "No profiles are known for this server yet.",
+        1 => "One profile is remembered on this machine.",
+        var count => $"{count} profiles are remembered on this machine.",
+    };
+
+    /// <summary>
+    /// Signs out of the profile on screen, which is what the profile page's own button does.
+    /// </summary>
+    [RelayCommand]
+    private void LogOut() {
+        if (SelectedProfile is null) {
+            return;
+        }
+
+        // Said before the profile is dropped, so the next poll - which reads the profile list and puts back the
+        // account Play would sign in as - does not sign the person straight back in.
+        IsSignedOut = true;
+        IsProfileEditing = false;
+        IsProfileCardOpen = false;
+        SelectedProfile = null;
+        ProfilePage = ProfilePage.Profile;
+    }
+
+    /// <summary>
+    /// Signs in as one of the profiles the sign-in screen is showing.
+    /// </summary>
+    /// <remarks>
+    /// By account id rather than by tile, so the choice survives the list being redrawn between the tile being
+    /// drawn and being clicked - which happens on every poll while the server is running.
+    /// </remarks>
+    public void SignInAs(ulong accountId) {
+        var profile = Profiles.FirstOrDefault(p => p.AccountId == accountId);
+
+        if (profile is null) {
+            // The account went away between the tile being drawn and being clicked. The next look at the list
+            // fills it again, so there is nothing to do but stay signed out.
+            return;
+        }
+
+        IsSignedOut = false;
+        SelectedProfile = profile;
+        GoTo(LauncherSection.Profile);
+    }
+
+    /// <summary>
+    /// Leaves the sign-in screen without choosing anybody, which is the way out of a list with no tile on it.
+    /// </summary>
+    /// <remarks>
+    /// Back to the account this machine already signs in as rather than to nobody: logging out was a detour, and
+    /// a person who has thought better of it meant to end up where they started.
+    /// </remarks>
+    [RelayCommand]
+    private void CancelSignIn() {
+        var profile = _store.Settings.AutoLoginAccountId is { } id
+            ? Profiles.FirstOrDefault(p => p.AccountId == id)
+            : null;
+
+        // Only closes onto somebody. A launcher with nobody to go back to keeps the choice up rather than
+        // closing onto a profile page that cannot offer one.
+        if (profile is null) {
+            return;
+        }
+
+        SelectedProfile = profile;
+        IsSignedOut = false;
+    }
+
+    /// <summary>
+    /// Which profile the screen should be showing, said once so a signed-out launcher cannot be signed back in
+    /// by a poll.
+    /// </summary>
+    /// <param name="signedOut">Whether the person has logged out.</param>
+    /// <param name="selected">The profile on screen, if there is one.</param>
+    /// <param name="account">The account Play would sign in as, if it is known.</param>
+    /// <param name="remembered">The account signed in as last time.</param>
+    public static ulong? ProfileToRestore(
+        bool signedOut, ulong? selected, ulong? account, ulong? remembered)
+        => signedOut ? null : selected ?? account ?? remembered;
+
+    /// <summary>
+    /// Rebuilds the sign-in screen's tiles from the profiles and the pictures that have arrived for them.
+    /// </summary>
+    /// <remarks>
+    /// Called from the places the profiles, their pictures or the school logos can have changed. Like every
+    /// other list on the screen, it is only touched when a tile has actually moved - a poll ten seconds apart
+    /// that learned nothing must not rebuild the cards somebody has their pointer over.
+    /// </remarks>
+    private void RefreshAccountCards() {
+        var cards = AccountCard.For(
+            Profiles,
+            profile => CachedPicture(profile.AccountId, profile.AvatarFile),
+            profile => CachedPicture(profile.AccountId, profile.BannerFile),
+            SchoolIconFor);
+
+        if (AccountCards.SequenceEqual(cards)) {
+            return;
+        }
+
+        AccountCards.Clear();
+
+        foreach (var card in cards) {
+            AccountCards.Add(card);
+        }
+
+        OnPropertyChanged(nameof(HasAccountCards));
+        OnPropertyChanged(nameof(SignInSubtitle));
+    }
+
+    /// <summary>A picture already decoded for a profile, or null when it has not been read yet.</summary>
+    private Bitmap? CachedPicture(ulong accountId, string? fileName)
+        => accountId == 0 || string.IsNullOrWhiteSpace(fileName)
+            ? null
+            : _decodedPictures.GetValueOrDefault((accountId, fileName));
 
     // ---------------------------------------------------------------- the profile's two pages
 
@@ -791,7 +962,11 @@ public sealed partial class MainWindowViewModel {
     /// Rebuilds the profile list from what the launcher has learned, keeping the selection where it was.
     /// </summary>
     private void RefreshProfiles() {
-        var wanted = SelectedProfile?.AccountId ?? SelectedAccount?.AccountId ?? _store.Settings.AutoLoginAccountId;
+        var wanted = ProfileToRestore(
+            IsSignedOut,
+            SelectedProfile?.AccountId,
+            SelectedAccount?.AccountId,
+            _store.Settings.AutoLoginAccountId);
 
         // Only the accounts this server actually has, and what that leaves out is said rather than lost.
         UnlistedProfilesNotice = DescribeUnlistedProfiles(UnlistedProfiles(_profiles.Profiles, Accounts));
@@ -827,6 +1002,10 @@ public sealed partial class MainWindowViewModel {
         }
 
         RefreshProfileDerived();
+
+        // The sign-in screen draws every profile rather than the selected one, so its tiles are built here -
+        // where the profiles themselves are known to be current - and again when a picture arrives.
+        RefreshAccountCards();
     }
 
     /// <summary>
@@ -897,6 +1076,10 @@ public sealed partial class MainWindowViewModel {
         // reported. See RefreshWizards.
         RefreshWizards(profile);
 
+        // And the history is read from the badges that have just been judged, so the two screens can never
+        // disagree about what was earned or when.
+        RefreshHistory(profile);
+
         // And when something has changed, the groups that are already on screen are kept and refilled, so
         // the ones that are open stay open.
         ProfileBadgeGroup.Sync(
@@ -932,6 +1115,9 @@ public sealed partial class MainWindowViewModel {
         OnPropertyChanged(nameof(ProfileIsNotClean));
         OnPropertyChanged(nameof(HasProfileWizards));
         OnPropertyChanged(nameof(ProfileWizardsSummary));
+        OnPropertyChanged(nameof(HasProfileHistory));
+        OnPropertyChanged(nameof(ProfileHistoryCaption));
+        OnPropertyChanged(nameof(HasSchoolIcons));
         OnPropertyChanged(nameof(ProfileBadgeCountText));
         OnPropertyChanged(nameof(ProfileScoreCircleText));
         OnPropertyChanged(nameof(HasBadges));
@@ -970,8 +1156,38 @@ public sealed partial class MainWindowViewModel {
     /// wizard that changed like any other.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Makes the history on screen the newest things the profile has actually earned.
+    /// </summary>
+    /// <remarks>
+    /// The rows are values, so a refresh that learned nothing does not touch the list - and a row does move
+    /// on its own, because "Today 20:15" becomes "Yesterday 20:15" whether or not the server is running.
+    /// See <see cref="ProfileTimeline.HasMoved"/>.
+    /// </remarks>
+    private void RefreshHistory(LauncherProfile? profile) {
+        IReadOnlyList<ProfileTimelineEntry> history = profile is null
+            ? []
+            : ProfileTimeline.For(Badges, DateTimeOffset.Now);
+
+        if (!ProfileTimeline.HasMoved(ProfileHistory, history)) {
+            return;
+        }
+
+        ProfileHistory.Clear();
+
+        foreach (var entry in history) {
+            ProfileHistory.Add(entry);
+        }
+    }
+
     private void RefreshWizards(LauncherProfile? profile) {
-        var wizards = ProfileWizardRow.For(profile);
+        // Every card wears its school's element logo, so the seven are fetched the first time there is a card
+        // to draw one on rather than at startup: a launcher sitting on Home has no use for them.
+        if (profile is { Wizards.Count: > 0 }) {
+            WarmSchoolIcons();
+        }
+
+        var wizards = ProfileWizardRow.For(profile, SchoolIconFor);
 
         if (ProfileWizards.SequenceEqual(wizards)) {
             return;
@@ -1045,6 +1261,10 @@ public sealed partial class MainWindowViewModel {
             ProfileAvatar = avatar.Bitmap;
             ProfileBanner = banner.Bitmap;
         }
+
+        // The sign-in screen draws the same two pictures, so its tiles are drawn again now that they are to
+        // hand rather than waiting for the next poll to notice.
+        RefreshAccountCards();
     }
 
     /// <summary>One picture, out of the cache when it is already decoded.</summary>
@@ -1123,12 +1343,20 @@ public sealed partial class MainWindowViewModel {
         finally {
             _warmingPictures = false;
         }
+
+        // Something to hand now that was not before, whether or not any of it could be read: the tiles are
+        // drawn from the decoded cache, so this is what makes a picture appear on one.
+        RefreshAccountCards();
     }
 
     /// <summary>
     /// Picking a profile is picking who the client is handed over as, so it drives Play as well.
     /// </summary>
     partial void OnSelectedProfileChanged(LauncherProfile? value) {
+        // Dressing one profile is not dressing the next: switching account puts the screen back to being a
+        // page rather than a form.
+        IsProfileEditing = false;
+
         var account = value is null
             ? null
             : Accounts.FirstOrDefault(a => a.AccountId == value.AccountId);
@@ -1267,13 +1495,5 @@ public sealed partial class MainWindowViewModel {
             : "Not signed in on this machine yet";
 
     /// <summary>One or two letters for a profile with no picture, so an empty circle is still a face.</summary>
-    public static string InitialsOf(string name) {
-        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        return words.Length switch {
-            0 => "?",
-            1 => words[0][..1].ToUpperInvariant(),
-            _ => $"{char.ToUpperInvariant(words[0][0])}{char.ToUpperInvariant(words[1][0])}",
-        };
-    }
+    public static string InitialsOf(string name) => LauncherProfile.InitialsOf(name);
 }

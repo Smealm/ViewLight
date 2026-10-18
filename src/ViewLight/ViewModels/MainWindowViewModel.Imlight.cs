@@ -64,7 +64,9 @@ public sealed partial class MainWindowViewModel {
 
     /// <summary>Works out what is missing, and says so on the two screens that depend on it.</summary>
     private void RefreshImlightRequirement() {
-        _imlightRequirement = ImlightRequirements.For(ServerPath);
+        // The read this run already made, rather than a second one: reading a config that is not there
+        // costs the whole read window, and that was being paid twice before the first screen appeared.
+        _imlightRequirement = ImlightRequirements.For(ServerPath, _configRead);
 
         ImlightProblem = _imlightRequirement.Missing;
         ImlightActionUrl = _imlightRequirement.ActionUrl ?? string.Empty;
@@ -77,17 +79,23 @@ public sealed partial class MainWindowViewModel {
     }
 
     /// <summary>
-    /// Downloads an install, or replaces one that is not usable.
+    /// Downloads or builds an install, or replaces one that is not usable.
     /// </summary>
     /// <remarks>
     /// The release is checked first rather than assumed, exactly as Home's one button does: the tag to
-    /// fetch is GitHub's answer and not something the launcher remembers between releases. It is shared
-    /// with Home's button - pressing it there with no server installed lands here - and it is deliberately
-    /// *not* Home's button, which would play instead of downloading once a config file is there and only
-    /// the database is missing.
+    /// fetch is GitHub's answer and not something the launcher remembers between releases. A build from
+    /// source has no tag to look up - pressing the button is what makes the checkout and builds it - so
+    /// that channel goes straight to the install. It is shared with Home's button - pressing it there
+    /// with no server installed lands here - and it is deliberately *not* Home's button, which would play
+    /// instead of downloading once a config file is there and only the database is missing.
     /// </remarks>
     [RelayCommand(CanExecute = nameof(CanPrimaryAction))]
     private async Task InstallImlightAsync() {
+        if (IsBleedingEdge) {
+            await InstallOrUpdateAsync();
+            return;
+        }
+
         if (_latestRelease is null) {
             await CheckForUpdatesAsync();
         }

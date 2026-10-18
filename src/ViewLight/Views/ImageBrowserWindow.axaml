@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ViewLight.ViewModels"
+        x:Class="ViewLight.Views.ImageBrowserWindow"
+        x:DataType="vm:ImageBrowserViewModel"
+        Title="Browse pictures"
+        Width="1000" Height="700"
+        MinWidth="720" MinHeight="520"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ContentBackgroundBrush}">
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20" RowSpacing="12">
+
+    <!-- ============================================================ what this is -->
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock Text="{Binding Title}" FontSize="17" FontWeight="SemiBold" />
+      <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding Intro}" />
+    </StackPanel>
+
+    <!-- ============================================================ looking for something
+         The search box is the same control for both collections because it does the same thing in both:
+         a gamerpic search filters the archive that has already been read, and a wallpaper search is a
+         question asked of the site. Enter is what runs it, so a person can type and press return. -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+      <TextBox x:Name="SearchBox" Text="{Binding Search, Mode=TwoWay}"
+               Watermark="{Binding SearchWatermark}" KeyDown="OnSearchKeyDown" />
+
+      <Button Grid.Column="1" Content="Search" Command="{Binding SearchCommand}" />
+
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+        <Button Content="‹" Command="{Binding PreviousPageCommand}"
+                IsEnabled="{Binding CanGoBack}" MinWidth="36" />
+        <TextBlock Classes="muted" Text="{Binding PageText}" VerticalAlignment="Center"
+                   IsVisible="{Binding HasPages}" MinWidth="96" TextAlignment="Center" />
+        <Button Content="›" Command="{Binding NextPageCommand}"
+                IsEnabled="{Binding CanGoForward}" MinWidth="36" />
+      </StackPanel>
+    </Grid>
+
+    <!-- ============================================================ the pictures
+         A list, because choosing one is clicking one. A cell whose picture has not arrived yet is the
+         caption it already knows, so the grid is browsable the moment the listing is. -->
+    <Border Grid.Row="2" Classes="list" Padding="6">
+      <ScrollViewer>
+        <ListBox ItemsSource="{Binding Items}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+                 Background="Transparent" BorderThickness="0"
+                 SelectionMode="Single" IsEnabled="{Binding !IsBusy}">
+          <ListBox.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel Orientation="Horizontal" />
+            </ItemsPanelTemplate>
+          </ListBox.ItemsPanel>
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:ImageBrowserItem">
+              <StackPanel Width="128" Spacing="5" Margin="4">
+                <Border Height="96" CornerRadius="8" Padding="2"
+                        Background="{DynamicResource CardBackgroundAltBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+                  <Image Source="{Binding Thumbnail}" Stretch="Uniform"
+                         MaxWidth="112" MaxHeight="88"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="{Binding Caption}" FontSize="11" TextAlignment="Center"
+                           TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding Detail}" Classes="muted" FontSize="10"
+                           TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </ScrollViewer>
+    </Border>
+
+    <!-- ============================================================ taking one, and what is happening -->
+    <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+      <StackPanel Spacing="2" VerticalAlignment="Center">
+        <TextBlock Classes="muted" Classes.error="{Binding IsStatusProblem}"
+                   TextWrapping="Wrap" Text="{Binding Status}" IsVisible="{Binding HasStatus}" />
+
+        <!-- Said where the choice is made rather than in a document: a banner kept here is part of the
+             launcher's own database, which is the thing that gets backed up. -->
+        <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                   Text="Whatever is chosen is kept in your profile, in ViewLight's own database — so it is backed up with everything else." />
+      </StackPanel>
+
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Content="Cancel" Click="OnCancelClick" />
+        <Button x:Name="UseButton" Classes="accent" Content="Use this one"
+                IsEnabled="{Binding CanChoose}" Click="OnUseClick" MinWidth="140" />
+      </StackPanel>
+    </Grid>
+
+  </Grid>
+</Window>

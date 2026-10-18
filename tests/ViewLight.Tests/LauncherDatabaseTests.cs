@@ -239,6 +239,10 @@ public class LauncherDatabaseTests {
         Assert.True(launcher.RequiresImlight);
         Assert.False(launcher.IsLauncherDatabaseUp);
         Assert.False(launcher.HasLauncherDatabaseStatus);
+
+        // And nothing is said to be coming up: the card that says the profiles database is launching is for
+        // a database that is being started, not for a launcher asking for an install first.
+        Assert.False(launcher.IsLauncherDatabaseStarting);
     }
 
     [Fact]
@@ -266,6 +270,18 @@ public class LauncherDatabaseTests {
         // what it failed for is the notes the launcher keeps in it.
         Assert.Contains("launcher's own notes", launcher.LauncherDatabaseStatus);
         Assert.False(launcher.IsLauncherDatabaseUp);
+
+        // The card that says what is being waited for comes down with the attempt, so a database that will
+        // not start is explained by the status line rather than by a wait that never ends. The status is
+        // written from inside the attempt, so the card is a moment behind it rather than the same instant.
+        Assert.True(
+            WaitFor(() => !launcher.IsLauncherDatabaseStarting, TimeSpan.FromSeconds(2)),
+            "the card saying the profiles database is launching never came down");
+
+        // And the database's own words go into the Log rather than into a pipe nobody reads: this one could
+        // not even be started, so it said nothing - and the Log says that, rather than leaving the failure
+        // with nothing behind it. When a database does start and then never comes up, those words are why.
+        Assert.Contains(launcher.Log.Blocks, block => block.Body.Contains("printed nothing"));
     }
 
     // ------------------------------------------------------------------ helpers

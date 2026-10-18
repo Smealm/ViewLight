@@ -79,6 +79,36 @@ public sealed partial class MainWindowViewModel {
     /// <summary>Whether the launcher is the one holding the database open, rather than the server.</summary>
     public bool IsHoldingDatabaseOpen => _idleDatabaseIsUp;
 
+    /// <summary>
+    /// The database's own words in the Log, so a database that did not come up says why.
+    /// </summary>
+    /// <remarks>
+    /// The database is started with its console drained rather than left to fill its own pipe, and its log
+    /// file only exists once it gets as far as writing one - so for the ones that never come up, what they
+    /// printed is the only thing that knows why: a port something else has taken, a data directory it cannot
+    /// open, a runtime it was not given. All of it is about this machine and nothing else: the database is
+    /// reached on <c>127.0.0.1</c>, with the system proxy switched off, so a machine with no network at all
+    /// still reaches the process beside it - and if it cannot, the reason is in these lines.
+    /// </remarks>
+    private void ReportDatabaseOutput(string what, EmbeddedRavenSetup setup, IReadOnlyList<string> lines) {
+        var kept = lines.TakeLast(12).ToList();
+
+        if (kept.Count == 0) {
+            AppendLog(LogLevel.Info,
+                $"{what} printed nothing before it stopped. Its own log, if it ever wrote one, is in "
+                + $"{setup.LogsDirectory}.");
+            return;
+        }
+
+        AppendLog(LogLevel.Info, $"{what} said, before it stopped:");
+
+        foreach (var line in kept) {
+            AppendLog(LogLevel.Info, $"  {line}");
+        }
+
+        AppendLog(LogLevel.Info, $"Its own log, if it ever wrote one, is in {setup.LogsDirectory}.");
+    }
+
     /// <summary>Whether the server is on its way up, up, or coming down: the database is its business then.</summary>
     private bool ServerIsBusyOrUp => IsServerBusyOrUp(ServerState);
 
@@ -139,6 +169,21 @@ public sealed partial class MainWindowViewModel {
             return;
         }
 
+        // Nothing answers on the port, but a server this launcher did not start can still own that data
+        // directory: its login port opens before its RavenDB does, which is exactly the window in which
+        // starting a second database against the same folder fails with "in use by another process" and
+        // looks like a broken database. Read it over HTTP while it is up instead of fighting it for the
+        // files.
+        if (ServerProcesses.BelongingTo(
+                ImlightConfig.ExecutablePathFor(ServerPath), ServerProcesses.Running()).Count > 0) {
+
+            IdleDatabaseStatus =
+                "The server is running, so its player database is read over HTTP while it is up.";
+            AppendLog(LogLevel.Info, IdleDatabaseStatus);
+            RefreshDerived();
+            return;
+        }
+
         IdleDatabaseStatus = "Starting the server's own RavenDB, so the player database can be read without the server…";
         RefreshDerived();
 
@@ -146,6 +191,7 @@ public sealed partial class MainWindowViewModel {
         if (failed is not null) {
             IdleDatabaseStatus = $"{failed} The database is read while the server is running instead.";
             AppendLog(LogLevel.Warning, IdleDatabaseStatus);
+            ReportDatabaseOutput("The player database", setup, _raven.OutputLines);
             RefreshDerived();
             return;
         }
@@ -168,6 +214,7 @@ public sealed partial class MainWindowViewModel {
 
             IdleDatabaseStatus = $"{why} The database is read while the server is running instead.";
             AppendLog(LogLevel.Warning, IdleDatabaseStatus);
+            ReportDatabaseOutput("The player database", setup, _raven.OutputLines);
             RefreshDerived();
             return;
         }

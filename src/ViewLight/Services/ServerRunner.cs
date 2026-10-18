@@ -22,6 +22,10 @@ public enum ServerState {
 /// Only the port probe waits this out - the server's own readiness line is taken at its word. Defaults
 /// to <see cref="ServerRunner.DefaultReadySettleDelay"/>.
 /// </param>
+/// <param name="LogFallbackDelay">
+/// How long an open login port may stand without the server's log reporting it is up before the port is
+/// taken as the answer. Defaults to <see cref="ServerRunner.DefaultLogFallbackDelay"/>.
+/// </param>
 public sealed record ServerStartOptions(
     string ServerPath,
     string ExecutablePath,
@@ -29,7 +33,8 @@ public sealed record ServerStartOptions(
     int AccountServerPort,
     string LogFilePath,
     IReadOnlyList<string>? Arguments = null,
-    TimeSpan? ReadySettleDelay = null);
+    TimeSpan? ReadySettleDelay = null,
+    TimeSpan? LogFallbackDelay = null);
 
 /// <summary>
 /// Runs <c>Imlight.Director.exe</c> and reports when it is safe to start the client.
@@ -46,10 +51,12 @@ public sealed record ServerStartOptions(
 /// readiness line - <see cref="ReadyMarker"/> - is the server stating that it has finished starting and
 /// is about to serve logins, so it is taken at its word and the client is started the moment it appears:
 /// waiting after a direct announcement would only delay every session by the settle window for nothing.
-/// The port probe is only a guess by comparison - a socket accepts connections slightly before the
-/// account server can serve them - so when that is what fired, the launcher holds for
-/// <see cref="DefaultReadySettleDelay"/> before declaring the server ready. Either signal is enough on
-/// its own, and the log names whichever actually fired.
+/// The port probe is only a guess by comparison, and Imlight makes it a particularly bad one: it binds
+/// the login and game ports *before* it starts its embedded RavenDB and creates the admin account, so an
+/// open port can be half a minute ahead of a server that can actually sign anyone in. When the log file
+/// exists, the port is therefore not taken as the answer at all - the launcher keeps waiting for the
+/// readiness line, and only falls back to the port after <see cref="DefaultLogFallbackDelay"/> (which is
+/// for a server whose log is somewhere the launcher was not told about, not for the ordinary case).
 /// </para>
 /// </remarks>
 public sealed class ServerRunner : IDisposable {
@@ -62,6 +69,17 @@ public sealed class ServerRunner : IDisposable {
     /// probe waits it out: the server's own readiness line does not - see the class remarks.
     /// </summary>
     public static readonly TimeSpan DefaultReadySettleDelay = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long an open port waits for the server's own readiness line before the port is believed.
+    /// </summary>
+    /// <remarks>
+    /// This is a fallback, not the ordinary path. Imlight opens its login port before its database is
+    /// ready, so a healthy server can take tens of seconds after the port before it can answer a sign-in;
+    /// waiting that long is the point. The delay only limits a server whose log the launcher cannot read
+    /// at all, which would otherwise keep it waiting forever.
+    /// </remarks>
+    public static readonly TimeSpan DefaultLogFallbackDelay = TimeSpan.FromSeconds(120);
 
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(1);
 
@@ -316,12 +334,14 @@ public sealed class ServerRunner : IDisposable {
 
     private async Task MonitorAsync(ServerStartOptions options, CancellationToken cancellationToken) {
         var settleDelay = options.ReadySettleDelay ?? DefaultReadySettleDelay;
+        var logFallbackDelay = options.LogFallbackDelay ?? DefaultLogFallbackDelay;
         var host = string.IsNullOrWhiteSpace(options.AccountServerHost) ? "127.0.0.1" : options.AccountServerHost;
 
         Log(LogLevel.Info, $"Waiting for the account server on {host}:{options.AccountServerPort}…");
 
         Stopwatch? settling = null;
         var settleAnnounced = false;
+        var waitingForLogAnnounced = false;
 
         // Which signal started the settle window, so the log says what actually happened.
         var trigger = string.Empty;
@@ -349,8 +369,19 @@ public sealed class ServerRunner : IDisposable {
                 trigger = $"port {options.AccountServerPort} on {host} is open";
                 settling = Stopwatch.StartNew();
 
-                Log(LogLevel.Info,
-                    $"{trigger}. Waiting {settleDelay.TotalSeconds:0} seconds for the account server to finish starting…");
+                // The log existing is what makes its readiness line the signal to wait for. Imlight binds
+                // this port before its RavenDB is listening, so claiming the server is ready here is how
+                // the client used to be started against a database that refused every sign-in for the
+                // next half-minute.
+                if (File.Exists(options.LogFilePath)) {
+                    Log(LogLevel.Info,
+                        $"{trigger}. Waiting for the server's own readiness line before starting the client, "
+                        + "because Imlight opens its ports before its database is ready…");
+                }
+                else {
+                    Log(LogLevel.Info,
+                        $"{trigger}. Waiting {settleDelay.TotalSeconds:0} seconds for the account server to finish starting…");
+                }
             }
 
             if (settling is not null) {
@@ -360,8 +391,30 @@ public sealed class ServerRunner : IDisposable {
                 }
 
                 if (settling.Elapsed >= settleDelay) {
-                    SignalReady($"{trigger} and the {settleDelay.TotalSeconds:0}s settle window has passed");
-                    return;
+                    // A log file means the server is going to say when it is actually up, and that line is
+                    // later than the port by however long its database takes. Keep waiting for it; only a
+                    // log the launcher cannot watch falls back to the port, and then only after the long
+                    // delay, so an ordinary slow boot is never mistaken for a missing log.
+                    var logExists = File.Exists(options.LogFilePath);
+
+                    if (!logExists) {
+                        SignalReady($"{trigger} and the {settleDelay.TotalSeconds:0}s settle window has passed");
+                        return;
+                    }
+
+                    if (settling.Elapsed >= logFallbackDelay) {
+                        SignalReady(
+                            $"{trigger}, and the server log has not reported it up after "
+                            + $"{logFallbackDelay.TotalSeconds:0} seconds");
+                        return;
+                    }
+
+                    if (!waitingForLogAnnounced) {
+                        waitingForLogAnnounced = true;
+                        Log(LogLevel.Info,
+                            $"The port is open but the server has not reported itself ready yet. Imlight's "
+                            + "database is still starting; the client waits for its readiness line.");
+                    }
                 }
             }
 

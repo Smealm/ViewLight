@@ -51,6 +51,21 @@ public class ImlightConfigTests {
     }
 
     [Fact]
+    public void AConfigInAFolderThatIsNotThereIsNotWaitedFor() {
+        using var workspace = new TempWorkspace();
+
+        // The wait is for a config something else is holding - an install unpacking one, the server writing
+        // one - and a folder with no install in it is not halfway through either. It used to be paid twice at
+        // every start, which made the first start of all - no install yet - the slowest one there is.
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var read = ImlightConfig.Read(workspace.Path("no-such-folder"));
+        watch.Stop();
+
+        Assert.True(read.NoInstall);
+        Assert.InRange(watch.ElapsedMilliseconds, 0, 600);
+    }
+
+    [Fact]
     public void ReadsEveryValueTheLauncherUses() {
         using var workspace = new TempWorkspace();
         var config = Load(workspace);

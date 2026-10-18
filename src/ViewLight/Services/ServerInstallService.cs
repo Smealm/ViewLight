@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Security.Cryptography;
 
 namespace ViewLight.Services;
 
@@ -16,18 +17,25 @@ public sealed record InstallResult(
     string Message,
     string? Warning = null,
     int? EmbeddedDatabasePort = null,
-    string? PatchServerUrl = null);
+    string? PatchServerUrl = null,
+    int FilesUnchanged = 0);
 
 /// <summary>
-/// Downloads an Imlight release, unpacks it over an existing install, and puts the user's settings
-/// back afterwards.
+/// Installs an Imlight build over an existing install and puts the user's settings back afterwards -
+/// unpacking a release archive first, or taking a folder a source build produced.
 /// </summary>
 /// <remarks>
+/// The download and the build differ only in where the build folders come from - one unpacked folder, or
+/// the three folders a source build leaves its output in; everything after that is
+/// <see cref="InstallFromFoldersAsync"/>, deliberately, so an install from source keeps the same settings,
+/// config backup and repairs as a published one.
+/// <para>
 /// The update strategy is deliberately "overlay, never wipe". Releases are flat self-contained
 /// folders (verified against <c>Imlight-win-x64.zip</c> for <c>r806919.Wizard_1_610</c>: the archive
 /// root <i>is</i> the install root), so extracting in place replaces binaries and leaves everything
 /// the server generates at runtime - <c>logs/</c>, <c>cache/</c>, <c>spiraldb-cache/</c> and the
 /// embedded RavenDB directory - untouched, because we simply never delete anything.
+/// </para>
 /// <para>
 /// The one file that must not be blindly overwritten is <c>Config/Imlight.ini</c>, since that is where
 /// every user setting lives. It is read before the overlay and merged back afterwards, so a new build
@@ -86,7 +94,6 @@ public sealed class ServerInstallService {
 
         var archivePath = GetCachedArchivePath(release);
         var stagingRoot = Path.Combine(LauncherPaths.StagingDirectory, release.Tag);
-        var warning = default(string);
 
         try {
             // ---------------------------------------------------------- download (0 - 70%)
@@ -102,6 +109,102 @@ public sealed class ServerInstallService {
                 () => ExtractAsync(archivePath, stagingRoot, progress, cancellationToken), cancellationToken)
                 .ConfigureAwait(false);
 
+            return await InstallFromFolderAsync(
+                    contentRoot, release.Tag, serverPath, progress, beforeWriting, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) {
+            return new InstallResult(false, release.Tag, 0, 0, "Install cancelled.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // A file that will not be written over is the one install failure a user can act on, and Windows'
+            // own sentence about it names the file rather than the thing holding it. Said properly instead.
+            return new InstallResult(false, release.Tag, 0, 0, LockedFileMessage(ex));
+        }
+        catch (Exception ex) {
+            return new InstallResult(false, release.Tag, 0, 0, $"Install failed: {ex.Message}");
+        }
+        finally {
+            TryDeleteDirectory(stagingRoot);
+        }
+    }
+
+    /// <summary>
+    /// Installs the build in a folder over a server folder, keeping its settings and runtime data.
+    /// </summary>
+    /// <param name="contentRoot">The build itself - the folder a release archive would have unpacked to.</param>
+    /// <param name="tag">What to call the build in messages and in the install record.</param>
+    public Task<InstallResult> InstallFromFolderAsync(
+        string contentRoot,
+        string tag,
+        string serverPath,
+        IProgress<InstallProgress>? progress = null,
+        Func<Task>? beforeWriting = null,
+        CancellationToken cancellationToken = default)
+        => InstallFromFoldersAsync([contentRoot], tag, serverPath, progress, beforeWriting, cancellationToken);
+
+    /// <summary>
+    /// Installs a build that is spread over several folders - which is what a source build produces - over
+    /// a server folder, keeping its settings and runtime data.
+    /// </summary>
+    /// <param name="contentRoots">
+    /// The projects' own output folders, in the order they are deployed: Director's runnable tree first,
+    /// then the library folders that belong beside it. A file present in a later folder replaces the same
+    /// relative path from an earlier one.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// This is the half an archive install and a build from source share. The archive path downloads and
+    /// unpacks first; a source build points at the folders <c>dotnet build</c> left behind. Everything from
+    /// here on is the same, which is the point: a build from source must keep the same settings, write the
+    /// same config backup and get the same port and patch-server repairs as a published one.
+    /// </para>
+    /// <para>
+    /// <b>Only files that differ are written.</b> A build puts its output where it always does, so a deploy
+    /// of the same commit a second time writes none of its binaries: each file is compared with the one in
+    /// the server folder by length and then by content. (Never by timestamp - two different builds can
+    /// share a length and a timestamp, and treating that pair as unchanged is how an old server survives an
+    /// install that says it succeeded.) That is what makes an update cost the size of what changed rather
+    /// than the size of a server folder, and it is what makes a failed deploy safe to press again.
+    /// </para>
+    /// </remarks>
+    public async Task<InstallResult> InstallFromFoldersAsync(
+        IReadOnlyList<string> contentRoots,
+        string tag,
+        string serverPath,
+        IProgress<InstallProgress>? progress = null,
+        Func<Task>? beforeWriting = null,
+        CancellationToken cancellationToken = default) {
+
+        if (string.IsNullOrWhiteSpace(serverPath)) {
+            return new InstallResult(false, tag, 0, 0, "No server folder is configured.");
+        }
+
+        var roots = contentRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+            .ToList();
+
+        // A folder that is not a build must not be overlaid: copying it would leave the server folder a
+        // mixture of two unrelated trees, and the release would look installed because the files were
+        // written. Checked before the config is read, the target is created or anything is touched, so a
+        // wrong folder costs nothing. This is also what catches a build that "succeeded" without
+        // producing an executable.
+        var executableRoot = roots.FirstOrDefault(
+            root => File.Exists(Path.Combine(root, ImlightConfig.ServerExecutableName)));
+
+        if (executableRoot is null) {
+            var looked = roots.Count == 0 ? "no build folders were given" : string.Join(", ", roots);
+
+            return new InstallResult(false, tag, 0, 0,
+                $"{ImlightConfig.ServerExecutableName} was not found in any build folder ({looked}), so "
+                + "nothing was installed.");
+        }
+
+        Directory.CreateDirectory(serverPath);
+
+        var warning = default(string);
+
+        try {
             // ---------------------------------------------------------- merge settings
             // Read the user's config *before* the overlay replaces it.
             var existingConfigPath = ImlightConfig.ConfigPathFor(serverPath);
@@ -116,16 +219,16 @@ public sealed class ServerInstallService {
                 }
             }
 
-            // ---------------------------------------------------------- overlay (88 - 96%)
-            // The last moment this can be done: everything has been staged, so what is about to happen is the
-            // write and nothing else, and a failure before here has disturbed nothing.
+            // ---------------------------------------------------------- deploy (88 - 96%)
+            // The last moment this can be done: every source folder has been read, so what is about to
+            // happen is the write and nothing else, and a failure before here has disturbed nothing.
             if (beforeWriting is not null) {
                 progress?.Report(new InstallProgress(0.88, "Install", "Making way for the new files…"));
                 await beforeWriting().ConfigureAwait(false);
             }
 
-            var filesWritten = await Task.Run(
-                () => OverlayCopy(contentRoot, serverPath, progress, cancellationToken), cancellationToken)
+            var (filesWritten, filesUnchanged) = await Task.Run(
+                () => OverlayCopy(roots, serverPath, progress, cancellationToken), cancellationToken)
                 .ConfigureAwait(false);
 
             // ---------------------------------------------------------- restore (96 - 100%)
@@ -144,34 +247,41 @@ public sealed class ServerInstallService {
             // points at something that is not there.
             var repair = ServerConfigRepair.Apply(existingConfigPath);
 
-            progress?.Report(new InstallProgress(1.0, "Done", "Install complete."));
-
-            // A missing executable means the archive layout surprised us; say so instead of failing silently.
-            if (!File.Exists(ImlightConfig.ExecutablePathFor(serverPath))) {
-                warning = $"{ImlightConfig.ServerExecutableName} was not found in the extracted archive.";
+            // ---------------------------------------------------------- check the write
+            // A copy that reports success but leaves the old assembly behind is the one failure that looks
+            // exactly like a successful install: the card says the new build is in the folder, and the next
+            // server start is still the old code. The executable alone is not enough evidence - dotnet's
+            // apphost can be byte-identical between builds - so the managed assemblies are compared too.
+            // Checked after the settings were put back, so a failed write still leaves the user's config
+            // where the next attempt can retain it.
+            var mismatch = DescribeCopyMismatch(roots, serverPath);
+            if (mismatch is not null) {
+                return new InstallResult(false, tag, filesWritten, settingsRetained, mismatch, warning,
+                    repair.EmbeddedDatabasePort, repair.PatchServerUrl, filesUnchanged);
             }
 
+            progress?.Report(new InstallProgress(1.0, "Done", "Install complete."));
+
             var message = userConfig is null
-                ? $"Installed {release.Tag}."
-                : $"Installed {release.Tag} and retained {settingsRetained} existing settings.";
+                ? $"Installed {tag}."
+                : $"Installed {tag} and retained {settingsRetained} existing settings.";
+
+            if (filesUnchanged > 0) {
+                message += $" {filesUnchanged} file(s) were already current.";
+            }
 
             return new InstallResult(
-                true, release.Tag, filesWritten, settingsRetained, message, warning,
-                repair.EmbeddedDatabasePort, repair.PatchServerUrl);
+                true, tag, filesWritten, settingsRetained, message, warning,
+                repair.EmbeddedDatabasePort, repair.PatchServerUrl, filesUnchanged);
         }
         catch (OperationCanceledException) {
-            return new InstallResult(false, release.Tag, 0, 0, "Install cancelled.");
+            return new InstallResult(false, tag, 0, 0, "Install cancelled.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            // A file that will not be written over is the one install failure a user can act on, and Windows'
-            // own sentence about it names the file rather than the thing holding it. Said properly instead.
-            return new InstallResult(false, release.Tag, 0, 0, LockedFileMessage(ex));
+            return new InstallResult(false, tag, 0, 0, LockedFileMessage(ex));
         }
         catch (Exception ex) {
-            return new InstallResult(false, release.Tag, 0, 0, $"Install failed: {ex.Message}");
-        }
-        finally {
-            TryDeleteDirectory(stagingRoot);
+            return new InstallResult(false, tag, 0, 0, $"Install failed: {ex.Message}");
         }
     }
 
@@ -280,44 +390,184 @@ public sealed class ServerInstallService {
         return stagingRoot;
     }
 
-    private static int OverlayCopy(
-        string sourceRoot,
+    private static (int Written, int Unchanged) OverlayCopy(
+        IReadOnlyList<string> sourceRoots,
         string targetRoot,
         IProgress<InstallProgress>? progress,
         CancellationToken cancellationToken) {
 
         progress?.Report(new InstallProgress(0.88, "Install", "Writing server files…"));
-        return CopyDirectory(sourceRoot, targetRoot, progress, cancellationToken);
+        return CopyDirectories(sourceRoots, targetRoot, progress, cancellationToken);
     }
 
-    private static int CopyDirectory(
-        string source,
+    /// <summary>
+    /// Writes the files of every source folder into the target under the same relative path, skipping the
+    /// ones the target already holds.
+    /// </summary>
+    /// <remarks>
+    /// A source build's output lives in three folders - Director's runnable tree and the two library
+    /// folders beside it - and together they are the server. Each is overlaid in turn, so a later folder
+    /// wins on a shared relative path, and the result is one folder that runs.
+    /// </remarks>
+    private static (int Written, int Unchanged) CopyDirectories(
+        IReadOnlyList<string> sources,
         string target,
         IProgress<InstallProgress>? progress,
         CancellationToken cancellationToken) {
 
         Directory.CreateDirectory(target);
         var written = 0;
+        var unchanged = 0;
+        var visited = 0;
 
-        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories)) {
-            cancellationToken.ThrowIfCancellationRequested();
+        // One entry per relative path, taken from the last folder that holds it - which is exactly the
+        // file the deploy order would leave in place. The same assembly sits in Director's runnable tree
+        // and again in the library's own folder beside it; without this it would be compared and skipped
+        // twice, and the whole tree would be read twice for no gain.
+        var build = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            var relative = Path.GetRelativePath(source, file);
-            var destination = Path.Combine(target, relative);
-
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            CopyOver(file, destination);
-            written++;
-
-            if (written % 50 == 0) {
-                progress?.Report(new InstallProgress(
-                    0.88 + (0.08 * Math.Min(written, 500) / 500.0),
-                    "Install",
-                    $"Wrote {written} files"));
+        foreach (var source in sources) {
+            foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories)) {
+                cancellationToken.ThrowIfCancellationRequested();
+                build[Path.GetRelativePath(source, file)] = file;
             }
         }
 
-        return written;
+        foreach (var (relative, file) in build) {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var destination = Path.Combine(target, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+
+            // Pressing deploy twice, or rebuilding without a source change, writes the same bytes to
+            // the same places. Nothing is copied in that case, so the server folder is not made to
+            // look different for no reason and the write is not risked on files nothing changed in.
+            if (IsSameFile(file, destination)) {
+                unchanged++;
+            }
+            else {
+                CopyOver(file, destination);
+                written++;
+            }
+
+            // Counted by files looked at rather than files written, so a deploy that has nothing to
+            // write still shows movement rather than sitting at 88% while it reads the tree.
+            visited++;
+
+            if (visited % 50 == 0) {
+                progress?.Report(new InstallProgress(
+                    0.88 + (0.08 * Math.Min(visited, 600) / 600.0),
+                    "Install",
+                    $"Checked {visited} files, wrote {written}"));
+            }
+        }
+
+        return (written, unchanged);
+    }
+
+    /// <summary>
+    /// Whether the target already holds this exact file, so it can be left alone.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Length is compared first because it is free and settles most of a server tree. Everything else is
+    /// compared by content, and the timestamp is deliberately not consulted: two files of the same length
+    /// written at the same moment are not necessarily the same file. An archive install that produced
+    /// <c>exe:v1</c> and one that produced <c>exe:v2</c> have the same size and the same extracted
+    /// timestamp, and treating that pair as unchanged leaves the old server in place while the install
+    /// reports success - which is the exact failure this deploy exists to not have.
+    /// </para>
+    /// <para>
+    /// The cost is a hash of the build tree, on a worker thread, once per deploy: a self-contained server
+    /// is a few hundred megabytes and is read at disk speed. That is cheaper than being wrong.
+    /// </para>
+    /// </remarks>
+    private static bool IsSameFile(string source, string destination) {
+        if (!File.Exists(destination)) {
+            return false;
+        }
+
+        if (new FileInfo(source).Length != new FileInfo(destination).Length) {
+            return false;
+        }
+
+        try {
+            return Hash(source) == Hash(destination);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // A file another process is holding cannot be read to be compared. Answer "not the same" so
+            // the copy takes it on: the copy waits a hold out, and reports one that is still there.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The managed assemblies that decide what code the server folder runs.
+    /// </summary>
+    private static readonly string[] s_checkedAssemblies = [
+        "Imlight.Director.dll",
+        "Imlight.CoreLib.dll",
+        "Imlight.Common.dll",
+    ];
+
+    /// <summary>
+    /// Why the copied build does not match the sources, or <c>null</c> when it does.
+    /// </summary>
+    /// <remarks>
+    /// This is the check that the previous workflow was missing: a deploy that reports success and leaves
+    /// the old server folder untouched looks exactly like a successful one. The executable alone is not
+    /// enough evidence - dotnet's apphost can be byte-identical between builds - so every assembly the
+    /// build produced is compared by content.
+    /// </remarks>
+    private static string? DescribeCopyMismatch(IReadOnlyList<string> contentRoots, string serverPath) {
+        var executableRoot = contentRoots.FirstOrDefault(
+            root => File.Exists(Path.Combine(root, ImlightConfig.ServerExecutableName)));
+
+        // Already reported by the caller before anything was written.
+        if (executableRoot is null) {
+            return null;
+        }
+
+        var stagedExecutable = Path.Combine(executableRoot, ImlightConfig.ServerExecutableName);
+        var installedExecutable = Path.Combine(serverPath, ImlightConfig.ServerExecutableName);
+
+        if (!File.Exists(installedExecutable)) {
+            return $"{ImlightConfig.ServerExecutableName} is missing from {serverPath} after the copy.";
+        }
+
+        if (new FileInfo(stagedExecutable).Length != new FileInfo(installedExecutable).Length) {
+            return $"{ImlightConfig.ServerExecutableName} in {serverPath} is not the one that was just "
+                   + "built, so the server folder still holds the old executable.";
+        }
+
+        foreach (var assembly in s_checkedAssemblies) {
+            var staged = contentRoots
+                .Select(root => Path.Combine(root, assembly))
+                .FirstOrDefault(File.Exists);
+
+            // Nothing is claimed about an assembly the build did not contain.
+            if (staged is null) {
+                continue;
+            }
+
+            var installed = Path.Combine(serverPath, assembly);
+
+            if (!File.Exists(installed)) {
+                return $"{assembly} is missing from {serverPath} after the copy.";
+            }
+
+            if (Hash(staged) != Hash(installed)) {
+                return $"{assembly} in {serverPath} is not the one that was just built, so the server "
+                       + "folder still holds the old server code.";
+            }
+        }
+
+        return null;
+    }
+
+    private static string Hash(string path) {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     /// <summary>
@@ -361,7 +611,7 @@ public sealed class ServerInstallService {
     /// </remarks>
     internal static string LockedFileMessage(Exception ex)
         => "A file in the server folder is in use by another process, so the update could not replace it "
-           + $"({ex.Message}). If Imlight is running, stop it and press Download latest again.";
+           + $"({ex.Message}). If Imlight is running, stop it and press the install button again.";
 
     private static void TryDeleteDirectory(string path) {
         try {

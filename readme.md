@@ -46,7 +46,14 @@ and everything it started shuts down with it.
 - **Press Play.** The server starts, warms up, and Wizard101 opens connected to it, with the login screen
   skipped. You never start the server yourself.
 - **Keeps a profile.** **Profile** is who you are on your server: a picture and a banner, how long you have
-  played, the wizards on the account, and the achievements you have earned. All of it stays on your PC.
+  played, the wizards on the account on a shelf, and the achievements you have earned. All of it stays on
+  your PC.
+- **Lets you browse for a picture rather than only picking a file.** A profile picture can come from a
+  backup of Xbox 360 gamerpics - square, which is what a picture wants - and a banner from Wallhaven's
+  weekly toplist, which is wide. Both are searched, paged and cached, so looking at a page twice costs
+  nothing the second time.
+- **Puts its settings in pages.** *Server*, *Client*, *ViewLight* and *Data*, with the server's own settings
+  and the patch server's on a page each. No more scrolling past three groups of cards to reach the fourth.
 - **Plays anywhere.** The caret beside Play joins a server somebody else is running, scans your network for
   one, or connects to Wizard101's own servers.
 - **Runs from a folder, not just an install.** A `portable.txt` marker beside `ViewLight.exe` keeps
@@ -54,6 +61,10 @@ and everything it started shuts down with it.
   a USB stick. See [Portable mode](#portable-mode).
 - **Keeps itself tidy.** Closing ViewLight stops everything it started, and asks first while the server is
   running. Both stop even if the launcher is killed outright, so nothing is left holding a port.
+- **Can start over from nothing.** **Settings → Data → Start over completely** deletes both databases and
+  lets the launcher and the server make themselves new ones - with the copy in your Google Drive as well, if
+  you ask for it, because otherwise your backup would simply put the old data back. It asks twice, and the
+  first of the two has to be read before it can be gone past.
 - **Picks up where it left off.** Update the server and your settings and data are kept.
 
 ## What you need
@@ -87,6 +98,8 @@ notices and corrects it when it can.
 
 **2. Imlight itself.** Press **Download Imlight** (around 260 MB) or point ViewLight at a folder you already
 have. Until there is an install, this is the only screen you get - nothing else can work without a server.
+The **Build channel** above that button chooses whether that is the newest published build or one made from
+Imlight's current source on your machine; see [Choosing a server build](#choosing-a-server-build).
 
 **3. Whose patch server.** This is the one worth reading twice.
 
@@ -106,6 +119,49 @@ collect the game's files from Wizard101, thousands of them, around 18 GB - so pi
 bar underneath says how far along it is. You can also wave it through and let Play get it started. Either
 way it downloads the files itself, which is the workflow Aurorium was built around; ViewLight's part is to
 say how far along it is. See [the patch server](#the-patch-server-in-plain-words).
+
+## Choosing a server build
+
+Imlight is a project that is still moving, and what it publishes on GitHub is marked as a *prerelease*.
+ViewLight can install three different things, chosen with **Build channel** on the first screen and in
+**Settings → Server**:
+
+| Channel | What it installs | When it is for |
+| --- | --- | --- |
+| **Stable release** | Only builds Imlight publishes as a full release, not a prerelease. | The one to pick when you want what the project considers finished. There are **none yet**, and choosing this says so rather than quietly installing a prerelease. |
+| **Prerelease** - the default | The newest build on GitHub, prerelease or not. | The ordinary case today: it is what Imlight publishes, and it is what the download button has always installed. |
+| **Bleeding edge** | Imlight's **current source**, cloned from GitHub, built on this machine, and installed from the result. | A very specific bug or feature that has been committed and is not in any published build yet. |
+
+**Bleeding edge is not a build anybody tested or published.** It is the source as it is this minute, and it
+can be broken. If you report a bug to Imlight's developers while running it, say first that you built it from
+their source rather than installing a release - otherwise they will look for a fault in code that was never
+released.
+
+It is also the only channel that can fail on the machine rather than at GitHub. It needs:
+
+- **git**, to clone and update the checkout;
+- **the .NET 10 SDK**, not just the runtime - ViewLight itself ships only the runtime;
+- **Python 3.12 or newer**, because the type dump Imlight's `Imcodec` submodule needs is made from your own
+  game with [wiztype](https://github.com/wizspoil/wiztype). ViewLight creates a private Python environment
+  under its data folder and installs wiztype into that - nothing goes into your own Python. It then starts
+  Wizard101 once (no account, just the login screen), reads the type registry, and closes the game again
+  **only if ViewLight started it**. The dump is kept at
+  `%LOCALAPPDATA%\ViewLight\source\type-dump.json` (or `<your portable folder>\source\type-dump.json`) and
+  reused until your client's revision changes, so only the first build and the build after a game update do
+  this;
+- **your Wizard101 install** - the same folder the rest of the launcher uses. The message definitions Imlight
+  needs are files inside `Root.wad`, and ViewLight extracts them into the checkout itself.
+
+If you already have a type dump, put it at the `type-dump.json` path above and ViewLight uses it as it is,
+with no Python involved. Deleting that file and its `.revision` companion asks ViewLight to make a fresh one.
+
+**Updating is git's job, not a download's.** The checkout lives in ViewLight's own data folder, so the next
+build is a `git fetch` and a merge, then a rebuild. A checkout with uncommitted edits is never merged over:
+it is built exactly as it is, and the Log says so. Local commits are merged with GitHub's normally; a conflict
+aborts the merge and leaves the tree alone. Every install is still an **overlay** - your `Imlight.ini`, logs,
+caches and database are kept, exactly as with a published build. If the server is running, ViewLight lets it
+keep running through the download or build and stops it only when the new files are about to be written, so
+close Wizard101 first - an install is refused while the game itself is open.
 
 ## Playing
 
@@ -127,9 +183,9 @@ button says *Stop the server* rather than *Stop the servers*.
 | --- | --- |
 | **Home** | The game's banner and the Play button, what Play is doing, and the two builds. |
 | **Home → Play ▾** | Join a server somebody else runs, scan your network for one, or connect to Wizard101's own. |
-| **Profile** | The account Play signs in as: picture, banner, playtime, standing, score, and its wizards. |
+| **Profile** | The account Play signs in as: picture, banner, playtime, standing, score, its wizards, and what it has earned lately. |
 | **Profile → Achievements** | Every badge that account has earned, grouped by category, with a milestone card per ladder. |
-| **Settings** | Your folders, the server, the patch server, and everything ViewLight writes into either config. |
+| **Settings** | Four pages - *Server*, *Client*, *ViewLight* and *Data* - covering your folders, both configs, your backup and the reset. |
 | **Log** | Everything the launcher, the patch server and the server said, in one place. |
 | **About** | Versions, links, and what is still missing. |
 
@@ -150,14 +206,58 @@ they do not match, ViewLight says so - that mismatch is the usual reason a login
 
 **Profile** starts with the profile itself: a picture and a banner you choose, the time that account has
 spent on your server, how often it has signed in, and whether it still counts as **clean**. Choosing a new
-picture or banner shows it straight away.
+picture or banner shows it straight away, and the buttons under the score go to the achievements and sign
+this profile out.
+
+**The profiles database comes up with the launcher.** Your profiles, playtime and badges live in the server's
+own RavenDB, which ViewLight starts when it opens - a few seconds the first time. While it is starting, a
+notification in the top-left corner says **Launching the profiles database…** rather than the launcher looking
+like an account with nothing in it. The Google Drive sync notice appears in the same corner, stacked instead of
+overlapping. Nothing is blocked while either runs: Play works, and pressing it puts the database down so the
+server can have it. A notice reads for a few seconds and then folds itself into a small tray card in that
+corner; the arrow on it opens the messages again and closes them again, and opening them by hand keeps them
+open until you put them away.
+
+**Logging out is how you change account.** **Log out** puts the profile down and the launcher covers itself
+with the **sign-in screen**: the accounts as a row of cards you scroll across, each with its picture, its
+name, its gamerscore and the first few wizards behind it - their school's element logo and level. Click one
+to sign in as it, and ViewLight comes back to its profile. The row slides in, a card lifts under the
+pointer, and the arrows beside it move a page at a time. It is the console's account picker rather than a
+menu with one row in it, and the accounts it shows are this machine's own profiles - the ones your server
+holds an account for.
+
+**To change your picture or your banner, tick Edit profile** in the corner of the banner and click the one
+you want to change. Unticked, they are just pictures; ticked, each wears a dashed edge and opens its two
+choices. Nothing is downloaded until you pick something, and whatever you settle on is kept in your profile,
+so it is backed up with the rest.
+
+**A picture or a banner comes from your computer or from somewhere else.** *From my computer…* opens the
+usual file picker. *Browse gamerpics…* opens a backup of Xbox 360 gamerpics - around 32,500 of them, square,
+which is the shape a profile picture wants - and *Browse wallpapers…* opens Wallhaven's weekly toplist,
+which is wide enough to be a banner and changes every week. Both can be searched, both are shown a page of
+pictures at a time, and both are kept on your PC as they are looked at, so paging back through a grid costs
+nothing the second time.
 
 **Everything on this screen updates as you play** - badges light up as they are earned, the score follows,
 a heading's "unlocked 3 of 40" moves with them, a new wizard appears, and a level, a school or a gold total
 that changes moves too. You should not have to restart the launcher to see any of it.
 
-**Wizards are shown the way the game shows them**: name, school, level, gold and finished quests, all read
-from your own server.
+**Your wizards stand under the account on a shelf**, under the heading **Wizards**: a cup wearing the game's
+own element logo for that wizard's school, the name under it, and the level. Hover one for the rest - gold,
+spells learned, quests finished, and when it was last seen. All of it is read from your own server while it
+is running.
+
+**Under them is a history** of what the account has earned lately, newest first: the badges and the
+milestones together, each with when it happened, what it was worth and the server's own line about it. It is
+the same badges the achievements screen shows rather than a second list, so the two can never disagree, and
+the oldest of them stay on the achievements screen.
+
+**The element logos are the game's own**, not something drawn to stand in for them: ViewLight ships none of
+KingsIsle's art, so the seven - Fire, Ice, Storm, Myth, Life, Death and Balance - are fetched once from the
+Wizard101 wiki and kept beside the launcher's other downloaded art. Each one is the school's own emblem, the
+element inside the shield KingsIsle draws it in - the flame, the snowflake, the bolt, the scales, the skull -
+rather than the few-pixel marker the wiki uses in its tables, which is unreadable at card size. A wizard whose
+school was never read is shown without a logo rather than with one that belongs to a different school.
 
 **Achievements** are a screen of their own, opened from the score circle. Every badge sits under its
 category, and each heading says how many are unlocked and what they scored. The long ladders are shown as one
@@ -189,11 +289,28 @@ the Profile tab offers to do for you.
 
 ## Your settings
 
-There are two kinds, and they are kept separately.
+Settings is four pages, chosen from the row at the top of it, so nothing is found by scrolling past
+something else.
 
-**ViewLight's own settings**, under **Settings → ViewLight Settings**: the theme (*System*, *Light* or
-*Dark*), the page it opens on, whether closing it asks first while the server is running, and whether
-milestone achievements are announced as toasts.
+| Page | What is on it |
+| --- | --- |
+| **Server → ImLight** | The server folder, its build and its updates, the admin account, realms and ports, logging and the client version it accepts, and what a new character starts with. |
+| **Server → Aurorium** | The patch server: whose it is, the folder and port for one on this PC, what it has fetched, and which of those versions are kept. |
+| **Client → Game folder** | Where Wizard101 is installed. |
+| **Client → New characters** | Skipping the tutorial, the starting level, gold and zone, and the starter items. |
+| **ViewLight** | The launcher's own settings: theme, the page it opens on, the close prompt, milestone notes, verbose mode, and portable mode. |
+| **Data** | The cloud backup, and starting over completely. |
+
+There are two kinds of setting, and they are kept separately.
+
+**ViewLight's own settings**, under **Settings → ViewLight**: the theme (*System*, *Light* or *Dark*), the
+page it opens on, whether closing it asks first while the server is running, whether milestone achievements
+are announced as toasts, verbose mode, and portable mode.
+
+**The launcher explains itself only when asked.** Most controls have a sentence under them saying what they
+are for. That sentence is a comment on the screen rather than part of it, so it is hidden by default and the
+cards close up around it. **Settings → ViewLight → Verbose mode** shows every one of them at once, and the
+choice is remembered; off again, they all go away.
 
 **The server's settings** are the fields in Settings that write into the server's own configuration file.
 ViewLight only changes the values you can see and leaves the rest of that file - comments included - exactly
@@ -218,7 +335,8 @@ alone.
 **Skipping the tutorial is a shortcut with a catch.** New characters go straight to the starting zone, but
 the things the *tutorial* would have given them - the school's first spell, and the starter items being
 equipped - do not happen. The setting says so where you turn it on. The fix is in the game: walk to
-Ravenwood, learn your spell from the trainer, and equip the starter items out of your inventory.
+Ravenwood, learn your spell from the trainer, and equip the starter items out of your inventory. The
+starting level, gold, zone and items are under **Settings → Client → New characters**.
 
 ## The patch server, in plain words
 
@@ -436,6 +554,15 @@ account.
 **The first screen says Imlight is missing.** Point it at a folder you already have, or press **Download
 Imlight**. That screen is deliberate: nothing else in the launcher works without a server.
 
+**A profile will not load on a machine with no internet connection.** The databases are this machine's own
+and are read at `127.0.0.1` - ViewLight uses the loopback address and the loopback client, with the system
+proxy switched off, so no part of reading a database can reach the network, the network's proxy, or anything
+that has to be looked up. If a database still cannot be read, the **Log** now carries what the database
+itself printed before it stopped - a port something else had taken, a data directory it could not open, a
+runtime it was not given - which is the thing to paste when asking about it. What is worth checking first is
+whether the database is up at all: the line under the profile says "the server's own RavenDB is running on
+port …" when the launcher is holding it, and which port the server uses is `EmbeddedDatabasePort` in `Config/Imlight.ini`.
+
 **Play says Wizard101 was not found.** Your game folder is wrong. Check it under **Settings → Game folder**;
 the line underneath says what is and is not there.
 
@@ -550,11 +677,19 @@ or use a release.
 
 ## Fork it
 
-Feel free to fork the launcher and open a pull request. This is an example project, written out of a
-long-standing love of the game and the novelty of Imlight finally existing - private-server software that
-lets Wizard101 be played offline. The server is the hard part and it is not mine; this launcher is a nicer
-way to set it up and configure it, plus the things you can only do because your own backend is running on the
-same machine as the client.
+**ViewLight 2.0 is where this launcher stops growing.** It does what it set out to do - find the game,
+install and update the server, run the patch server, start a session, keep a profile and its achievements,
+and back all of it up - and what is left is another pass over the whole thing rather than another feature: a
+hand rewrite that keeps the same concept with nothing incidental carried over, an achievements system that
+is finished and worth chasing rather than a ladder with gaps in it, some tidying of the interface, and the
+optimisations that come from one person reading the whole program at once.
+
+It is an idea and a reference as much as a program. Fork it, change it, take the parts you like and build
+your own launcher - pull requests are welcome, and so is a fork that goes somewhere else entirely. This is
+an example project, written out of a long-standing love of the game and the novelty of Imlight finally
+existing - private-server software that lets Wizard101 be played offline. The server is the hard part and
+it is not mine; this launcher is a nicer way to set it up and configure it, plus the things you can only do
+because your own backend is running on the same machine as the client.
 
 ## Known limits
 

@@ -68,6 +68,77 @@ public class ServerRunnerTests {
     }
 
     [Fact]
+    public async Task AnOpenPortDoesNotMeanReadyWhileTheServersLogIsStillStarting() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.CreateDirectory("server");
+        var logPath = workspace.Path(Path.Combine("server", "logs", "log.txt"));
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+
+        // Imlight writes this file long before its login port opens, and opens the port before its
+        // database is ready. A log that exists is therefore the signal to wait for - not the port.
+        File.WriteAllText(logPath, "2026-10-17 17:17:00.000 INF Director : Resource loading completed.\r\n");
+
+        var port = PortAllocator.FindFreePort()!.Value;
+        using var runner = new ServerRunner();
+        var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runner.Ready += (_, reason) => ready.TrySetResult(reason);
+
+        runner.Start(OptionsFor(workspace, serverPath, port));
+
+        // The account server is listening, which used to be enough on its own.
+        using var accountServer = new TcpListener(IPAddress.Loopback, port);
+        accountServer.Start();
+
+        await Task.Delay(TimeSpan.FromSeconds(4));
+
+        Assert.Equal(ServerState.WarmingUp, runner.State);
+        Assert.False(ready.Task.IsCompleted,
+            "The runner called the server ready on the port alone while its log was still booting.");
+
+        // The database is up now, and the server says so the way it always does.
+        File.AppendAllText(logPath,
+            "2026-10-17 17:17:39.000 INF Director : Imlight may now be connected to.\r\n");
+
+        var winner = await Task.WhenAny(ready.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+
+        Assert.True(winner == ready.Task, "The runner never noticed the readiness line.");
+        Assert.Contains("server log reports it is up", await ready.Task);
+
+        await runner.StopAsync();
+    }
+
+    [Fact]
+    public async Task FallsBackToThePortWhenTheLogNeverReportsItUp() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.CreateDirectory("server");
+        var logPath = workspace.Path(Path.Combine("server", "logs", "log.txt"));
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        File.WriteAllText(logPath, "a log this server no longer writes to\r\n");
+
+        var port = PortAllocator.FindFreePort()!.Value;
+        using var runner = new ServerRunner();
+        var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runner.Ready += (_, reason) => ready.TrySetResult(reason);
+
+        // Short fallback for the test: production waits two minutes, which is the ordinary slow boot.
+        var options = OptionsFor(workspace, serverPath, port) with {
+            LogFallbackDelay = TimeSpan.FromSeconds(2),
+        };
+
+        runner.Start(options);
+
+        using var accountServer = new TcpListener(IPAddress.Loopback, port);
+        accountServer.Start();
+
+        var winner = await Task.WhenAny(ready.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+
+        Assert.True(winner == ready.Task, "The port was never used as the fallback.");
+        Assert.Contains("has not reported it up", await ready.Task);
+
+        await runner.StopAsync();
+    }
+
+    [Fact]
     public async Task StaysWarmingUpWhileThePortIsClosed() {
         using var workspace = new TempWorkspace();
         var serverPath = workspace.CreateDirectory("server");

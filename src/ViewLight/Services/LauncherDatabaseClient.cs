@@ -38,8 +38,11 @@ public sealed class LauncherDatabaseClient : IDisposable {
         _ownsHttp = http is null;
 
         // A short timeout on purpose: this client is written to and read from while the launcher is holding
-        // the UI, and a database that has stopped answering must not hold it.
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+        // the UI, and a database that has stopped answering must not hold it - and the loopback client, for
+        // the same reason the player database uses one: this database is started on a free port of this
+        // machine's own loopback, so the system proxy has no business in the conversation and a machine with
+        // no network at all must still be able to read its own notes.
+        _http = http ?? LoopbackHttp.Client(TimeSpan.FromSeconds(8));
         _port = port;
         _databaseName = databaseName ?? LauncherDatabase.DatabaseName;
     }

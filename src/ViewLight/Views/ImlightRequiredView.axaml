@@ -60,14 +60,38 @@
       <Border Classes="card">
         <StackPanel Spacing="10">
           <TextBlock Classes="cardTitle" Text="Get Imlight" />
-          <TextBlock Classes="muted"
-                     Text="Downloads the newest build from GitHub and unpacks it into the folder above. Anything already configured in that folder is kept." />
+
+          <!-- Which builds to install. The choice is here as well as in Settings because it is the
+               first screen a machine with no server sees, and the one channel that is not a download
+               must not be reachable only after there is a server to change settings on. -->
+          <StackPanel Spacing="6">
+            <TextBlock Classes="label" Text="Build channel" />
+            <StackPanel Orientation="Horizontal" Spacing="18" IsEnabled="{Binding !IsBusy}">
+              <RadioButton GroupName="ServerChannelFirstRun" Content="Stable release"
+                           IsChecked="{Binding IsStableChannel, Mode=TwoWay}" />
+              <RadioButton GroupName="ServerChannelFirstRun" Content="Prerelease"
+                           IsChecked="{Binding IsPrereleaseChannel, Mode=TwoWay}" />
+              <RadioButton GroupName="ServerChannelFirstRun" Content="Bleeding edge"
+                           IsChecked="{Binding IsBleedingEdgeChannel, Mode=TwoWay}" />
+            </StackPanel>
+            <TextBlock Classes="muted note" TextWrapping="Wrap" Text="{Binding ChannelNote}" />
+          </StackPanel>
+
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding InstallDescription}" />
+
+          <TextBlock Classes="warning" TextWrapping="Wrap"
+                     Text="{Binding BleedingEdgeWarning}"
+                     IsVisible="{Binding IsBleedingEdge}" />
 
           <StackPanel Orientation="Horizontal" Spacing="10">
-            <Button Classes="accent" Content="Download Imlight"
+            <Button Classes="accent" Content="{Binding InstallImlightLabel}"
                     Command="{Binding InstallImlightCommand}" />
             <TextBlock Classes="muted" VerticalAlignment="Center" Text="{Binding LatestReleaseText}" />
           </StackPanel>
+
+          <TextBlock Classes="muted note" TextWrapping="Wrap"
+                     Text="{Binding EdgeTypeDumpNote}"
+                     IsVisible="{Binding IsBleedingEdge}" />
 
           <TextBlock Classes="error" Text="{Binding ReleaseCheckError}"
                      IsVisible="{Binding HasReleaseCheckError}" />

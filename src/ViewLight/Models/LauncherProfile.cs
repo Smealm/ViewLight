@@ -253,6 +253,24 @@ public sealed class LauncherProfile {
     /// <summary>What the profile is called on screen: its own name, or the account's.</summary>
     public string Name => string.IsNullOrWhiteSpace(DisplayName) ? Username : DisplayName;
 
+    /// <summary>The letters a profile with no picture of its own is drawn under.</summary>
+    public string Initials => InitialsOf(Name);
+
+    /// <summary>One or two letters for a name, so an empty circle is still a face.</summary>
+    /// <remarks>
+    /// Here rather than on a screen, because two screens draw the same fallback - the profile's own circle and
+    /// the tile the sign-in screen offers it as - and they must not disagree about whose letters they are.
+    /// </remarks>
+    public static string InitialsOf(string name) {
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        return words.Length switch {
+            0 => "?",
+            1 => words[0][..1].ToUpperInvariant(),
+            _ => $"{char.ToUpperInvariant(words[0][0])}{char.ToUpperInvariant(words[1][0])}",
+        };
+    }
+
     /// <summary>
     /// The name, so a picker listing profiles shows people rather than the type they are stored in.
     /// </summary>
@@ -393,7 +411,30 @@ public sealed class ProfileWizard {
     /// </remarks>
     public string LevelText => Level <= 0 ? "Level not read yet" : $"Level {Level}";
 
+    /// <summary>
+    /// The level as a badge shows it: the number on its own, or a dash when there is none to show.
+    /// </summary>
+    /// <remarks>
+    /// The number rather than the word, because it is drawn inside a circle the size of the profile's own
+    /// score - where "Level not read yet" would either be cut off or make the circle a box. A dash is not a
+    /// zero: a level that has not been read is not level nothing.
+    /// </remarks>
+    public string LevelBadgeText => Level <= 0 ? "—" : Level.ToString();
+
     public string GoldText => $"{Gold:N0} gold";
+
+    /// <summary>
+    /// How many spells the wizard's spellbook holds, as its card shows it.
+    /// </summary>
+    /// <remarks>
+    /// Counted from the spell templates the server lists in the wizard's spellbook - a collection rather
+    /// than a level, so it says how much of the game this character has actually learned.
+    /// </remarks>
+    public string SpellsText => LearnedSpells.Count switch {
+        0 => "no spells",
+        1 => "1 spell",
+        var count => $"{count} spells",
+    };
 
     public string QuestsText => QuestsCompleted switch {
         0 => "no quests finished",

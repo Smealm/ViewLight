@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
@@ -12,11 +13,16 @@ public partial class MainWindow : Window {
     private MainWindowViewModel? _viewModel;
 
     /// <summary>
-    /// The window achievements are announced in. Its own window rather than a card here, because a badge
-    /// is earned while the game is being played - so it has to be able to appear over whatever is on
-    /// screen, in the corner of the monitor, with this window behind the game or not there at all.
+    /// The window achievements are announced in, once there has been an achievement to announce. Its own
+    /// window rather than a card here, because a badge is earned while the game is being played - so it has to
+    /// be able to appear over whatever is on screen, in the corner of the monitor, with this window behind the
+    /// game or not there at all. Built on the first toast rather than with this window: it is a second XAML
+    /// tree, and most starts never show it.
     /// </summary>
-    private readonly AchievementToastWindow _toast = new();
+    private AchievementToastWindow? _toast;
+
+    /// <summary>The pages built so far, by the name of the view they are.</summary>
+    private readonly Dictionary<string, Control> _pages = [];
 
     /// <summary>Set once the close has been answered, so the second pass does not ask again.</summary>
     private bool _closeApproved;
@@ -30,12 +36,97 @@ public partial class MainWindow : Window {
         _viewModel = new MainWindowViewModel {
             PickFolderAsync = PickFolderAsync,
             PickImageAsync = PickImageAsync,
+            BrowseImageAsync = BrowseImageAsync,
+            ConfirmResetAsync = ConfirmResetAsync,
         };
 
         DataContext = _viewModel;
 
-        _toast.Attach(_viewModel);
+        // Only the page the launcher opens on is built now; the rest are made when they are first asked for.
+        ShowPage();
+
+        _viewModel.PropertyChanged += OnViewModelChanged;
     }
+
+    private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e) {
+        switch (e.PropertyName) {
+            case nameof(MainWindowViewModel.IsToastShown) when _viewModel?.IsToastShown == true:
+                Toast.Attach(_viewModel);
+                break;
+
+            // A page is built by being asked for, so a change of section or of the profile's own page is the
+            // moment to hand the host the view that section is.
+            case nameof(MainWindowViewModel.Section):
+            case nameof(MainWindowViewModel.ProfilePage):
+                ShowPage();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Puts the view for the section on screen, building it the first time it is needed.
+    /// </summary>
+    /// <remarks>
+    /// The window used to declare every page at once and let the view model's visibility flags choose one,
+    /// which builds all six control trees before the first frame - Settings alone is hundreds of controls.
+    /// Nothing about the pages is conditional any more: the one on screen is in the host, and the others do
+    /// not exist until somebody goes to them.
+    /// </remarks>
+    private void ShowPage() {
+        if (_viewModel is null) {
+            return;
+        }
+
+        if (PageFor(_viewModel) is not { } name) {
+            PageHost.Content = null;
+            return;
+        }
+
+        if (!_pages.TryGetValue(name, out var page)) {
+            page = name switch {
+                nameof(HomeView) => new HomeView(),
+                nameof(ProfileView) => new ProfileView(),
+                nameof(AchievementsView) => new AchievementsView(),
+                nameof(SettingsView) => new SettingsView(),
+                nameof(LogsView) => new LogsView(),
+                _ => new AboutView(),
+            };
+
+            _pages[name] = page;
+        }
+
+        if (!ReferenceEquals(PageHost.Content, page)) {
+            PageHost.Content = page;
+        }
+    }
+
+    /// <summary>The view a launcher in this state is showing, or <c>null</c> when it is showing none.</summary>
+    private static string? PageFor(MainWindowViewModel viewModel) {
+        if (viewModel.IsHomeSelected) {
+            return nameof(HomeView);
+        }
+
+        if (viewModel.ShowProfilePage) {
+            return nameof(ProfileView);
+        }
+
+        if (viewModel.ShowAchievementsPage) {
+            return nameof(AchievementsView);
+        }
+
+        if (viewModel.IsSettingsSelected) {
+            return nameof(SettingsView);
+        }
+
+        if (viewModel.IsLogsSelected) {
+            return nameof(LogsView);
+        }
+
+        return viewModel.IsAboutSelected ? nameof(AboutView) : null;
+    }
+
+    /// <summary>The toast window, made the first time there is a badge to announce.</summary>
+    private AchievementToastWindow Toast => _toast ??= new AchievementToastWindow();
 
     /// <summary>
     /// Notes the pointer on the profile card, which is what decides whether it folds back up: leaving it
@@ -84,6 +175,38 @@ public partial class MainWindow : Window {
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
 
+    /// <summary>
+    /// Opens the picture browser for one of the two collections and hands back whatever was chosen.
+    /// </summary>
+    /// <remarks>
+    /// The window is built here rather than in the view model, which is the same arrangement the file picker
+    /// uses: the view model asks for a picture and knows nothing about where the answer comes from. A close
+    /// that answered nothing - Cancel, Escape, the title-bar cross - comes back as <c>null</c>, which the
+    /// caller reads as "nothing was chosen".
+    /// </remarks>
+    private async Task<ChosenImage?> BrowseImageAsync(ImageBrowserSource source) {
+        var window = new ImageBrowserWindow(new ImageBrowserViewModel(source));
+
+        return await window.ShowDialog<ChosenImage?>(this);
+    }
+
+    /// <summary>
+    /// Asks for a full reset, in two steps, and hands back what was answered.
+    /// </summary>
+    /// <param name="targets">What is about to be deleted, read out on the first step.</param>
+    /// <param name="cloudPossible">Whether there is a cloud copy this launcher can delete.</param>
+    /// <remarks>
+    /// The window is told the list rather than deriving it, so what is read out is exactly what the reset will
+    /// act on - a list written twice is a list that can disagree with itself.
+    /// </remarks>
+    private async Task<WipeRequest?> ConfirmResetAsync(IReadOnlyList<string> targets, bool cloudPossible) {
+        var dialog = new WipeDialog(
+            targets, _viewModel?.ResetKeepsText ?? string.Empty, cloudPossible,
+            _viewModel?.BackUpToCloud == true);
+
+        return await dialog.ShowDialog<WipeRequest?>(this);
+    }
+
     private async Task<string?> PickFolderAsync(string? startAt) {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions {
             Title = "Select a folder",
@@ -130,7 +253,7 @@ public partial class MainWindow : Window {
     /// this one, and a notification card left floating over the desktop with nothing behind it is exactly
     /// the kind of ghost this launcher is not allowed to leave.
     /// </summary>
-    private void CloseToast() => _toast.CloseWithLauncher();
+    private void CloseToast() => _toast?.CloseWithLauncher();
 
     private async Task ConfirmThenCloseAsync() {
         if (_viewModel is null || _promptIsOpen) {

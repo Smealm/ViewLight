@@ -27,6 +27,20 @@ public class ImlightRequirementTests {
     // ------------------------------------------------------------------ what is missing
 
     [Fact]
+    public void AConfigAlreadyReadAnswersTheSameWayAsAFreshRead() {
+        using var workspace = new TempWorkspace();
+        var server = Install(workspace);
+
+        var read = ImlightConfig.Read(server);
+
+        // The launcher reads the config for its own settings and then asks what is missing from the same
+        // folder. Two answers have to be one: a second read of a file is a second chance to disagree about
+        // whether the install is there, and a second wait when it is not.
+        Assert.Equal(ImlightRequirements.For(server).Gap, ImlightRequirements.For(server, read).Gap);
+        Assert.Equal(ImlightRequirements.For(server).Missing, ImlightRequirements.For(server, read).Missing);
+    }
+
+    [Fact]
     public void TheFolderIsTheFirstThingThatHasToBeThere() {
         Assert.Equal(ImlightGap.NoFolder, ImlightRequirements.For(null).Gap);
         Assert.Equal(ImlightGap.NoFolder, ImlightRequirements.For("   ").Gap);

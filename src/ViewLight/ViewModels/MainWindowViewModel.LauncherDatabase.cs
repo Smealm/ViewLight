@@ -80,8 +80,38 @@ public sealed partial class MainWindowViewModel {
         return _launcherDatabaseAttempt;
     }
 
+    /// <summary>
+    /// Whether the launcher is waiting for the profiles database to come up.
+    /// </summary>
+    /// <remarks>
+    /// A RavenDB start is seconds of work and the profile screen has nothing to show until it answers, which
+    /// reads as an account that does not exist rather than as one that is being loaded. The window shows a
+    /// card while this is true, saying what it is waiting for; it is true for exactly as long as an attempt is
+    /// running, so a failed attempt takes it down and leaves the status line and the Log to explain.
+    /// </remarks>
+    [ObservableProperty] private bool _isLauncherDatabaseStarting;
+
+    partial void OnIsLauncherDatabaseStartingChanged(bool value) => RefreshNotifications();
+
     /// <summary>The open itself, which is what <see cref="EnsureLauncherDatabaseAsync"/> remembers.</summary>
     private async Task OpenLauncherDatabaseAsync() {
+        // Nothing to wait for when there is nothing to open, and nothing to say about it either.
+        if (_launcherDatabase.IsRunning || RequiresImlight || _config is null) {
+            return;
+        }
+
+        IsLauncherDatabaseStarting = true;
+
+        try {
+            await OpenLauncherDatabaseCoreAsync().ConfigureAwait(true);
+        }
+        finally {
+            IsLauncherDatabaseStarting = false;
+        }
+    }
+
+    /// <summary>The attempt itself, with the window already saying that it is under way.</summary>
+    private async Task OpenLauncherDatabaseCoreAsync() {
         if (_launcherDatabase.IsRunning) {
             return;
         }
@@ -218,6 +248,7 @@ public sealed partial class MainWindowViewModel {
         var failed = await _launcherDatabase.StartAsync(setup).ConfigureAwait(true);
 
         if (failed is not null) {
+            ReportDatabaseOutput("The launcher's own database", setup, _launcherDatabase.OutputLines);
             return failed;
         }
 
@@ -227,6 +258,9 @@ public sealed partial class MainWindowViewModel {
 
         var why = _launcherDatabase.Problem ?? "The database did not come up.";
         await _launcherDatabase.StopAsync().ConfigureAwait(true);
+
+        // What the database printed on the way up, which is the only thing that knows why it never got there.
+        ReportDatabaseOutput("The launcher's own database", setup, _launcherDatabase.OutputLines);
         return why;
     }
 
@@ -294,6 +328,43 @@ public sealed partial class MainWindowViewModel {
     /// as soon as the writing is over.
     /// </remarks>
     private async Task ReleaseDatabasesForInstallAsync() {
+        // The game is the one thing that is not the launcher's to end on the way past an install button.
+        // Its server is about to be stopped and its files replaced, so an install that continued would
+        // disconnect a session that looked like it was going to keep working.
+        if (ClientIsRunning || ClientIsStarting) {
+            throw new InvalidOperationException(
+                "Wizard101 is running. Close it and press the install button again: the server has to stop "
+                + "before the files it is running from can be replaced.");
+        }
+
+        // A running server holds the very binaries the overlay came to replace. It is stopped here, at
+        // the last moment before the writing rather than before the download or the build, so a build
+        // that fails or a download that is cancelled costs nothing that was running. Stopping it through
+        // _server directly, and not through StopServerAsync, is deliberate: the latter settles the
+        // launcher's own database back onto the folder that is about to be written.
+        if (ServerIsBusyOrUp || _server.IsRunning) {
+            AppendLog(LogLevel.Info,
+                "Stopping the server so the new build can be written over the old one…");
+
+            StopProfileWatch();
+            EndPlayingSession();
+            await _server.StopAsync().ConfigureAwait(true);
+
+            Phase = LauncherPhase.Idle;
+            RefreshDerived();
+        }
+
+        // A server started outside the launcher - from a shortcut, a terminal, or a previous launcher
+        // session - is not _server, so nothing above has stopped it, and it is holding the very
+        // Imlight.Director.exe and DLLs the overlay came to replace. That is the one case where a build
+        // finishes cleanly and the files are still the old ones: the copy cannot open them, and the
+        // install reports a locked file. The same guard Play uses applies here, and it is deliberately
+        // limited to a Director started from this install - somebody else's server is not ours to end.
+        if (ServerProcesses.StopAll(ImlightConfig.ExecutablePathFor(ServerPath), AppendLog).Count > 0) {
+            Phase = LauncherPhase.Idle;
+            RefreshDerived();
+        }
+
         // Whether there was anything to let go of, worked out before the stopping rather than after it: a fresh
         // install has neither database up, and a log line claiming they were stopped would be a small lie in the
         // one place a user looks when something goes wrong.

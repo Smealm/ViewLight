@@ -106,6 +106,28 @@ public class PlayerDatabaseTests {
     }
 
     [Fact]
+    public async Task WaitsForADatabaseThatIsStillStarting() {
+        var calls = 0;
+        var handler = new FakeHttpHandler(_ => {
+            calls++;
+
+            // The first request arrives while Imlight's embedded database is still binding its port.
+            return calls == 1
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent(string.Empty) }
+                : new HttpResponseMessage(HttpStatusCode.OK) {
+                    Content = new StringContent(Listing(AdminAccount()), Encoding.UTF8, "application/json"),
+                };
+        });
+
+        using var client = new PlayerDatabaseClient(new HttpClient(handler));
+        var contents = await client.ReadWhenAnsweringAsync(
+            Port, AdminUsername, AdminPassword, TimeSpan.FromSeconds(3));
+
+        Assert.True(contents.IsTrustworthy, contents.Problem);
+        Assert.True(calls >= 2, "The read did not try again after the database refused it.");
+    }
+
+    [Fact]
     public async Task ReadsEveryPageOfTheListing() {
         // A full page is a request for the next one, or the launcher would quietly see part of the
         // database - which is the kind of half-truth that makes an account look missing.

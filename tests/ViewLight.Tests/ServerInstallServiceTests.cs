@@ -62,6 +62,27 @@ public class ServerInstallServiceTests {
     private static string ReadInstalledMarker(string serverPath)
         => File.ReadAllText(ImlightConfig.ExecutablePathFor(serverPath));
 
+    /// <summary>
+    /// The shape <c>dotnet publish -o</c> leaves behind: a flat folder with the apphost, the managed
+    /// assembly and the config, and none of the folders the server creates at runtime.
+    /// </summary>
+    private static string WritePublishFolder(
+        TempWorkspace workspace, string marker, string config, bool includeAssembly = true) {
+
+        var folder = workspace.CreateDirectory($"publish-{marker}");
+        File.WriteAllText(Path.Combine(folder, ImlightConfig.ServerExecutableName), $"exe:{marker}");
+
+        if (includeAssembly) {
+            File.WriteAllText(Path.Combine(folder, "Imlight.Director.dll"), $"dll:{marker}");
+        }
+
+        Directory.CreateDirectory(Path.Combine(folder, "Config"));
+        File.WriteAllText(Path.Combine(folder, "Config", "Imlight.ini"), config);
+        File.WriteAllText(Path.Combine(folder, "Config", "akka.conf"), "akka");
+
+        return folder;
+    }
+
     [Fact]
     public async Task InstallsAFreshServer() {
         using var workspace = new TempWorkspace();
@@ -145,6 +166,123 @@ public class ServerInstallServiceTests {
     }
 
     [Fact]
+    public async Task InstallsAPublishFolderOverTheExistingServerWithoutTouchingItsData() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        // ---------- an older release is installed, and has been used.
+        var v1 = BuildReleaseZip("v1", ReleaseConfig);
+        Assert.True((await new ServerInstallService(FakeHttpHandler.Serving(v1))
+            .InstallAsync(Release("r800000.Wizard_1_610", v1), serverPath)).Success);
+
+        var config = ImlightConfig.TryLoad(serverPath);
+        Assert.NotNull(config);
+        config.AdminUsername = "proprietor";
+        config.Save(serverPath);
+
+        // Same length as the build's own assembly, different bytes: only a content check notices that the
+        // old managed assembly is still there.
+        workspace.WriteFile(Path.Combine("server", "Imlight.Director.dll"), "dll:v1");
+        workspace.WriteFile(Path.Combine("server", "logs", "log.txt"), "previous session");
+        workspace.WriteFile(Path.Combine("server", "ImlightEmbeddedDatabase", "playerdata"), "accounts");
+        workspace.WriteFile(Path.Combine("server", "RavenDB", "Server", "keep.txt"), "database engine");
+
+        // ---------- the thing a source build produced.
+        var publish = WritePublishFolder(workspace, "v2", ReleaseConfig);
+
+        var result = await new ServerInstallService()
+            .InstallFromFolderAsync(publish, "edge-abc1234", serverPath);
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(result.FilesWritten > 0);
+        Assert.Contains("exe:v2", ReadInstalledMarker(serverPath));
+        Assert.Equal("dll:v2", File.ReadAllText(Path.Combine(serverPath, "Imlight.Director.dll")));
+
+        // The user's setting wins over the build's default, exactly as with an archive install.
+        var installed = ImlightConfig.TryLoad(serverPath);
+        Assert.NotNull(installed);
+        Assert.Equal("proprietor", installed.AdminUsername);
+
+        // Runtime data the server generated is not build output and was not deleted.
+        Assert.True(File.Exists(workspace.Path(Path.Combine("server", "logs", "log.txt"))));
+        Assert.True(File.Exists(workspace.Path(Path.Combine("server", "ImlightEmbeddedDatabase", "playerdata"))));
+        Assert.True(File.Exists(workspace.Path(Path.Combine("server", "RavenDB", "Server", "keep.txt"))));
+    }
+
+    [Fact]
+    public async Task InstallsABuildSpreadOverSeveralFolders() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        // What a source build leaves behind: the runnable tree in Director's RID folder, and the two
+        // libraries beside it in their own folders. Together they are the server.
+        var director = WritePublishFolder(workspace, "director", ReleaseConfig);
+        var corelib = workspace.CreateDirectory("build-corelib");
+        var common = workspace.CreateDirectory("build-common");
+
+        workspace.WriteFile(Path.Combine("build-corelib", "Imlight.CoreLib.dll"), "corelib");
+        workspace.WriteFile(Path.Combine("build-corelib", "runtimes", "native", "only-here.dll"), "native");
+        workspace.WriteFile(Path.Combine("build-common", "Imlight.Common.dll"), "common");
+
+        var result = await new ServerInstallService()
+            .InstallFromFoldersAsync(
+                [director, corelib, common], "edge-abc1234", serverPath);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("exe:director", ReadInstalledMarker(serverPath));
+        Assert.Equal("corelib", File.ReadAllText(Path.Combine(serverPath, "Imlight.CoreLib.dll")));
+        Assert.Equal("common", File.ReadAllText(Path.Combine(serverPath, "Imlight.Common.dll")));
+
+        // A file no folder but CoreLib's owns was deployed as well, so every root is read.
+        Assert.Equal(
+            "native",
+            File.ReadAllText(Path.Combine(serverPath, "runtimes", "native", "only-here.dll")));
+    }
+
+    [Fact]
+    public async Task RefusesAFolderSetWithoutTheExecutableAndLeavesTheServerAlone() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        var v1 = BuildReleaseZip("v1", ReleaseConfig);
+        Assert.True((await new ServerInstallService(FakeHttpHandler.Serving(v1))
+            .InstallAsync(Release("r800000.Wizard_1_610", v1), serverPath)).Success);
+
+        // Libraries but no host: still not a server, however many folders are given.
+        var corelib = workspace.CreateDirectory("build-corelib");
+        workspace.WriteFile(Path.Combine("build-corelib", "Imlight.CoreLib.dll"), "corelib");
+
+        var result = await new ServerInstallService()
+            .InstallFromFoldersAsync([corelib], "edge-partial", serverPath);
+
+        Assert.False(result.Success);
+        Assert.Contains(ImlightConfig.ServerExecutableName, result.Message);
+        Assert.Contains("exe:v1", ReadInstalledMarker(serverPath));
+        Assert.False(File.Exists(Path.Combine(serverPath, "Imlight.CoreLib.dll")));
+    }
+
+    [Fact]
+    public async Task RefusesABuildFolderWithoutTheExecutableAndLeavesTheServerAlone() {
+        using var workspace = new TempWorkspace();
+        var serverPath = workspace.Path("server");
+
+        var v1 = BuildReleaseZip("v1", ReleaseConfig);
+        Assert.True((await new ServerInstallService(FakeHttpHandler.Serving(v1))
+            .InstallAsync(Release("r800000.Wizard_1_610", v1), serverPath)).Success);
+
+        // A publish that produced the library but not the host is not a server folder.
+        var publish = WritePublishFolder(workspace, "partial", ReleaseConfig, includeAssembly: true);
+        File.Delete(Path.Combine(publish, ImlightConfig.ServerExecutableName));
+
+        var result = await new ServerInstallService()
+            .InstallFromFolderAsync(publish, "edge-partial", serverPath);
+
+        Assert.False(result.Success);
+        Assert.Contains(ImlightConfig.ServerExecutableName, result.Message);
+        Assert.Contains("exe:v1", ReadInstalledMarker(serverPath));
+    }
+
+    [Fact]
     public async Task UnwrapsArchivesThatNestEverythingInOneFolder() {
         using var workspace = new TempWorkspace();
         // Some earlier releases wrapped the build in a top-level folder rather than being flat.
@@ -219,7 +357,7 @@ public class ServerInstallServiceTests {
     }
 
     [Fact]
-    public async Task WarnsWhenTheArchiveHasNoServerExecutable() {
+    public async Task RefusesAnArchiveWithoutAServerExecutable() {
         using var workspace = new TempWorkspace();
 
         using var stream = new MemoryStream();
@@ -233,9 +371,11 @@ public class ServerInstallServiceTests {
         var result = await new ServerInstallService(FakeHttpHandler.Serving(bytes))
             .InstallAsync(Release("r800000.Wizard_1_610", bytes), serverPath);
 
-        Assert.True(result.Success);
-        Assert.NotNull(result.Warning);
-        Assert.Contains(ImlightConfig.ServerExecutableName, result.Warning);
+        // Nothing is written: a tree without the executable is not an Imlight build, and overlaying it
+        // would leave the server folder a mixture that still looks installed.
+        Assert.False(result.Success);
+        Assert.Contains(ImlightConfig.ServerExecutableName, result.Message);
+        Assert.False(File.Exists(workspace.Path(Path.Combine("server", "README.txt"))));
     }
 
     [Fact]
@@ -398,7 +538,7 @@ public class ServerInstallServiceTests {
         // Windows' own sentence names the file and nothing else, and the file is never the thing at fault -
         // so the message says what is, and what to press.
         Assert.Contains("in use by another process", result.Message);
-        Assert.Contains("stop it and press Download latest again", result.Message);
+        Assert.Contains("stop it and press the install button again", result.Message);
         Assert.Contains(ImlightConfig.ServerExecutableName, result.Message);
         Assert.Contains("exe:v1", ReadInstalledMarker(serverPath));
     }

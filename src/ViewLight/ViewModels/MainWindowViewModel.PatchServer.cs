@@ -426,6 +426,10 @@ public sealed partial class MainWindowViewModel {
     }
 
     partial void OnPatchServerPathChanged(string value) {
+        if (_startingUp) {
+            return;
+        }
+
         _store.Settings.PatchServerPath = (value ?? string.Empty).Trim();
         _store.Save();
         RefreshPatchFolderStatus();
@@ -672,7 +676,7 @@ public sealed partial class MainWindowViewModel {
     /// answer is the same one the session will use rather than a second opinion about it.
     /// </remarks>
     public string? ServerWantedRevision
-        => (_config ?? ImlightConfig.TryLoad(ServerPath))?.GameRevision ?? GameRevision;
+        => _config?.GameRevision ?? GameRevision;
 
     /// <summary>
     /// Works the copy out again when the revision it is aimed at is no longer the one on screen.

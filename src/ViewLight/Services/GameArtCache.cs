@@ -42,10 +42,10 @@ public sealed class GameArtCache {
     private const string FileNamePrefix = "wizard101-";
 
     /// <summary>The eight bytes every PNG starts with.</summary>
-    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    internal static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     /// <summary>The IEND chunk, which is how a PNG ends.</summary>
-    private static readonly byte[] PngEnd = [0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82];
+    internal static readonly byte[] PngEnd = [0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82];
 
     private readonly HttpClient _http;
     private readonly string _directory;

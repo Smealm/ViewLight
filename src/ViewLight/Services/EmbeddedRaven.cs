@@ -93,7 +93,25 @@ public sealed class EmbeddedRaven : IDisposable {
     /// <summary>How long a probe of the database's port may take before it counts as not answering.</summary>
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(3);
 
-    private static readonly HttpClient s_http = new() { Timeout = ProbeTimeout };
+    /// <summary>
+    /// The probe, on the loopback client: this is a port on this machine, and nothing about reaching it may
+    /// depend on a proxy or on there being a network at all.
+    /// </summary>
+    private static readonly HttpClient s_http = LoopbackHttp.Client(ProbeTimeout);
+
+    /// <summary>
+    /// What the database printed on its way up, newest last.
+    /// </summary>
+    /// <remarks>
+    /// The console is drained for the same reason it always has been - a database that cannot write its pipe
+    /// stalls - but it is no longer thrown away: when a database never comes up, what it printed is the only
+    /// thing that knows why, and the reason is never "the internet", since the database is started on
+    /// <c>127.0.0.1</c> and never reaches off this machine. It is cleared on every start.
+    /// </remarks>
+    private readonly OutputTail _output = new();
+
+    /// <summary>The same, for the Log: a database that did not come up says why rather than only that it did.</summary>
+    public IReadOnlyList<string> OutputLines => _output.Lines;
 
     private readonly object _gate = new();
     private Process? _process;
@@ -166,6 +184,7 @@ public sealed class EmbeddedRaven : IDisposable {
         await StopAsync().ConfigureAwait(true);
 
         Problem = null;
+        _output.Clear();
 
         try {
             Directory.CreateDirectory(Path.GetDirectoryName(setup.SettingsFilePath)!);
@@ -205,10 +224,10 @@ public sealed class EmbeddedRaven : IDisposable {
                 return Problem = "The database process could not be started.";
             }
 
-            // Read and discarded: a database that fills an unread pipe would stall, and its own log file
-            // is where anything worth keeping goes.
-            process.OutputDataReceived += (_, _) => { };
-            process.ErrorDataReceived += (_, _) => { };
+            // Drained, because a database that fills an unread pipe would stall - and kept, because its own
+            // log file only exists once it gets as far as writing one.
+            process.OutputDataReceived += (_, e) => _output.Add(e.Data);
+            process.ErrorDataReceived += (_, e) => _output.Add(e.Data);
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 

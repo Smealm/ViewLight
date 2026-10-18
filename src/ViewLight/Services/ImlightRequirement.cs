@@ -105,14 +105,22 @@ public static class ImlightRequirements {
         + "installed.";
 
     /// <summary>What is missing from a launcher pointed at this folder, or <see cref="ImlightRequirement.Met"/>.</summary>
-    public static ImlightRequirement For(string? serverPath) {
+    public static ImlightRequirement For(string? serverPath) => For(serverPath, ImlightConfig.Read(serverPath));
+
+    /// <summary>
+    /// The same, from a config that has already been read.
+    /// </summary>
+    /// <remarks>
+    /// The launcher reads the config to load its own settings and then asks this what is missing from the same
+    /// folder - two reads of one file, and when the file is not there each of them spends the read window
+    /// waiting for it. On a first run that is the whole of the wait, twice, before the first screen is drawn.
+    /// </remarks>
+    public static ImlightRequirement For(string? serverPath, ImlightConfigRead read) {
         if (string.IsNullOrWhiteSpace(serverPath)) {
             return new ImlightRequirement(ImlightGap.NoFolder,
                 "No server folder is set, so there is no Imlight to run. Choose the folder Imlight is in, "
                 + "or download it.");
         }
-
-        var read = ImlightConfig.Read(serverPath);
 
         if (read.Config is null) {
             // A config that is there and would not read is not an install that is gone. It is a file an install

@@ -380,10 +380,10 @@ The test suite asserts a load-then-save of a stock config is **byte-for-byte ide
 
 ## Installing and updating
 
-Releases come from `Revive101/Imlight`. Every Imlight release is published as a *prerelease*, so the
-launcher lists releases and sorts by publish date rather than using GitHub's `/releases/latest` (which
+Releases come from `Revive101/Imlight`. Every Imlight release so far is published as a *prerelease*, so
+the launcher lists releases and sorts by publish date rather than using GitHub's `/releases/latest` (which
 404s for this repository). It installs the `Imlight-win-x64*.zip` asset - around 260 MB - and uses its
-`Imlight.Director.exe`.
+`Imlight.Director.exe`. The build channel chooses which builds are candidates; see below.
 
 The archives are flat self-contained deployments: the zip root *is* the install root, so it is extracted
 directly into your server folder.
@@ -398,9 +398,132 @@ directly into your server folder.
 
 `Config/akka.conf` is part of the build and *is* replaced on update.
 
+**A folder set is only installed if it is a build, and the copy is checked afterwards.** The installer
+refuses a tree without `Imlight.Director.exe` before it writes anything - in any of the folders it was
+handed - and after the overlay it compares the built and installed `Imlight.Director.dll`,
+`Imlight.CoreLib.dll` and `Imlight.Common.dll` by SHA-256. The executable is not enough evidence -
+dotnet's apphost can be byte-identical between two builds, so a copy that silently kept the old managed
+assembly would otherwise look like a successful install. A mismatch is an install failure naming the
+file, not a success message over an old server.
+
+**Only files that differ are written.** Each built file is compared with the one in the server folder by
+length and then by content - never by timestamp, because an archive install of `exe:v1` and one of
+`exe:v2` share a length and an extracted timestamp while holding different bytes. A deploy of the same
+source a second time therefore leaves the binaries alone and says how many files were already current;
+the config is still merged and repaired on every deploy, since that is the step that carries new settings
+across.
+
+**A running server is stopped at the last moment, not refused up front.** The build or download runs
+while the server keeps serving; when the files are about to be written, the launcher stops it, ends the
+playing session and lets go of the databases. A game that is still running is the one case it refuses,
+because stopping the server under a live client would disconnect a session nobody asked to end.
+
 Two smaller conveniences: a completed download is cached, so a retry does not re-download 260 MB, and
 archives that wrap everything in a single top-level folder (as some earlier releases did) are unwrapped
 automatically.
+
+### The three build channels
+
+**Settings -> Server -> Build channel** (and the same choice on the first screen) decides what the install
+button is allowed to install. The values are strings in `launcher.json`, not an enum, for the same reason
+theme and patch-cleanup choices are: a value a later build does not recognise has to fall back rather than
+fail to load.
+
+**Stable** filters the release list to entries GitHub does not mark as a prerelease. The repository has
+none, and the honest answer to "find me a stable build" is a sentence saying so - `GithubReleaseService`
+throws "No stable Imlight release has been published ..." rather than returning the newest prerelease,
+which is the one thing the channel exists to avoid. When Imlight cuts its first real release, this channel
+starts working with no code change.
+
+**Prerelease** is the newest of everything, stable included. It is deliberately cumulative rather than
+"only prereleases": the point of the channel is to be ahead of stable, and a repository whose newest build
+is a stable one must still install it rather than nothing. This is the old behaviour, and the default.
+
+**Bleeding edge** is not a release lookup at all - it is `BleedingEdgeServer`, and it exists because some
+fixes and features are committed before they are built. It keeps a real git checkout at
+`<data>/source/imlight` (`LauncherPaths.SourceDirectory`), so:
+
+- the first press is `git clone --recurse-submodules`;
+- every later press is `git fetch` + a merge, not another clone;
+- the toolchain is checked *before* the publish - the .NET SDK major is read from
+  `Imlight.Director.csproj`'s `TargetFramework` rather than written down here, so a project that moves to a
+  newer framework is not held back by a stale check;
+- the build is `dotnet build src/Imlight.Director/Imlight.Director.csproj -c Release -r win-x64
+  --self-contained true`, built the way the checkout builds itself, and its output is left where the SDK
+  puts it: Director self-contained under `src/Imlight.Director/bin/Release/net10.0/win-x64`, CoreLib and
+  Common beside it in their own `net10.0` folders;
+- those three folders together are the server, and the deploy reads them directly. Nothing is copied into
+  a staging folder first: the files are compared with the server folder and only the ones that differ are
+  written, so the deploy costs what changed rather than the whole tree;
+- the build is checked for `Imlight.Director.exe`, `Imlight.Director.dll`, `Imlight.CoreLib.dll` and
+  `Imlight.Common.dll` before anything is written, so a build that reported success while producing a
+  partial tree fails with the missing name rather than installing a mixture;
+- the result is installed through `ServerInstallService.InstallFromFoldersAsync`, which is the same
+  overlay, config merge, `.bak`, port repair and patch-server repair an archive install uses. The archive
+  path downloads, unpacks and calls it with one folder; the source path builds and calls it with three.
+  There is one install path. After it succeeds the Log names the installed tag and the assembly's own
+  build timestamp, and the card is refreshed from that result immediately - no launcher restart.
+
+**An uncommitted edit is never merged over.** `git status --porcelain` decides: a dirty tree is built as it
+is, with a warning in the Log, because merging is how an updater loses work that is not recoverable from
+git. Local *commits* are merged normally - fast-forward first, then `merge --no-edit`, then `merge --abort`
+and a sentence naming the checkout if that conflicts. The merge is signed by ViewLight (`-c user.name=...`)
+so a machine that has never configured git does not fail on a missing identity. `GIT_TERMINAL_PROMPT=0`
+keeps a wrong remote from waiting on a prompt hidden behind the window.
+
+**A plain clone is not buildable, so the launcher supplies the two missing files.** Imlight's `Imcodec`
+submodule generates its game types from a WizWalker type dump and its messages from the game's own XML
+definitions. Neither is published: both `GeneratorInput` folders contain only an empty `!base` marker, so a
+clean checkout fails in `Imcodec.ObjectProperty` with `CS0246`/`CS0115` in `ServerGeneratedTypeRegistry.cs`.
+This was measured, not assumed. `SourceBuildInputs` makes both from the installed game before the publish,
+and `BleedingEdgeServer` refuses to start the publish when it cannot - a sentence about Python or the game
+folder is worth more than the compiler's hundred lines.
+
+**The type dump comes from wiztype, in Python the launcher owns.** The dump is read out of a running
+Wizard101 client by [wiztype](https://github.com/wizspoil/wiztype), the tool Imlight's own build notes point
+at. It is a Python package, so the launcher creates a virtual environment under `<data>/source/wiztype-venv`
+and installs into that; nothing is written to the user's Python or its site-packages, and deleting the
+folder resets it. Python 3.12 is the minimum wiztype supports, and the probe asks `py -3`, `python` and
+`python3` for `sys.executable` rather than assuming a launcher's choice - `py` is a launcher, and a venv
+has to be created with the interpreter it would pick. Version **2** of the dump is the one to ask for:
+version 1 is the old WizWalker shape with no manifest, and Imcodec reports "No class definitions were found
+in the JSON dump manifest" for it. Version 2 is `{"version":2,"classes":{...}}`, which is what
+`JsonDumpManifest` reads; a real dump is about 14 MB.
+
+**The game is started, used and put back.** wiztype reads the type registry of a live client, so when
+nothing is running the launcher starts `bin\WizardGraphicalClient.exe` with the same arguments Play uses,
+except for the account - a login screen has loaded the registry, and the server does not have to be up.
+There is no reliable "registry is ready" signal, so it waits eight seconds and then retries the dump up to
+four times, five seconds apart, which is what the real run needed. A client the user already had open is
+borrowed and **never closed**; one the launcher started is killed afterwards. That distinction is the
+whole reason the process handle and an ownership flag are carried together.
+
+**The dump is cached by client revision.** It is written to `<data>/source/type-dump.json` with a
+`type-dump.json.revision` sidecar holding `bin/revision.dat`. A dump with no sidecar was placed by hand and
+is used as it is - the escape hatch for a machine that cannot run Python - while one this class generated
+is regenerated when the client revision differs, so a game update does not quietly build against types
+from a client that has moved on. The output is checked before it is accepted (it must start with `{` and
+contain `classes`, and be well over 100 KB), because a wiztype that fails partway can still leave a file.
+
+**The message definitions are already on disk.** They are `*Messages*.xml` entries inside `<game>/Data/GameData/Root.wad`,
+so the launcher reads them with its own `KiWadArchive` - the same reader that names the item templates -
+and copies them flat into `Imcodec.MessageLayer/GeneratorInput`. No second tool, no CLI, and the files are
+exactly the ones the client uses. The folder is cleared first: the project compiles every XML in it, and an
+older client's message file left behind would end up in the new build. Both copies are invisible to
+`git status` because the submodule already ignores generated inputs there, so the checkout never looks
+dirty and an update is never blocked.
+
+**The checkout is filled in after the SDK check, before the build.** The build inputs need the game folder,
+which the launcher already knows; `InstallAsync` takes it as a parameter rather than reading settings deep
+inside the build. If either input cannot be made, the build does not start and nothing is installed, so a
+failed attempt leaves the previous server exactly as it was. `DescribeBuildFailure` keeps its type-dump
+sentence as a fallback for a dump that is present but stale or hand-made and wrong.
+
+**Source builds are recorded by commit, not tag.** `InstalledTag` is `edge-<shortsha>`, `InstalledEdgeCommit`
+is the full hash, and `InstalledChannel` says which channel wrote it. The full hash is what `IsUpdateAvailable`
+compares, because two short hashes are not two builds. A source tag is also never used as the fallback
+`ExpectedClientBuild`: a commit is not a game revision, and offering it to the client would produce a
+mismatch warning about a value nobody chose.
 
 ### The embedded RavenDB port
 
@@ -893,12 +1016,16 @@ watches readiness in two ways, and treats them differently, because they are not
    it has finished starting and is about to serve logins. It is taken at its word: the client is started
    the moment it appears, with **no settle window**. Waiting after a direct announcement would only
    delay every session by ten seconds for nothing.
-2. **The login port opening** is only a guess by comparison - a socket accepts connections slightly
-   before the account server can serve them - so when *that* is what fired, the launcher holds for a
-   **10 second settle window** before calling the server ready.
+2. **The login port opening** is only a guess by comparison - and a bad one for Imlight, which binds
+   the login port *before* it starts its embedded RavenDB and creates the admin account. The measured
+   boot on a real install opens port 12000 about 30 seconds before `Imlight may now be connected to.`,
+   with `CreateEmbeddedDatabaseAccounts` in between. When a log file exists, the port is therefore not
+   taken as the answer at all: the launcher keeps waiting for the readiness line. The port is only
+   believed after a **120 second fallback**, which exists for a server whose log is somewhere the
+   launcher was not told about - not for an ordinary slow boot.
 
-Either signal is enough on its own, the settle window only ever applies to the port probe, and the Log
-always names whichever signal actually fired. The readiness line is checked before the port on every
+A settle window is still applied when there is no log to watch (a manually pointed-at install), and the
+Log always names whichever signal actually fired. The readiness line is checked before the port on every
 pass, so a port that opened mid-boot cannot make an announcement wait out a window it does not need.
 
 That line is read from the file Serilog actually writes - `logs\log20261013.txt`, not the `logs\log.txt`
@@ -1737,6 +1864,29 @@ fade into the surface behind the window and the name and score be read in the th
 rather than white on a scrim that only works in one theme. The picture sits bottom-left and the score
 circle bottom-right, which is the same information the profile page shows, in the same order.
 
+**The profile page is laid out as a person rather than as a form.** The account is one card at the top - its
+banner, its picture, its name, its standing and its score - and it is the only thing on the screen with an
+account in it: logging out is a button on that card rather than a list of accounts beside the profile, because
+a card of its own for a choice most launchers never make is a form, not a profile. Under it the wizards stand
+on a shelf under the heading **Wizards** - a cup wearing the school's own element logo with the level on it,
+and the numbers the old card had room for (gold, spells, quests, last seen) in the tooltip
+(`ProfileWizardRow.DetailToolTip`). The label says what they are rather than what they look like: a trophy is
+the shape, not the thing.
+Under that is the history (`ProfileTimeline`), which is the achievements page read as a list: the same
+`ProfileBadge` values the badges page draws, filtered to what was actually earned, newest first, a milestone
+saying so because it is a rung of a ladder, and a caption that says how much there is and where the rest of it
+lives. Nothing on that screen is a second record of anything, which is what stops the two screens from
+disagreeing about what was earned or when - and what makes a row that has moved one comparison, so a poll ten
+seconds apart does not redraw a history nobody has added to.
+
+**The two pictures are buttons only while the profile is being dressed.** `IsProfileEditing` is the check box
+in the corner of the banner: unticked, the picture and the banner are pictures, because one that opens a menu
+whenever it is clicked is one that is hard to simply look at; ticked, each wears a dashed hotspot and opens the
+same two choices - a file from this machine, or one of the launcher's own collections (gamerpics for the square
+one, wallpapers for the wide one). There is no row of picture and banner buttons above the card, because the
+thing being changed is the thing that is clicked. Switching account clears the mode: dressing one profile is
+not dressing the next.
+
 **The achievements screen is the profile's second page rather than a section of its own.**
 `MainWindowViewModel.ShowsAchievements(section, page)` is what decides it, and the answer is *only* on
 Profile: the screen belongs to the account whose badges it shows, so a launcher left on another section
@@ -1750,6 +1900,176 @@ because neither of the two views had been told to show itself. `RefreshDerived` 
 `TheProfileTabIsToldToShowItselfWhenItIsOpened` asserts the notifications rather than the view, so the
 regression cannot come back through a refactor of the XAML. It is also the shape to remember when adding a
 third page: a computed `IsVisible` is not a fact until something says it changed.
+
+### Signing out is a state, not a page - *done*
+
+**What was asked for.** The profile card's *Switch account* button became a plain *Log out*, lined up with
+*Achievements* rather than sitting at a different height in the middle of the card, and choosing an account
+became the sign-in screen: a full-window row of account tiles that scrolls and animates, showing each
+account's picture, name, gamerscore and the wizards behind it.
+
+**Why the old arrangement was wrong.** The two buttons were in different containers - the account one in the
+header row, *Achievements* in the column under the score - so `VerticalAlignment=Center` centred each in its
+own space and left them at different heights. One stack owns both now, and both stretch to the widest, so
+their edges line up whatever the words are. The flyout was also a menu with the same account in it almost
+always; the account list belongs on a screen of its own, which is what the sign-in screen is.
+
+**Signing out is a flag rather than an empty profile list.** `IsSignedOut` is set only by *Log out* and
+cleared only by choosing somebody. A launcher whose server holds no accounts is not signed out from
+anybody - it says so on the profile page - so the two cannot share a state without the sign-in screen
+covering a launcher that has nothing to offer.
+
+**The order of the two writes is the whole of not signing back in.** The profile list is read every ten
+seconds and puts back the account Play would use, so `LogOut` raises the flag *before* it clears
+`SelectedProfile`. The rule is extracted as `ProfileToRestore(signedOut, selected, account, remembered)` and
+tested on its own: signed out, the answer is nobody, however much the launcher remembers.
+
+**Logging out is not forgetting.** `OnSelectedAccountChanged` used to write null into
+`AutoLoginAccountId` whenever the selection was cleared, which would have made a sign-out permanent and left
+Cancel with nobody to return to. It now writes only a real account, so the machine still knows who it plays
+as and *Back to the launcher* has somewhere to go.
+
+**A tile is a value, and compares as one.** `AccountCard` carries what the tile says, not the profile
+object, for the same reason a badge does - a score moves as badges are earned and a wizard moves as the
+database is read. Its list of `AccountWizardLine`s would have made the record compare by reference to that
+list, so two tiles built from one unchanged profile would have been different tiles and the row would have
+been rebuilt under the pointer on every poll. `Equals` is written out over the lines instead, and
+`ATileThatHasNotChangedIsTheSameTile` pins it down. The pictures are handed in by the view model (from the
+decoded cache) rather than looked up in the model, and the row is rebuilt when one arrives.
+
+**The screen covers the window and cannot be tabbed into while it is away.** It is one `Border` over the
+shell, bound to `IsSignedOut` both for `IsVisible` and for the `shown` class: the class drives the fade and
+the strip's entrance, and `IsVisible` keeps a hidden screen out of the keyboard's way - an opacity-only hide
+would have left *Back to the launcher* focusable behind the shell. The strip's own animation is a style
+selector on the shown class (the same device the pulsing dot uses), the tiles lift on hover through a
+`TransformOperationsTransition`, and the arrows slide the strip a page at a time with an eased
+`DispatcherTimer` rather than teleporting it. A slide in progress is stopped before a new one starts, so two
+quick presses end where the second asked.
+
+**The tests** are `SignInScreenTests` (log out, sign in by id, the account that went away, cancel, and the
+poll rule), `AccountCardTests` (the score, the three-wizard limit, the school lookup, the order, and tile
+equality) and `WizardCardTests` for the renamed tooltip.
+
+### The explanations are comments, so they are off until asked for - *done*
+
+**What was asked for.** Almost every control in the launcher has a sentence under it saying what it is for.
+They should be hidden by default, with a **Verbose mode** switch under **Settings → ViewLight** that shows
+all of them.
+
+**Why a class rather than a property per note.** The notes are the same thing wherever they are, so they are
+marked `Classes="muted note"` and the style hides `TextBlock.note`; the window itself carries a `verbose`
+class bound to `VerboseMode`, and `Window.verbose TextBlock.note` shows them again. That is one style for the
+whole launcher, and a new note is hidden by writing the class - there is no second switch to forget. A hidden
+note takes up no layout, so the card closes up around it and the default screen is the compact one.
+
+**The conditional ones are wrapped.** A style setter loses to a local value, so a note that already had an
+`IsVisible` binding of its own (the school-logo note only exists while there are logos) is put inside a
+small `Panel` that carries the condition, and the text inside it is the note. The rule to remember: a note
+that must also be conditional is hidden by its container, not by itself.
+
+**It is a preference, not a hover tip.** Off by default because a launcher is used rather than read; on
+means all of it at once, which is what makes it useful for a first run or for somebody helping another
+person. It is saved the moment it is ticked, like the theme, and `VerboseModeTests` pins down its default,
+that an older settings file loads with it off, and that it survives a reload. What a test process cannot do
+is render the window, so the style half is verified structurally - the class is bound on the window and the
+selector names the same class - rather than visually.
+
+### The databases are read on this machine's own address - *done*
+
+**What was asked for.** A machine with no wifi card and no internet connection should still be able to read
+its own databases: the launcher, the server's player database and the launcher's notes are all processes on
+one machine, and talking to them should need nothing from outside it.
+
+**Every address was already the right one.** `PlayerDatabaseClient.BaseUrl` has always been
+`http://127.0.0.1:{port}` - the server's database on the port `Imlight.ini` names, and the launcher's own on
+a free one it picks - and both are *started* on loopback too (`EmbeddedRaven.BuildSettings`). So the question
+was never which address: it was what stands between the request and that address.
+
+**What stood in between was the proxy.** An `HttpClient` is built with `UseProxy = true`, which means the
+system proxy - and everything that goes with it, a PAC file and a WPAD lookup being the two that need the
+network to answer - is asked about every request, loopback included. On a machine with no network, that ask
+can be the thing that fails, and the two local databases become unreadable while both processes are running
+beside the launcher. `LoopbackHttp.Client` builds the client these reads use with the proxy switched off
+altogether (`SocketsHttpHandler { UseProxy = false }`), and the three callers are the player database client,
+the launcher's own database client and the port probe. The clients that really do leave this machine - art,
+GitHub, a patch server somebody else runs - keep the proxy, because there it is the difference between
+working behind one and not.
+
+**A database that does not come up now says why.** Its console was drained and thrown away - a database that
+cannot write its pipe stalls, which is why it is drained - and its own log file only exists once it gets as
+far as writing one, so a database that never came up left nothing at all. `OutputTail` keeps the last 80
+lines of it (blank lines dropped, cleared on every start), and `ReportDatabaseOutput` writes them into the
+Log when a start fails or a start never answers, naming the log folder beside it. That is the whole answer
+for a machine that still cannot be read: a port something else had taken, a data directory it cannot open, a
+runtime it was not given - none of which has anything to do with the internet, and all of which used to be
+invisible.
+
+**The tests** are `LoopbackHttpTests` (the address is loopback and by name; the client succeeds against a
+listener on this machine with a proxy installed that would have refused it, and is never asked; a profile
+is read through the launcher's own database client - the one the real code builds, with nothing injected -
+while that same refusing proxy is the system one; the tail's cap, blanks and clearing) and the assertion
+added to
+`TheLaunchersOwnDatabaseIsStartedOnceThereIsAnImlight`, which is a database that cannot even be started
+saying so in the Log.
+
+### The first frame is not paid for by everything behind it - *done*
+
+**What was wrong.** A start took ten seconds or more to show anything. Measured, on this machine and in a
+release build: 2.4s before the framework was up, another 0.8s for the achievement toast window and the app's
+resources, 1.9s to inflate `MainWindow.axaml`, 4.6s inside the view model's constructor, then 1.5s of layout
+before the window was on screen. Only the first of those is the framework's own; the rest was work the
+launcher had no need to do yet.
+
+**Every page used to be built with the window.** `MainWindow.axaml` declared Home, Profile, Achievements,
+Settings, Logs and About at once and let visibility flags choose one, so all six control trees existed before
+the first frame - Settings alone is nine hundred lines of XAML. The window now has one `ContentControl` and
+`ShowPage` in its code-behind builds a page the first time the section asks for it, keeping it afterwards, so
+switching pages still keeps their state. Only Home is built at start, and that alone was most of a second.
+
+**The toast window was built at every start.** `AchievementToastWindow` is a second XAML tree for something
+most starts never show, and it was a field initializer on `MainWindow` - so it was parsed before the launcher's
+own window could draw. It is made on the first badge now, which is when it is needed and the only moment its
+positioning matters.
+
+**The view model read the same file up to four times.** Setting `ClientPath` ran a folder read and the whole
+item-catalogue load, setting `ServerPath` ran `LoadServerConfig`, and the constructor then ran `LoadServerConfig`
+again. `ImlightConfig.Read` spends its read window (750ms) waiting when the config is not there, which is
+exactly the first start - no install yet - so those repeats were the slowest part of the slowest case. The
+constructor now fills the saved state with the setters quiet (`_startingUp`), then does the one pass it needs.
+
+**The read window is for a file that is being held, not for a folder that has no install in it.** `Read` still
+waits while a config it found is busy - an install unpacking, the server writing its own settings - but a
+folder with no `Config` directory is not halfway through either, so it returns at once. The requirement check
+also takes the read the launcher already made (`ImlightRequirements.For(path, read)`) rather than reading again,
+and `ServerWantedRevision` no longer re-reads the config it already has.
+
+**And the database says what it is doing.** The profiles come out of the server's own RavenDB, which takes
+seconds to answer, and until it did the launcher simply looked like an account with no data. `MainWindowViewModel`
+raises `IsLauncherDatabaseStarting` for exactly as long as an attempt is running, and the window shows
+**Launching the profiles database…** in its top-left notification area - above everything because the screen it
+would otherwise be behind is the sign-in screen with no accounts on it. It takes no input (Play still works,
+and pressing it puts the database down), and a failed attempt takes it away and leaves the status line and the
+Log to explain.
+
+**One area, one list, so two waits cannot cover each other.** The Google Drive sync notice used to be a card in
+the sidebar, where the sign-in screen - a full-window cover - hid it, and the profiles database notice used to
+be a centred dialogue. Both are now rows in a single `Notifications` list owned by the view model: each fact has
+a key, so it replaces its own row rather than stacking a duplicate, and the list is drawn in one `ItemsControl`
+floating over the whole window. State drives it, not events, so a notice cannot outlive the thing it describes.
+
+**The area folds itself into a tray, and one arrow brings it back.** `NotificationTrayDelay` (7 seconds) is how
+long a notice stays open by itself: after that the rows are replaced by a small card in the same corner saying
+how many are waiting, with a down arrow. The arrow is the whole control - it opens the tray, and turns up to
+close it again - and opening it by hand pins it open, so the delay never takes the rows away from somebody who
+just asked to read them. A new notice opens the tray again; a row whose words merely changed restarts the wait
+rather than reappearing. When the last notice is withdrawn the tray goes with it, because a tray with nothing
+behind it would be furniture of its own.
+
+**Measured afterwards, same machine, same release build:** 0.3s of the launcher's own work before the framework
+was up, 0.8s for the window's XAML, 0.25s in the view model's constructor, 0.24s to build Home, and the window
+on screen at about 5.2s rather than about 10-11s. Of what is left, about 2.4s is Avalonia starting and about
+1.1s is laying out the shell - neither of which this launcher can remove from the inside; publishing with
+`PublishReadyToRun` is the next thing to try, not another rearrangement here.
 
 ## Rough edges in Imlight itself
 
@@ -3473,10 +3793,10 @@ come first for that reason: they cost the most time.
    rather than attempted - and a revision with no readable file list looks like one that has not been
    fetched yet.
 9. **The server's readiness line or startup order changes.** The launcher waits for a marker that never
-   arrives and falls back to the login-port probe, which is only a guess and carries a 10-second settle
-   window. Worth knowing: there is **no timeout** on a server start, so if the port has moved too
-   (`LoginServerPort`), nothing ever says ready and Play waits with the phase still on "starting" - an
-   indefinite wait is the symptom to look for, not an error message.
+   arrives and, after the 120-second fallback, believes the login port, which is only a guess. Worth
+   knowing: there is **no timeout** on a server start, so if the port has moved too (`LoginServerPort`),
+   nothing ever says ready and Play waits with the phase still on "starting" - an indefinite wait is the
+   symptom to look for, not an error message.
 10. **RavenDB itself moves a major version**, on either side: the server's embedded copy, the copy the
     launcher runs from `RavenDBServer`, or the launcher's own store, which is a different database with the
     same problem.

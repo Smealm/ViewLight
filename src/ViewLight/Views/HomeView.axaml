@@ -203,7 +203,7 @@
             <Button Grid.Column="1" Content="Close" Command="{Binding HideJoinPanelCommand}" />
           </Grid>
 
-          <TextBlock Classes="muted"
+          <TextBlock Classes="muted note"
                      Text="ViewLight starts nothing here: it points Wizard101 straight at a server that is already running. Signing in automatically only works on the server this launcher runs, so Wizard101 will ask you to log in." />
 
           <StackPanel Spacing="4">
@@ -243,7 +243,7 @@
 
           <StackPanel Spacing="6">
             <TextBlock Classes="label" Text="Wizard101's own server — login.us.wizard101.com:12000" />
-            <TextBlock Classes="muted"
+            <TextBlock Classes="muted note"
                        Text="Which account you sign in with has to be said out loud: a Steam-linked Wizard101 account is started differently, and the wrong one is simply refused at the login screen." />
             <StackPanel Orientation="Horizontal" Spacing="8">
               <Button Content="I sign in with a Steam account"
@@ -270,7 +270,7 @@
           <TextBlock Classes="cardTitle" Text="{Binding PortableClientCardTitle}" />
 
           <StackPanel Spacing="12" IsVisible="{Binding ShowPortableClientPrompt}">
-            <TextBlock Classes="muted"
+            <TextBlock Classes="muted note"
                        Text="ViewLight is running portably, so it plays the game from its own folder rather than from an install elsewhere. Point it at your Wizard101 folder and it will copy the game in; your existing install is left untouched." />
             <TextBlock Classes="value" Text="{Binding PortableGameFolder}" />
 

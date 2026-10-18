@@ -95,7 +95,12 @@ public sealed class ImlightConfig {
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
                 // Only these two say there is no file to read. A file that appears while the launcher waits -
                 // an install finishing - is picked up by the next attempt rather than missed.
-                if (DateTime.UtcNow >= giveUpAt) {
+                //
+                // Waiting is only for an install that is being unpacked into a folder that exists: a folder
+                // with no Config in it is not halfway through anything, and a launcher pointed at one should
+                // not spend the window twice at every start on a file that is not coming. That is the first
+                // run, of all starts, and it was the slowest.
+                if (!Directory.Exists(Path.GetDirectoryName(path)) || DateTime.UtcNow >= giveUpAt) {
                     return new ImlightConfigRead(null, false);
                 }
 

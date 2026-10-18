@@ -57,6 +57,20 @@
     <Setter Property="TextWrapping" Value="Wrap" />
   </Style>
 
+  <!-- ============================================================ the explanations
+
+       A note is the sentence under a control that says what the control is for. It is a comment on the
+       screen rather than part of it, so it is hidden unless verbose mode is on - the window carries a
+       "verbose" class for exactly that - and a hidden note takes up no room, so the card it belongs to
+       closes up around it rather than leaving a gap. -->
+  <Style Selector="TextBlock.note">
+    <Setter Property="IsVisible" Value="False" />
+  </Style>
+
+  <Style Selector="Window.verbose TextBlock.note">
+    <Setter Property="IsVisible" Value="True" />
+  </Style>
+
   <!-- ============================================================ cards -->
 
   <Style Selector="Border.card">
@@ -67,6 +81,28 @@
     <Setter Property="Padding" Value="18" />
   </Style>
 
+  <!-- A card that floats in the corner rather than sitting in a page: tighter than a page card, and
+       shadowed so it is read against the sidebar or a page behind it. -->
+  <Style Selector="Border.notification">
+    <Setter Property="Padding" Value="12" />
+    <Setter Property="BoxShadow" Value="0 4 18 0 #40000000" />
+  </Style>
+
+  <!-- The notification tray's opener: a small card in the corner rather than a row of the list it opens,
+       because it has to be readable and clickable while the list behind it is folded away. -->
+  <Style Selector="Button.tray">
+    <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="Padding" Value="11,6" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+
+  <Style Selector="Button.tray:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CardHoverBackgroundBrush}" />
+  </Style>
+
   <!-- A sunken list container used inside a card. -->
   <Style Selector="Border.list">
     <Setter Property="Background" Value="{DynamicResource CardBackgroundAltBrush}" />
@@ -74,6 +110,15 @@
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="8" />
     <Setter Property="Padding" Value="8" />
+  </Style>
+
+  <!-- One row of the profile's history: a line between entries rather than a box each, so the list reads
+       as a sequence of things that happened rather than as a stack of cards. -->
+  <Style Selector="Border.historyRow">
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="0,0,0,8" />
+    <Setter Property="Margin" Value="0,0,0,8" />
   </Style>
 
   <Style Selector="Border.pill">
@@ -325,6 +370,52 @@
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
+  <!-- A page's own headings, in a well under it: indented, smaller, and named after the page they hang
+       off, so the second row reads as part of the page that is open rather than as four more pages beside
+       it. -->
+  <Style Selector="Border.subnav">
+    <Setter Property="Background" Value="{DynamicResource CardBackgroundAltBrush}" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="8,4" />
+    <Setter Property="HorizontalAlignment" Value="Left" />
+  </Style>
+
+  <Style Selector="Button.subnav">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+    <Setter Property="Padding" Value="12,6" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="Button.subnav /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="Button.subnav:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CardHoverBackgroundBrush}" />
+  </Style>
+
+  <Style Selector="Button.subnav.selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+  </Style>
+
+  <Style Selector="Button.subnav.selected">
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!-- The page the well belongs to, printed at its left edge: "Server  ImLight | Aurorium". -->
+  <Style Selector="TextBlock.subnavCaption">
+    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="6,0,8,0" />
+  </Style>
+
   <!-- ============================================================ buttons -->
 
   <Style Selector="Button.accent /template/ ContentPresenter#PART_ContentPresenter">
@@ -349,6 +440,151 @@
   <Style Selector="Button.danger">
     <Setter Property="Foreground" Value="#1A0E0E" />
     <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!-- A part of a picture that is a control only while the profile is being dressed: the picture is still
+       the picture, with a dashed edge and a scrim over it saying it can be clicked. It covers the banner
+       rather than sitting beside it, because the thing being changed is the thing that is clicked. -->
+  <Style Selector="Button.hotspot">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="VerticalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="White" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+
+  <Style Selector="Button.hotspot /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#33000000" />
+    <Setter Property="BorderBrush" Value="#99FFFFFF" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+
+  <Style Selector="Button.hotspot:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#66000000" />
+    <Setter Property="BorderBrush" Value="#FFFFFFFF" />
+  </Style>
+
+  <!-- The profile picture is a circle, so its hotspot is one too rather than a rounded square laid over it. -->
+  <Style Selector="Button.hotspot.round">
+    <Setter Property="CornerRadius" Value="38" />
+  </Style>
+
+  <Style Selector="Button.hotspot.round /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="CornerRadius" Value="38" />
+    <Setter Property="BorderThickness" Value="2" />
+  </Style>
+
+  <!-- ============================================================ the sign-in screen
+
+       Shown when nobody is signed in, and covering everything, because every page behind it belongs to
+       nobody. It is faded and hit-tested by its class rather than shown and hidden, so it arrives the way the
+       corner card opens - a transition on a class, so the screen follows the state the view model is in and
+       cannot get stuck half-shown. -->
+  <Style Selector="Border.signIn">
+    <Setter Property="Background" Value="{DynamicResource ContentBackgroundBrush}" />
+    <Setter Property="Opacity" Value="0" />
+    <Setter Property="IsHitTestVisible" Value="False" />
+    <Setter Property="RenderTransform" Value="scale(1.015)" />
+
+    <Setter Property="Transitions">
+      <Transitions>
+        <DoubleTransition Property="Opacity" Duration="0:0:0.28" Easing="CubicEaseOut" />
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.28" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="Border.signIn.shown">
+    <Setter Property="Opacity" Value="1" />
+    <Setter Property="IsHitTestVisible" Value="True" />
+    <Setter Property="RenderTransform" Value="scale(1)" />
+  </Style>
+
+  <!-- The row of accounts slides in rather than being drawn: it is the one thing on the screen, and a row that
+       arrives says there are more of them off the edge.
+
+       A transition on the shown class rather than a keyframe animation, for two reasons: the value is the
+       state the view model is in, so it cannot get stuck half-way, and RenderTransform has no animator
+       registered by default - a keyframe animation on it throws when the style is attached. -->
+  <Style Selector="ScrollViewer.accountStrip">
+    <Setter Property="Opacity" Value="0" />
+    <Setter Property="RenderTransform" Value="translateX(48px)" />
+
+    <Setter Property="Transitions">
+      <Transitions>
+        <DoubleTransition Property="Opacity" Duration="0:0:0.45" Easing="CubicEaseOut" />
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.45" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="Border.signIn.shown ScrollViewer.accountStrip">
+    <Setter Property="Opacity" Value="1" />
+    <Setter Property="RenderTransform" Value="translateX(0px)" />
+  </Style>
+
+  <Style Selector="Button.accountCard">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="8" />
+    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Stretch" />
+  </Style>
+
+  <Style Selector="Button.accountCard /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <Style Selector="Button.accountCard:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+  <!-- The tile is a picture with words on it, so a hover lifts it rather than filling it: a hover colour of its
+       own would hide the banner the tile was drawn to show. -->
+  <Style Selector="Border.accountTile">
+    <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="ClipToBounds" Value="True" />
+    <Setter Property="BoxShadow" Value="0 10 26 0 #66000000" />
+    <Setter Property="RenderTransform" Value="translateY(0px)" />
+
+    <Setter Property="Transitions">
+      <Transitions>
+        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.18" Easing="CubicEaseOut" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="Button.accountCard:pointerover Border.accountTile">
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="RenderTransform" Value="translateY(-6px) scale(1.01)" />
+  </Style>
+
+  <!-- An arrow is a movement rather than a button in a form, so it is a quiet block beside the row. -->
+  <Style Selector="Button.signInArrow">
+    <Setter Property="Width" Value="46" />
+    <Setter Property="Height" Value="74" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="FontSize" Value="26" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Cursor" Value="Hand" />
   </Style>
 
   <!-- ============================================================ inputs -->

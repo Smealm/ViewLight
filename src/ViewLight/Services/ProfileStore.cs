@@ -167,27 +167,79 @@ public sealed class ProfileStore {
         try {
             var content = await File.ReadAllBytesAsync(sourcePath, token).ConfigureAwait(true);
 
-            var kind = banner ? "banner" : "avatar";
-            var name = $"{kind}{Path.GetExtension(sourcePath)}";
-
-            if (!await _persistence.WriteImageAsync(profile.AccountId, name, content, token).ConfigureAwait(true)) {
-                return null;
-            }
-
-            if (banner) {
-                profile.BannerFile = name;
-            }
-            else {
-                profile.AvatarFile = name;
-            }
-
-            Save();
-            return name;
+            return await AdoptImageBytesAsync(
+                    profile, content, Path.GetExtension(sourcePath), banner, token)
+                .ConfigureAwait(true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException) {
             return null;
         }
     }
+
+    /// <summary>
+    /// Keeps an image for a profile that was fetched rather than picked off this machine.
+    /// </summary>
+    /// <param name="profile">Whose it is.</param>
+    /// <param name="content">The picture itself.</param>
+    /// <param name="extension">
+    /// The file type it is, with the dot - taken from the address it came from, because there is no path
+    /// here to read it out of.
+    /// </param>
+    /// <param name="banner">Whether it is the banner rather than the picture.</param>
+    /// <returns>The recorded file name, or null when the picture could not be kept.</returns>
+    /// <remarks>
+    /// The same write as a picked file, deliberately: a picture from the gamerpic archive or from wallhaven
+    /// ends up in the profile's own document exactly like one from the user's disk, so nothing downstream
+    /// knows or cares which it was, and it is backed up with everything else either way.
+    /// </remarks>
+    public async Task<string?> AdoptImageBytesAsync(
+        LauncherProfile profile, byte[] content, string extension, bool banner, CancellationToken token = default) {
+
+        if (_persistence is null) {
+            Problem = "The launcher's own database is not up yet, so the picture was not kept.";
+            return null;
+        }
+
+        if (content.Length == 0) {
+            Problem = "The picture that arrived was empty, so nothing was kept.";
+            return null;
+        }
+
+        var kind = banner ? "banner" : "avatar";
+        var name = $"{kind}{NormaliseExtension(extension)}";
+
+        if (!await _persistence.WriteImageAsync(profile.AccountId, name, content, token).ConfigureAwait(true)) {
+            Problem = "The picture could not be written into the launcher's own database.";
+            return null;
+        }
+
+        if (banner) {
+            profile.BannerFile = name;
+        }
+        else {
+            profile.AvatarFile = name;
+        }
+
+        Save();
+        return name;
+    }
+
+    /// <summary>
+    /// The extension a picture is kept under: the few the game's own art can be, and PNG for anything else.
+    /// </summary>
+    /// <remarks>
+    /// Normalised rather than trusted, because it arrives from a URL: the name it lands in the database
+    /// under is built from it, and a picture called something with a slash or a dot-dot in it is a file
+    /// written somewhere it was never asked to be.
+    /// </remarks>
+    public static string NormaliseExtension(string? extension)
+        => extension?.Trim().ToLowerInvariant() switch {
+            ".jpg" or ".jpeg" => ".jpg",
+            ".gif" => ".gif",
+            ".bmp" => ".bmp",
+            ".webp" => ".webp",
+            _ => ".png",
+        };
 
     /// <summary>
     /// A profile's picture, and whether it was there to be read.

@@ -1,3 +1,4 @@
+using ViewLight.Models;
 using ViewLight.Services;
 using ViewLight.ViewModels;
 using Xunit;
@@ -105,6 +106,41 @@ public class ProfileScreenTests {
 
         Assert.True(launcher.ShowProfilePage);
         Assert.False(launcher.ShowAchievementsPage);
+    }
+
+    [Fact]
+    public void TheProfileIsOnlyEditableWhenItsEditBoxIsTicked() {
+        // The picture and the banner are controls in edit mode and pictures otherwise: a picture that opens a
+        // menu whenever it is clicked is a picture that is hard to simply look at.
+        using var workspace = new TempWorkspace();
+
+        var launcher = new MainWindowViewModel(
+            new LauncherSettingsStore(workspace.Path("launcher.json")), fetchArt: false);
+
+        Assert.False(launcher.IsProfileEditing);
+
+        var said = new List<string>();
+        launcher.PropertyChanged += (_, e) => said.Add(e.PropertyName ?? string.Empty);
+
+        launcher.IsProfileEditing = true;
+
+        Assert.True(launcher.IsProfileEditing);
+        Assert.Contains(nameof(MainWindowViewModel.IsProfileEditing), said);
+
+        // Switching account puts the screen back to being a page rather than a form, and brings that
+        // account's history with it - which is the same refresh that fills the list of what was earned.
+        launcher.SelectedProfile = new LauncherProfile {
+            AccountId = 9,
+            Username = "someone",
+            Achievements = [
+                new EarnedAchievement("first-steps", DateTimeOffset.Now.AddHours(-1), string.Empty),
+            ],
+        };
+
+        Assert.False(launcher.IsProfileEditing);
+        Assert.True(launcher.HasProfileHistory);
+        Assert.Equal("first-steps", Assert.Single(launcher.ProfileHistory).Id);
+        Assert.StartsWith("One thing earned", launcher.ProfileHistoryCaption);
     }
 
     [Fact]

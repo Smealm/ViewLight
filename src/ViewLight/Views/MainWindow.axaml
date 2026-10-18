@@ -5,6 +5,7 @@
         x:Class="ViewLight.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="ViewLight · Revive101 launcher"
+        Classes.verbose="{Binding VerboseMode}"
         Width="1180" Height="780"
         MinWidth="980" MinHeight="660"
         Background="{DynamicResource ContentBackgroundBrush}">
@@ -27,20 +28,19 @@
                        Foreground="{DynamicResource TextMutedBrush}" />
           </StackPanel>
 
-          <!-- A sync has both databases closed, which means everything a page could be edited with is off until it
-               is done - so the corner of the window says what is happening and what is paused. In the sidebar
-               rather than over the page, and outside the panel that is turned off with it, so it stays readable
-               for exactly as long as it is true. -->
+          <!-- The one thing a person can do that cannot be taken back: while it is running, the corner
+               says so in the error colour, because what is happening is a deletion. -->
           <Border DockPanel.Dock="Top" Classes="card" Margin="14,0,14,12" Padding="12"
-                  IsVisible="{Binding HasCloudSyncNotice}">
+                  BorderBrush="{DynamicResource ErrorBrush}"
+                  IsVisible="{Binding HasResetNotice}">
             <StackPanel Spacing="4">
               <StackPanel Orientation="Horizontal" Spacing="7">
                 <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                         Fill="{DynamicResource AccentBrush}" />
-                <TextBlock Text="{Binding CloudSyncNotice}" FontSize="13" FontWeight="SemiBold"
+                         Fill="{DynamicResource ErrorBrush}" />
+                <TextBlock Text="{Binding ResetNotice}" FontSize="13" FontWeight="SemiBold"
                            TextWrapping="Wrap" />
               </StackPanel>
-              <TextBlock Classes="muted" Text="{Binding CloudSyncNoticeDetail}" TextWrapping="Wrap" />
+              <TextBlock Classes="muted" Text="{Binding ResetNoticeDetail}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
@@ -90,13 +90,13 @@
              notes live in one of the databases it stopped, so a setting changed or a picture picked in that
              window is a change the launcher would not be able to keep. The nav above is left alone - looking at
              another page is not an edit. -->
+        <!-- One page at a time, built the first time it is asked for rather than all six being built with the
+             window. Settings alone is most of a screen's worth of controls, and a launcher should not pay for
+             every page before the one it opens on can be seen - see ShowPage in the code-behind. -->
         <Panel Margin="24" IsEnabled="{Binding IsEditingAllowed}">
-          <views:HomeView IsVisible="{Binding IsHomeSelected}" />
-          <views:ProfileView IsVisible="{Binding ShowProfilePage}" />
-          <views:AchievementsView IsVisible="{Binding ShowAchievementsPage}" />
-          <views:SettingsView IsVisible="{Binding IsSettingsSelected}" />
-          <views:LogsView IsVisible="{Binding IsLogsSelected}" />
-          <views:AboutView IsVisible="{Binding IsAboutSelected}" />
+          <ContentControl x:Name="PageHost"
+                          HorizontalContentAlignment="Stretch"
+                          VerticalContentAlignment="Stretch" />
         </Panel>
 
       </DockPanel>
@@ -199,6 +199,12 @@
       </Panel>
     </Border>
 
+    <!-- ================================================ nobody is signed in
+         Over everything, the account card included, because every page belongs to the account and there is
+         none: the sign-in screen is where one is chosen. It fades in over the shell rather than replacing it,
+         so signing in comes back to the page the account was signed out from. -->
+    <views:SignInView />
+
     <!-- ================================================ a launcher with no Imlight cannot work
          Over everything, the account card included, because nothing behind it is usable: the profiles that
          card shows are read from the database this screen is asking for. -->
@@ -210,6 +216,59 @@
          machine that cannot start at all has a bigger thing to be told about, and asked only while it has
          not been answered - so it appears once per install and never again. -->
     <views:PatchServerSetupView IsVisible="{Binding RequiresPatchServerChoice}" />
+
+    <!-- ================================================ the top-left notification area
+         The things the launcher is doing that are worth a sentence but not a dialogue. It is one list
+         rather than one card per feature, so a sync and the profiles database starting cannot be drawn on
+         top of one another: each fact owns one row, and the rows stack.
+
+         It folds itself into the tray button after a few seconds, so a notice is read once rather than
+         becoming furniture - and the one arrow opens it again, and folds it away again, for as long as the
+         notice is true. Above everything, including the sign-in screen, because that is exactly when the
+         profiles database is starting. Only the tray button and the rows take clicks; the launcher behind
+         them keeps working while they say what is happening. -->
+    <StackPanel IsVisible="{Binding HasNotifications}"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="22,18,0,0" MaxWidth="360" Spacing="8">
+
+      <Button Classes="tray" Command="{Binding ToggleNotificationTrayCommand}"
+              IsVisible="{Binding HasNotifications}"
+              HorizontalAlignment="Left" ToolTip.Tip="{Binding NotificationTrayHint}">
+        <StackPanel Orientation="Horizontal" Spacing="7">
+          <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                   Fill="{DynamicResource AccentBrush}" />
+          <TextBlock Text="{Binding NotificationTrayText}" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding NotificationTrayGlyph}" FontSize="11" VerticalAlignment="Center"
+                     Opacity="0.8" />
+        </StackPanel>
+      </Button>
+
+      <ItemsControl ItemsSource="{Binding Notifications}" IsVisible="{Binding IsNotificationListVisible}"
+                    MaxWidth="360" IsHitTestVisible="False">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Spacing="8" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:LauncherNotification">
+            <Border Classes="card notification">
+              <StackPanel Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                           Fill="{DynamicResource AccentBrush}" />
+                  <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+                <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
+                <ProgressBar IsVisible="{Binding IsWorking}" IsIndeterminate="True"
+                             Height="3" Margin="0,2,0,0" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
 
   </Panel>
 </Window>

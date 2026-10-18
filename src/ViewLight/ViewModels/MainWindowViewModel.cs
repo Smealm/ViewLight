@@ -100,13 +100,43 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     private readonly LauncherSettingsStore _store;
     private readonly GithubReleaseService _releaseService;
     private readonly ServerInstallService _installService;
+    private readonly BleedingEdgeServer _edgeService;
     private readonly RootWadItemService _itemService;
     private readonly ServerRunner _server = new();
     private readonly ClientSession _client;
 
+    /// <summary>
+    /// True while the constructor is filling in the saved state.
+    /// </summary>
+    /// <remarks>
+    /// The setters for the paths do their own work when a person changes them - the game folder is read, the
+    /// server's config is parsed and written back - and doing all of that here would do it twice, once for the
+    /// assignment and once for the explicit start below. It is settled once instead, after the state is in.
+    /// </remarks>
+    private bool _startingUp = true;
+
     private ImlightConfig? _config;
+
+    /// <summary>
+    /// What the last read of the server's config found, kept so the requirement check does not read the
+    /// same file a second time at every start.
+    /// </summary>
+    private ImlightConfigRead _configRead = new(null, false);
+
     private IReadOnlyList<ItemTemplate> _allCatalogItems = [];
     private ImlightRelease? _latestRelease;
+
+    /// <summary>The last look at the source checkout, or <c>null</c> before one.</summary>
+    private EdgeSourceState? _latestEdge;
+
+    /// <summary>The check in flight, so a channel change replaces it rather than races it.</summary>
+    /// <remarks>
+    /// A check is a network round trip, and a person can change channels while one is running. Without
+    /// this the older answer can land last and be shown as the newer channel's - a stable tag offered on
+    /// the prerelease channel is the case that matters, because pressing the button would install it.
+    /// </remarks>
+    private CancellationTokenSource? _checkCancellation;
+
     private CancellationTokenSource? _installCancellation;
 
     private readonly PlayerDatabaseClient _playerDatabase = new();
@@ -145,6 +175,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         _client = client ?? new ClientSession();
         _releaseService = new GithubReleaseService();
         _installService = new ServerInstallService();
+        _edgeService = new BleedingEdgeServer(_installService);
         _itemService = new RootWadItemService();
 
         _server.Output += (_, entry) => AppendLog(entry);
@@ -196,12 +227,27 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         ClientPath = _store.Settings.ClientPath;
         ServerPath = _store.Settings.ServerPath;
         PatchServerPath = _store.Settings.PatchServerPath;
+
+        // The channel is saved state like the folders, so it is filled in before the start is settled -
+        // the setter's work is the checking and saving a person's change causes, and neither belongs on
+        // the way into a window.
+        ServerChannel = ServerChannelChoices.Parse(_store.Settings.ServerChannel);
         ShowMilestoneToasts = _store.Settings.ShowMilestoneToasts;
         // Where to land is a setting rather than a memory: a launcher left on Settings should still open
         // ready to play, so only an explicit "default page" moves it off Home.
         Section = ParseSection(_store.Settings.DefaultSection);
 
+        // The start of the run, said once: reading the saved state is not an edit, so the setters above did
+        // nothing by themselves. What they would have done is done here, in the order it belongs in.
+        _startingUp = false;
+
+        RefreshClientState();
         LoadServerConfig();
+
+        // The starter-kit catalogue is not on the way to anything the window shows at first: it is the
+        // Settings page's picker, and reading it opens the client's own archive. Kicked here so it arrives
+        // while the window is already up.
+        _ = LoadItemCatalogAsync();
 
         SeedAccountsFromCache();
         RefreshPatchFolderStatus();
@@ -376,7 +422,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         LauncherSection.Profile => page == ProfilePage.Achievements
             ? "Everything this account has earned on this server, and what the rest of it would take."
             : "Who you are on this server: how long you have played, and what you have done.",
-        LauncherSection.Settings => "Your folders, your server, and every value ViewLight writes into Config/Imlight.ini.",
+        LauncherSection.Settings => "Your folders, your server and your data, in four pages - and every value "
+                                    + "ViewLight writes into Config/Imlight.ini.",
         LauncherSection.Logs => "Everything the launcher, the server and the patch server have reported this session.",
         LauncherSection.About => "What ViewLight is, and where it is up to.",
         _ => string.Empty,
@@ -539,6 +586,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     [ObservableProperty] private string _rootWadStatus = string.Empty;
 
     partial void OnClientPathChanged(string value) {
+        if (_startingUp) {
+            return;
+        }
+
         _store.Settings.ClientPath = value;
         _store.Save();
         RefreshClientState();
@@ -546,6 +597,10 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     partial void OnServerPathChanged(string value) {
+        if (_startingUp) {
+            return;
+        }
+
         _store.Settings.ServerPath = value;
         _store.Save();
         LoadServerConfig();
@@ -964,8 +1019,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     /// in with, and a username is only ever presented.
     /// </summary>
     partial void OnSelectedAccountChanged(PlayerAccount? value) {
-        _store.Settings.AutoLoginAccountId = value?.AccountId;
-        _store.Save();
+        // Signing out is not forgetting. The account this machine signs in as is kept when the selection is
+        // cleared, so the sign-in screen has somebody to fall back to and the next start still knows who was
+        // playing here; only picking an account changes it.
+        if (value is not null) {
+            _store.Settings.AutoLoginAccountId = value.AccountId;
+            _store.Save();
+        }
+
         OnPropertyChanged(nameof(AutoLoginSummary));
 
         // The account and the profile are two views of the same thing - the account is the server's half,
@@ -981,6 +1042,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     private void LoadServerConfig() {
         var read = ImlightConfig.Read(ServerPath);
 
+        _configRead = read;
         _config = read.Config;
         ServerInstalled = _config is not null;
 
@@ -1423,18 +1485,96 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _releaseCheckError = string.Empty;
 
+    /// <summary>Which builds the launcher installs: see <see cref="ServerChannelChoices"/>.</summary>
+    [ObservableProperty] private string _serverChannel = ServerChannelChoices.Prerelease;
+
+    // The three radio buttons are one setting seen from three sides. They are written out rather than
+    // bound to the string because a radio group needs one bool per option, and an option whose setter did
+    // nothing when unchecked would leave the group unable to move.
+    public bool IsStableChannel {
+        get => ServerChannel == ServerChannelChoices.Stable;
+        set { if (value) ServerChannel = ServerChannelChoices.Stable; }
+    }
+
+    public bool IsPrereleaseChannel {
+        get => ServerChannel == ServerChannelChoices.Prerelease;
+        set { if (value) ServerChannel = ServerChannelChoices.Prerelease; }
+    }
+
+    public bool IsBleedingEdgeChannel {
+        get => ServerChannel == ServerChannelChoices.BleedingEdge;
+        set { if (value) ServerChannel = ServerChannelChoices.BleedingEdge; }
+    }
+
+    public bool IsBleedingEdge => ServerChannel == ServerChannelChoices.BleedingEdge;
+
+    /// <summary>What the channel being on means, in a sentence. Shown under the choice.</summary>
+    public string ChannelNote => ServerChannel switch {
+        ServerChannelChoices.Stable =>
+            "Only builds Imlight publishes as a full release. There are none yet, so this says so rather "
+            + "than quietly installing a prerelease.",
+        ServerChannelChoices.BleedingEdge =>
+            "Imlight's current source, cloned and built on this machine. Needs git and the .NET SDK - not "
+            + "just the runtime - and can fail where those cannot build it. Bugs are the source's.",
+        _ =>
+            "The newest build on GitHub, prerelease or not. This is what Imlight publishes today, and the "
+            + "default.",
+    };
+
+    /// <summary>
+    /// The warning a bleeding-edge build carries, said once on the screen that offers it.
+    /// </summary>
+    /// <remarks>
+    /// It is not decoration. A build from current source is not a build anybody tested or published, and
+    /// reporting its bugs to the project as if it were a release sends people looking for a regression in
+    /// code that never shipped - so the disclosure is part of choosing it, not a footnote in a document.
+    /// </remarks>
+    public string BleedingEdgeWarning =>
+        "This is not a build anybody published or tested. Expect it not to work. If you report a bug to "
+        + "Imlight's developers, say first that you are running a build made from their source rather than "
+        + "a release - otherwise they will look for a fault in code that was never released.";
+
+    /// <summary>The button that installs a server, named for what it will actually do.</summary>
+    public string InstallButtonLabel => IsBleedingEdge ? "Build from source" : "Download latest";
+
+    /// <summary>The same button on the first screen, which asks for a server rather than an update.</summary>
+    public string InstallImlightLabel => IsBleedingEdge ? "Build Imlight" : "Download Imlight";
+
+    /// <summary>What that button will do, for the card that offers it.</summary>
+    public string InstallDescription => IsBleedingEdge
+        ? "Clones Imlight's current source, builds it on this machine and installs the result into the "
+          + "folder above. Anything already configured there is kept. Needs git, the .NET 10 SDK and "
+          + "Python 3.12; the type and message files Imlight does not publish are read from your game."
+        : "Downloads the newest build from GitHub and unpacks it into the folder above. Anything already "
+          + "configured in that folder is kept.";
+
+    /// <summary>Where a bleeding-edge build looks for the type dump Imcodec needs, for the note beside it.</summary>
+    public string EdgeTypeDumpPath => _edgeService.TypeDumpPath;
+
+    public string EdgeTypeDumpNote
+        => "Imlight's Imcodec needs a WizWalker type dump and the game's message definitions, neither of "
+           + "which the repository publishes. ViewLight makes them from your Wizard101 install: wiztype "
+           + "reads the types from your client (Python 3.12 needed) and the message XML comes out of "
+           + $"Root.wad. A dump you put at {EdgeTypeDumpPath} is used as it is instead.";
+
     public bool HasReleaseCheckError => !string.IsNullOrEmpty(ReleaseCheckError);
 
     private bool CanCheckForUpdates() => !IsBusy;
 
-    private bool CanInstall() => !IsBusy && _latestRelease is not null;
+    /// <summary>
+    /// Whether the install button can run. A bleeding-edge build needs no release to have been found:
+    /// the thing it installs is the checkout, and finding that out is part of pressing the button.
+    /// </summary>
+    private bool CanInstall() => !IsBusy && (IsBleedingEdge || _latestRelease is not null);
 
     private bool CanPrimaryAction() => !IsBusy;
 
     /// <summary>
-    /// One button, two jobs: download the server when it is missing, otherwise play.
+    /// One button, two jobs: get the server when it is missing, otherwise play.
     /// </summary>
-    public string PrimaryActionLabel => ServerInstalled ? "▶  PLAY" : "Download server";
+    public string PrimaryActionLabel => ServerInstalled
+        ? "▶  PLAY"
+        : IsBleedingEdge ? "Build server" : "Download server";
 
     [RelayCommand(CanExecute = nameof(CanPrimaryAction))]
     private async Task PrimaryActionAsync() {
@@ -1448,43 +1588,154 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
     [RelayCommand(CanExecute = nameof(CanCheckForUpdates))]
     private async Task CheckForUpdatesAsync() {
+        // Only cancelled, not disposed: the check it replaces is still unwinding, and disposing the
+        // token underneath a process or an HTTP handler it is waiting in is how a clean cancel becomes an
+        // ObjectDisposedException. Each check disposes its own when its work is done.
+        _checkCancellation?.Cancel();
+        var check = _checkCancellation = new CancellationTokenSource();
+
+        if (IsBleedingEdge) {
+            try {
+                await CheckForSourceUpdatesAsync(check.Token).ConfigureAwait(true);
+            }
+            finally {
+                if (ReferenceEquals(_checkCancellation, check)) {
+                    _checkCancellation = null;
+                }
+
+                check.Dispose();
+            }
+
+            return;
+        }
+
         ReleaseCheckError = string.Empty;
         LatestReleaseText = "Checking GitHub…";
 
         try {
-            _latestRelease = await _releaseService.GetLatestWindowsReleaseAsync().ConfigureAwait(true);
+            _latestRelease = await _releaseService
+                .GetLatestWindowsReleaseAsync(ServerChannel, check.Token)
+                .ConfigureAwait(true);
             LatestReleaseText = _latestRelease.Tag;
             AppendLog(LogLevel.Info, $"Newest Imlight build: {_latestRelease.Tag} ({_latestRelease.AssetName}).");
             RefreshInstalledReleaseText();
         }
+        catch (OperationCanceledException) {
+            // A newer check replaced this one; its answer is the one to show.
+            return;
+        }
         catch (Exception ex) {
             _latestRelease = null;
-            LatestReleaseText = "Could not reach GitHub.";
+            LatestReleaseText = ServerChannel == ServerChannelChoices.Stable
+                ? "No stable release yet."
+                : "Could not reach GitHub.";
             ReleaseCheckError = ex.Message;
             AppendLog(LogLevel.Error, $"Release check failed: {ex.Message}");
+        }
+        finally {
+            if (ReferenceEquals(_checkCancellation, check)) {
+                _checkCancellation = null;
+                RefreshDerived();
+            }
+
+            check.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Asks the source checkout what it is and whether GitHub has moved on from it.
+    /// </summary>
+    /// <remarks>
+    /// A separate path from the release check because there is no release to look up: the answer is a
+    /// commit, and the only two questions are what it is and whether the checkout is behind. A checkout
+    /// that has never been cloned is not an error - it is the state the install button exists for.
+    /// </remarks>
+    private async Task CheckForSourceUpdatesAsync(CancellationToken cancellationToken) {
+        ReleaseCheckError = string.Empty;
+        LatestReleaseText = "Checking the source…";
+
+        try {
+            var state = await _edgeService.CheckAsync(cancellationToken).ConfigureAwait(true);
+            _latestEdge = state;
+
+            LatestReleaseText = state.IsCloned ? state.Summary : "Not built yet.";
+
+            if (state.Problem is { Length: > 0 } problem) {
+                ReleaseCheckError = problem;
+                AppendLog(LogLevel.Error, $"Source check failed: {problem}");
+            }
+            else if (state.IsCloned) {
+                AppendLog(LogLevel.Info, $"Current Imlight source: {state.Summary}.");
+            }
+
+            RefreshInstalledReleaseText();
+        }
+        catch (OperationCanceledException) {
+            // A newer check replaced this one.
+            return;
+        }
+        catch (Exception ex) {
+            _latestEdge = null;
+            LatestReleaseText = "Could not read the source.";
+            ReleaseCheckError = ex.Message;
+            AppendLog(LogLevel.Error, $"Source check failed: {ex.Message}");
         }
         finally {
             RefreshDerived();
         }
     }
 
+    /// <summary>
+    /// The channel changed: remember it, drop what the last channel found, and ask the new one.
+    /// </summary>
+    /// <remarks>
+    /// Nothing installed is touched. A person trying a build from source and going back to a published
+    /// one keeps the server they have until they install something else - the channel says what to
+    /// install next, not what is on disk.
+    /// </remarks>
+    partial void OnServerChannelChanged(string value) {
+        OnPropertyChanged(nameof(IsStableChannel));
+        OnPropertyChanged(nameof(IsPrereleaseChannel));
+        OnPropertyChanged(nameof(IsBleedingEdgeChannel));
+        OnPropertyChanged(nameof(IsBleedingEdge));
+        OnPropertyChanged(nameof(ChannelNote));
+        OnPropertyChanged(nameof(BleedingEdgeWarning));
+        OnPropertyChanged(nameof(InstallButtonLabel));
+        OnPropertyChanged(nameof(InstallImlightLabel));
+        OnPropertyChanged(nameof(InstallDescription));
+        OnPropertyChanged(nameof(EdgeTypeDumpPath));
+        OnPropertyChanged(nameof(PrimaryActionLabel));
+
+        if (_startingUp) {
+            return;
+        }
+
+        _store.Settings.ServerChannel = value;
+        _store.Save();
+
+        _latestRelease = null;
+        _latestEdge = null;
+        ReleaseCheckError = string.Empty;
+        LatestReleaseText = "Not checked yet.";
+
+        AppendLog(LogLevel.Info, $"Server builds: {value}.");
+        RefreshDerived();
+        _ = CheckForUpdatesAsync();
+    }
+
     [RelayCommand(CanExecute = nameof(CanInstall))]
     private async Task InstallOrUpdateAsync() {
+        if (IsBleedingEdge) {
+            await InstallFromSourceAsync().ConfigureAwait(true);
+            return;
+        }
+
         if (_latestRelease is null) {
             return;
         }
 
         if (string.IsNullOrWhiteSpace(ServerPath)) {
             AppendLog(LogLevel.Error, "Choose a server folder first.");
-            return;
-        }
-
-        // A server that is up is holding the very binaries the overlay came to replace, and it is not the
-        // launcher's to stop on the way past a button: the install is refused, and the reason names the button
-        // that fixes it rather than the file Windows would have named.
-        if (ServerIsBusyOrUp) {
-            AppendLog(LogLevel.Error,
-                "The server is running, so its files cannot be replaced. Stop it and press Download latest again.");
             return;
         }
 
@@ -1515,6 +1766,8 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             if (result.Success) {
                 _store.Settings.InstalledTag = release.Tag;
                 _store.Settings.InstalledAssetUrl = release.AssetUrl;
+                _store.Settings.InstalledChannel = ServerChannel;
+                _store.Settings.InstalledEdgeCommit = null;
                 _store.Settings.InstalledAt = DateTimeOffset.Now;
                 _store.Save();
 
@@ -1526,6 +1779,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
                 }
 
                 LogRepair(new ConfigRepair(result.EmbeddedDatabasePort, result.PatchServerUrl));
+                AnnounceInstalledBuild(result.Tag);
 
                 // A fresh install is what the launcher may have been waiting for, and a new build is what the
                 // databases should be running - so the config is read again here, and the databases come back
@@ -1542,26 +1796,119 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             }
 
             RefreshInstalledReleaseText();
+            RefreshDerived();
         }
         catch (Exception ex) {
             AppendLog(LogLevel.Error, $"Install failed: {ex.Message}");
         }
         finally {
-            // Whichever way it went, the launcher's databases come back - a failed install is worth less than
-            // the profiles and accounts they are read from, and half an overlay is a real thing. In the
-            // background rather than awaited: a RavenDB start is tens of seconds, and the button that started
-            // this is not the place to spend them. Both opens are single-flight, so a second ask is answered by
-            // the one already running rather than by a second database on the same port.
-            _ = EnsureLauncherDatabaseAsync();
-            _ = EnsureIdleDatabaseAsync();
+            EndInstall();
+        }
+    }
 
-            _installCancellation?.Dispose();
-            _installCancellation = null;
-            IsBusy = false;
-            InstallStage = "Idle";
-            InstallProgress = 0;
+    /// <summary>
+    /// Clones, updates, builds and installs Imlight's current source.
+    /// </summary>
+    /// <remarks>
+    /// The same handover as an archive install - a running server is stopped and the databases are let go
+    /// only when the written files are about to be touched - because a build that fails is exactly a
+    /// download that failed, and neither is worth having stopped anything for. What is different is the
+    /// time it takes: a clone and a publish are minutes, so every stage says where it is and Cancel ends
+    /// the tool rather than only the wait.
+    /// </remarks>
+    private async Task InstallFromSourceAsync() {
+        if (string.IsNullOrWhiteSpace(ServerPath)) {
+            AppendLog(LogLevel.Error, "Choose a server folder first.");
+            return;
+        }
+
+        var updating = ServerInstalled;
+
+        IsBusy = true;
+        RefreshDerived();
+
+        _installCancellation = new CancellationTokenSource();
+        var progress = new Progress<InstallProgress>(p => {
+            InstallProgress = p.Percent;
+            InstallStage = $"{p.Stage} · {p.Detail}";
+        });
+
+        AppendLog(LogLevel.Info, updating
+            ? "Building Imlight's current source. The build will be installed over the existing server."
+            : "Cloning Imlight's source and building it. This takes a few minutes the first time.");
+
+        try {
+            var result = await _edgeService
+                .InstallAsync(ServerPath, ClientPath, progress, ReleaseDatabasesForInstallAsync,
+                    _installCancellation.Token)
+                .ConfigureAwait(true);
+
+            if (result.Success) {
+                _store.Settings.InstalledTag = result.Tag;
+                _store.Settings.InstalledAssetUrl = null;
+                _store.Settings.InstalledChannel = ServerChannelChoices.BleedingEdge;
+                _store.Settings.InstalledEdgeCommit = result.Commit;
+                _store.Settings.InstalledAt = DateTimeOffset.Now;
+                _store.Save();
+
+                // What was just built is what the checkout now holds, so the card stops offering an
+                // update the moment the install finishes rather than keeping the answer from before it.
+                var shortCommit = BleedingEdgeServer.IsEdgeTag(result.Tag)
+                    ? result.Tag[BleedingEdgeServer.TagPrefix.Length..]
+                    : result.Tag;
+
+                _latestEdge = _latestEdge is null
+                    ? new EdgeSourceState(true, result.Commit, shortCommit, string.Empty, null, 0, false, null)
+                    : _latestEdge with { Commit = result.Commit, ShortCommit = shortCommit, Behind = 0 };
+
+                AppendLog(LogLevel.Success,
+                    $"{result.Message} ({result.FilesWritten} files written, {result.SettingsRetained} settings retained.)");
+                AppendLog(LogLevel.Warning, BleedingEdgeWarning);
+
+                if (result.Warning is { Length: > 0 }) {
+                    AppendLog(LogLevel.Warning, result.Warning);
+                }
+
+                LogRepair(new ConfigRepair(result.EmbeddedDatabasePort, result.PatchServerUrl));
+                AnnounceInstalledBuild(result.Tag);
+                LoadServerConfig();
+                await MakeOwnEngineAsync().ConfigureAwait(true);
+            }
+            else {
+                AppendLog(LogLevel.Error, result.Message);
+            }
+
+            RefreshInstalledReleaseText();
             RefreshDerived();
         }
+        catch (Exception ex) {
+            AppendLog(LogLevel.Error, $"Build failed: {ex.Message}");
+        }
+        finally {
+            EndInstall();
+        }
+    }
+
+    /// <summary>
+    /// The end of any install, whichever way it went.
+    /// </summary>
+    /// <remarks>
+    /// The launcher's databases come back here - a failed install is worth less than the profiles and
+    /// accounts they are read from, and half an overlay is a real thing. In the background rather than
+    /// awaited: a RavenDB start is tens of seconds, and the button that started this is not the place to
+    /// spend them. Both opens are single-flight, so a second ask is answered by the one already running
+    /// rather than by a second database on the same port.
+    /// </remarks>
+    private void EndInstall() {
+        _ = EnsureLauncherDatabaseAsync();
+        _ = EnsureIdleDatabaseAsync();
+
+        _installCancellation?.Dispose();
+        _installCancellation = null;
+        IsBusy = false;
+        InstallStage = "Idle";
+        InstallProgress = 0;
+        RefreshDerived();
     }
 
     /// <summary>Picks a port for the embedded RavenDB that is free right now.</summary>
@@ -1608,32 +1955,91 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     [RelayCommand]
     private void CancelInstall() {
         _installCancellation?.Cancel();
-        AppendLog(LogLevel.Warning, "Cancelling the download…");
+        AppendLog(LogLevel.Warning,
+            IsBleedingEdge ? "Cancelling the build…" : "Cancelling the download…");
+    }
+
+    /// <summary>
+    /// Says what the server folder now holds, in the terms the next run will see it.
+    /// </summary>
+    /// <remarks>
+    /// The managed assembly's timestamp is the build's own time, copied along with the file, so it is
+    /// evidence that the folder changed rather than a restatement of the tag the caller already had. This
+    /// is what makes "installed" a fact about disk instead of a claim about settings.
+    /// </remarks>
+    private void AnnounceInstalledBuild(string tag) {
+        var assembly = Path.Combine(ServerPath, "Imlight.Director.dll");
+
+        if (!File.Exists(assembly)) {
+            return;
+        }
+
+        AppendLog(LogLevel.Success,
+            $"The server folder now holds {tag}; Imlight.Director.dll is dated "
+            + $"{File.GetLastWriteTime(assembly):d MMM yyyy HH:mm:ss}.");
     }
 
     private void RefreshInstalledReleaseText() {
         var settings = _store.Settings;
+        var date = settings.InstalledAt?.LocalDateTime.ToString("d MMM yyyy");
+
+        if (BleedingEdgeServer.IsEdgeTag(settings.InstalledTag)) {
+            var commit = settings.InstalledTag![BleedingEdgeServer.TagPrefix.Length..];
+            var head = $"Bleeding edge {commit}";
+            InstalledReleaseText = date is null ? head : $"{head} · {date}";
+            return;
+        }
+
         InstalledReleaseText = settings.InstalledTag is null
             ? "Not downloaded"
-            : settings.InstalledAt is null
-                ? settings.InstalledTag
-                : $"{settings.InstalledTag} · {settings.InstalledAt.Value.LocalDateTime:d MMM yyyy}";
+            : date is null ? settings.InstalledTag : $"{settings.InstalledTag} · {date}";
     }
 
     public string InstalledTag => _store.Settings.InstalledTag ?? "—";
 
-    public bool IsUpdateAvailable => _latestRelease is not null
-                                     && ServerInstalled
-                                     && !string.Equals(_store.Settings.InstalledTag, _latestRelease.Tag,
-                                         StringComparison.Ordinal);
+    /// <summary>
+    /// Whether the channel has something newer than what is in the server folder.
+    /// </summary>
+    /// <remarks>
+    /// A build from source is compared by commit rather than tag: the tag carries only the short hash, and
+    /// two short hashes that collide are not the same build. A channel with no answer yet - a release check
+    /// that failed, a source checkout never looked at - is not an update, so the button keeps saying what
+    /// it said rather than offering to reinstall the same thing.
+    /// </remarks>
+    public bool IsUpdateAvailable {
+        get {
+            if (!ServerInstalled) {
+                return false;
+            }
+
+            if (IsBleedingEdge) {
+                return _latestEdge is { IsCloned: true, Commit.Length: > 0 } edge
+                       && !string.Equals(_store.Settings.InstalledEdgeCommit, edge.Commit,
+                           StringComparison.Ordinal);
+            }
+
+            return _latestRelease is not null
+                   && !string.Equals(_store.Settings.InstalledTag, _latestRelease.Tag, StringComparison.Ordinal);
+        }
+    }
 
     // ---------------------------------------------------------------- the two builds
 
-    /// <summary>The build in the server folder, as it was recorded when it was downloaded.</summary>
-    public string ServerBuildText => !ServerInstalled
-        ? "Not installed"
-        : _store.Settings.InstalledTag
-          ?? (string.IsNullOrWhiteSpace(GameRevision) ? "Unknown" : GameRevision);
+    /// <summary>The build in the server folder, as it was recorded when it was installed.</summary>
+    public string ServerBuildText {
+        get {
+            if (!ServerInstalled) {
+                return "Not installed";
+            }
+
+            if (BleedingEdgeServer.IsEdgeTag(_store.Settings.InstalledTag)) {
+                return $"Bleeding edge {_store.Settings.InstalledTag![BleedingEdgeServer.TagPrefix.Length..]}";
+            }
+
+            return _store.Settings.InstalledTag
+                   ?? (string.IsNullOrWhiteSpace(GameRevision) ? "Unknown" : GameRevision);
+        }
+    }
 
     /// <summary>
     /// The client's own revision, read from the game folder rather than remembered - see
@@ -1660,9 +2066,17 @@ public sealed partial class MainWindowViewModel : ObservableObject {
            + $"which ViewLight reads. A complete install also ships {ClientBuildReader.RelativeRevisionFile}.";
 
     /// <summary>The revision this server folder accepts. Blank GameRevision falls back to the tag.</summary>
+    /// <remarks>
+    /// A build from source has no release tag to fall back to - <c>edge-abc1234</c> is a commit, not a
+    /// game revision - so it falls back to nothing rather than to a value the client could never match.
+    /// </remarks>
     public string? ExpectedClientBuild => !ServerInstalled
         ? null
-        : !string.IsNullOrWhiteSpace(GameRevision) ? GameRevision : _store.Settings.InstalledTag;
+        : !string.IsNullOrWhiteSpace(GameRevision)
+            ? GameRevision
+            : BleedingEdgeServer.IsEdgeTag(_store.Settings.InstalledTag)
+                ? null
+                : _store.Settings.InstalledTag;
 
     /// <summary>
     /// The client, when the launcher can see that it is not the revision the server is set to accept.
@@ -2378,6 +2792,30 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         }
     }
 
+    // ---------------------------------------------------------------- verbose mode
+
+    /// <summary>
+    /// Whether the launcher shows the explanation under each control.
+    /// </summary>
+    /// <remarks>
+    /// The notes are comments on the screen rather than part of it, so they are hidden by default and the
+    /// window carries a <c>verbose</c> class when this is on - see <c>LauncherStyles.axaml</c>. Saved the
+    /// moment it is ticked, because it is a way of reading the launcher rather than a change to anything
+    /// the launcher does.
+    /// </remarks>
+    public bool VerboseMode {
+        get => _store.Settings.VerboseMode;
+        set {
+            if (_store.Settings.VerboseMode == value) {
+                return;
+            }
+
+            _store.Settings.VerboseMode = value;
+            _store.Save();
+            OnPropertyChanged();
+        }
+    }
+
     // ---------------------------------------------------------------- the game's own art
 
     private readonly GameArtCache _artCache = new();
@@ -2760,8 +3198,12 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             return null;
         }
 
+        // The server says it is ready before its embedded database necessarily starts answering, so a
+        // refusal here is waited out rather than taken as a database the launcher cannot read. Arriving
+        // a second early must not be what turns automatic sign-in off.
         var contents = await _playerDatabase
-            .ReadAsync(_config.EmbeddedDatabasePort, AdminUsername, AdminPassword)
+            .ReadWhenAnsweringAsync(
+                _config.EmbeddedDatabasePort, AdminUsername, AdminPassword, TimeSpan.FromSeconds(8))
             .ConfigureAwait(true);
 
         _database = contents;
@@ -2907,7 +3349,12 @@ public sealed partial class MainWindowViewModel : ObservableObject {
 
         var wanted = SelectedAccount?.AccountId ?? _store.Settings.AutoLoginAccountId;
         var contents = await _playerDatabase
-            .ReadAsync(_config.EmbeddedDatabasePort, AdminUsername, AdminPassword, deadline?.Token ?? default)
+            .ReadWhenAnsweringAsync(
+                _config.EmbeddedDatabasePort,
+                AdminUsername,
+                AdminPassword,
+                timeout ?? TimeSpan.FromSeconds(3),
+                deadline?.Token ?? default)
             .ConfigureAwait(true);
 
         // Imlight creates the admin account once and never applies a later password change to it, so the
@@ -3191,6 +3638,18 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(StarterAccountInitials));
         OnPropertyChanged(nameof(HasStarterAccount));
         OnPropertyChanged(nameof(PrimaryActionLabel));
+        OnPropertyChanged(nameof(ServerChannel));
+        OnPropertyChanged(nameof(IsStableChannel));
+        OnPropertyChanged(nameof(IsPrereleaseChannel));
+        OnPropertyChanged(nameof(IsBleedingEdgeChannel));
+        OnPropertyChanged(nameof(IsBleedingEdge));
+        OnPropertyChanged(nameof(ChannelNote));
+        OnPropertyChanged(nameof(BleedingEdgeWarning));
+        OnPropertyChanged(nameof(InstallButtonLabel));
+        OnPropertyChanged(nameof(InstallImlightLabel));
+        OnPropertyChanged(nameof(InstallDescription));
+        OnPropertyChanged(nameof(EdgeTypeDumpPath));
+        OnPropertyChanged(nameof(EdgeTypeDumpNote));
         OnPropertyChanged(nameof(ServerBuildText));
         OnPropertyChanged(nameof(ClientBuild));
         OnPropertyChanged(nameof(ClientBuildText));
@@ -3222,6 +3681,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(HasDiscoveredServers));
         OnPropertyChanged(nameof(AccountsAreRemembered));
         OnPropertyChanged(nameof(IsPortable));
+
+        // A full reset is offered only while both databases can be deleted, and what moves that is the
+        // server and the cloud sync rather than anything else on this list - see the reset partial.
+        OnPropertyChanged(nameof(CanResetNow));
+        OnPropertyChanged(nameof(IsResetBlocked));
+        OnPropertyChanged(nameof(ResetBlockedText));
+        OnPropertyChanged(nameof(CanWipeCloudCopy));
+        OnPropertyChanged(nameof(IsEditingAllowed));
         OnPropertyChanged(nameof(LauncherRoot));
         OnPropertyChanged(nameof(PortableGameFolder));
         OnPropertyChanged(nameof(PortableNeedsClient));
@@ -3258,6 +3725,9 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     public void Shutdown() {
+        _checkCancellation?.Cancel();
+        _checkCancellation = null;
+
         // Before the watch goes: whatever the last look saw of a session that is still running is added up,
         // so closing the launcher mid-game does not leave the last minute of play uncounted.
         EndPlayingSession();

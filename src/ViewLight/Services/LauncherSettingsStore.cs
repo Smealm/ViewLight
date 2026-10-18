@@ -148,8 +148,37 @@ public static class LauncherPaths {
     /// </summary>
     public static string ArtCacheDirectory => Path.Combine(DataRoot, "art");
 
-    /// <summary>Scratch space used while extracting a release.</summary>
+    /// <summary>
+    /// The seven school element logos, fetched once and kept with the rest of the art.
+    /// </summary>
+    public static string SchoolIconsDirectory => Path.Combine(ArtCacheDirectory, "schools");
+
+    /// <summary>
+    /// The index of the gamerpic archive: the repository's own listing of everything it holds.
+    /// </summary>
+    /// <remarks>
+    /// One file rather than 32,000 requests. The archive is a repository of Xbox 360 gamerpics belonging
+    /// to the person who asked for this screen, and it publishes a CSV naming every one of them - so the
+    /// browser reads that once, keeps it, and fetches only the pictures actually looked at.
+    /// </remarks>
+    public static string GamerpicIndexFile => Path.Combine(ArtCacheDirectory, "gamerpics.csv");
+
+    /// <summary>Gamerpics that have been looked at, kept so a page is not downloaded twice.</summary>
+    public static string GamerpicDirectory => Path.Combine(ArtCacheDirectory, "gamerpics");
+
+    /// <summary>Wallpapers and their thumbnails that have been looked at.</summary>
+    public static string WallhavenDirectory => Path.Combine(ArtCacheDirectory, "wallhaven");
+
+    /// <summary>Scratch space used while extracting a release or building one.</summary>
     public static string StagingDirectory => Path.Combine(DataRoot, "staging");
+
+    /// <summary>
+    /// Where the bleeding-edge source checkout lives, along with the Imcodec type dump, the private
+    /// Python environment that makes it and the extracted message definitions. Beside the launcher's
+    /// other files so a portable folder carries them too - and so a source build is a build of something
+    /// the launcher owns rather than of whatever happens to be in a folder somebody chose.
+    /// </summary>
+    public static string SourceDirectory => Path.Combine(DataRoot, "source");
 
     /// <summary>The folder the launcher suggests when the user has no preference.</summary>
     public static string DefaultServerPath => Path.Combine(DataRoot, "server");

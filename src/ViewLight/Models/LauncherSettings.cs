@@ -47,6 +47,51 @@ public static class PatchServerCleanupChoices {
     public static IReadOnlyList<string> All { get; } = [Automatic, Manual];
 }
 
+/// <summary>
+/// Which Imlight builds the launcher installs.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Spelled as strings rather than as an enum for the same reason as <see cref="ThemeChoices"/>: this is
+/// written into the settings file, and a value a later build no longer recognises must fall back rather
+/// than fail to load.
+/// </para>
+/// <para>
+/// The first two are release channels - GitHub builds somebody else made. The third is not a build at
+/// all: <see cref="BleedingEdge"/> is the project's current source, cloned, built on this machine, and
+/// installed from the result. It exists for the case neither release channel can serve - a fix or a
+/// feature that has been committed and not yet built - and it is the one option that can fail on a
+/// machine that cannot build .NET projects.
+/// </para>
+/// </remarks>
+public static class ServerChannelChoices {
+
+    /// <summary>A build published as a GitHub release: what Imlight calls stable.</summary>
+    public const string Stable = "Stable";
+
+    /// <summary>A build published as a GitHub <i>prerelease</i>, which is every Imlight build so far.</summary>
+    public const string Prerelease = "Prerelease";
+
+    /// <summary>
+    /// The project's current source, built here. Not a published build at all, and the only channel that
+    /// needs git and the .NET SDK on this machine.
+    /// </summary>
+    public const string BleedingEdge = "BleedingEdge";
+
+    /// <summary>Every choice, in the order the radio buttons list them.</summary>
+    public static IReadOnlyList<string> All { get; } = [Stable, Prerelease, BleedingEdge];
+
+    /// <summary>The channel a stored value names, falling back to <see cref="Prerelease"/>.</summary>
+    /// <remarks>
+    /// Prerelease rather than Stable is the fallback because that is what every Imlight build is today:
+    /// a launcher that has never been asked, or one whose settings name a channel this build does not
+    /// know, must still be able to find a server. Choosing Stable before there is one is a deliberate
+    /// act, and it is answered with the sentence that says so rather than silence.
+    /// </remarks>
+    public static string Parse(string? stored)
+        => stored is Stable or BleedingEdge ? stored : Prerelease;
+}
+
 /// <summary>The themes the launcher offers.</summary>
 public static class ThemeChoices {
 
@@ -89,6 +134,25 @@ public sealed class LauncherSettings {
 
     /// <summary>Asset URL of the installed release (used to tell "same build" from "new build").</summary>
     public string? InstalledAssetUrl { get; set; }
+
+    /// <summary>
+    /// Which channel <see cref="InstalledTag"/> came from, so a build installed from source is not
+    /// mistaken for one of the same name published on GitHub.
+    /// </summary>
+    public string InstalledChannel { get; set; } = ServerChannelChoices.Prerelease;
+
+    /// <summary>
+    /// The commit a bleeding-edge build was made from, or <c>null</c> for a published build.
+    /// </summary>
+    /// <remarks>
+    /// The tag alone is not enough to answer "is there newer source?": an edge tag carries only the
+    /// short commit, and the launcher needs the full one to compare against the checkout's HEAD. It is
+    /// also what says whether the build in the folder is still the one the local source describes.
+    /// </remarks>
+    public string? InstalledEdgeCommit { get; set; }
+
+    /// <summary>Which builds the launcher installs: see <see cref="ServerChannelChoices"/>.</summary>
+    public string ServerChannel { get; set; } = ServerChannelChoices.Prerelease;
 
     /// <summary>Check GitHub for a newer build when the launcher starts.</summary>
     public bool CheckForUpdatesOnStartup { get; set; } = true;
@@ -284,6 +348,17 @@ public sealed class LauncherSettings {
     /// written by a future version does not fail to load.
     /// </summary>
     public string Theme { get; set; } = ThemeChoices.System;
+
+    /// <summary>
+    /// Whether the explanation under each control is shown.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, because a launcher is used rather than read: the sentence under a setting is worth
+    /// having the first time and is in the way every time after that. It is kept as a preference rather
+    /// than a hover tip so a person who wants the launcher to explain itself can have all of it at once,
+    /// and one who does not is never shown any of it.
+    /// </remarks>
+    public bool VerboseMode { get; set; }
 
     /// <summary>
     /// Ask before closing while a server the launcher started is running, because closing stops it.

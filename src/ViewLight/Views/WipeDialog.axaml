@@ -1,0 +1,84 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ViewLight.Views.WipeDialog"
+        Title="Start over completely"
+        Width="580"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource ContentBackgroundBrush}">
+
+  <StackPanel Margin="24" Spacing="14">
+
+    <!-- ============================================================ step one: what this costs
+         Read out before anything can be gone past, and the wait is the point rather than an obstacle: the
+         list below is the whole of what a player has on this server, and the button that continues is the
+         one thing standing between them and it. -->
+
+    <StackPanel x:Name="ReadingStep" Spacing="12">
+      <TextBlock Classes="cardTitle" FontSize="17" Text="Start over completely?" />
+
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="This deletes both databases - the ones that cannot be downloaded again. Everything they hold is gone for good: there is no undo, and nothing here is kept as a copy." />
+
+      <Border Classes="list" BorderBrush="{DynamicResource ErrorBrush}">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="label" Text="What will be deleted" />
+          <ItemsControl x:Name="TargetList">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7" Margin="0,2">
+                  <TextBlock Text="•" Foreground="{DynamicResource ErrorBrush}" />
+                  <TextBlock Grid.Column="1" Text="{Binding}" TextWrapping="Wrap" FontSize="12" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+
+      <TextBlock x:Name="KeepsText" Classes="muted" TextWrapping="Wrap" FontSize="12" />
+
+      <CheckBox x:Name="CloudCheck" Content="Also delete the copy of these databases in my Google Drive" />
+      <TextBlock x:Name="CloudExplanation" Classes="muted" TextWrapping="Wrap" FontSize="11" />
+
+      <TextBlock Classes="warning" TextWrapping="Wrap"
+                 Text="Your server is not restarted for you. When you want to play again, start it and it will make itself a new, empty database - there will be no accounts, no wizards and no profiles until it does." />
+
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
+        <Button Content="Cancel" IsCancel="True" Click="OnCancelClick" MinWidth="120" />
+        <Button x:Name="NextButton" Content="Next" IsEnabled="False" Click="OnNextClick" MinWidth="160" />
+      </StackPanel>
+    </StackPanel>
+
+    <!-- ============================================================ step two: say it
+         The sentence is the issue's own, word for word, and it is deliberately long: it is the last thing
+         between a press and an empty install, so it should take reading rather than a click. -->
+
+    <StackPanel x:Name="TypingStep" Spacing="12" IsVisible="False">
+      <TextBlock Classes="cardTitle" FontSize="17" Text="Type this to confirm" />
+
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Type the sentence below exactly. It says what is about to happen, and typing it is the last step - there is nothing after this that asks again." />
+
+      <Border Classes="list">
+        <SelectableTextBlock x:Name="PhraseText" TextWrapping="Wrap" FontSize="12"
+                             FontFamily="Consolas, monospace" />
+      </Border>
+
+      <TextBox x:Name="ConfirmBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="60"
+               TextChanged="OnPhraseChanged" Watermark="Type the sentence here…" />
+
+      <TextBlock x:Name="TypedProblem" Classes="warning" TextWrapping="Wrap"
+                 Text="That is not the sentence yet." IsVisible="False" />
+
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
+        <Button Content="Cancel" IsCancel="True" Click="OnCancelClick" MinWidth="120" />
+        <Button x:Name="WipeButton" Classes="danger" Content="Wipe everything" IsEnabled="False"
+                Click="OnWipeClick" MinWidth="160" />
+      </StackPanel>
+    </StackPanel>
+
+  </StackPanel>
+</Window>

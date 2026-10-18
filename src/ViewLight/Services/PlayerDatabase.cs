@@ -224,11 +224,23 @@ public sealed class PlayerDatabaseClient : IDisposable {
 
     public PlayerDatabaseClient(HttpClient? http = null, string databaseName = DefaultDatabaseName) {
         _ownsHttp = http is null;
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+
+        // The loopback client: this database answers on 127.0.0.1 and the port Imlight was configured with,
+        // and reading it is a conversation between two processes on this machine. The system proxy has no
+        // business in it - and on a machine with no network at all it is the one thing that can make a
+        // database beside the launcher unreadable.
+        _http = http ?? LoopbackHttp.Client(TimeSpan.FromSeconds(15));
         _databaseName = databaseName;
     }
 
-    /// <summary>Where the embedded database answers, on the port Imlight was configured with.</summary>
+    /// <summary>
+    /// Where the embedded database answers, on the port Imlight was configured with.
+    /// </summary>
+    /// <remarks>
+    /// The loopback address, by name and by rule: the database is this machine's own, and an address that
+    /// would have to be looked up - or that sits on the machine's network rather than on itself - is one
+    /// more thing that could fail while everything the read needs is already here.
+    /// </remarks>
     public static string BaseUrl(int port) => $"http://127.0.0.1:{port.ToString(CultureInfo.InvariantCulture)}";
 
     /// <summary>
@@ -309,6 +321,49 @@ public sealed class PlayerDatabaseClient : IDisposable {
                                       or InvalidOperationException or NotSupportedException) {
             return PlayerDatabaseContents.Unreadable(
                 $"{BaseUrl(port)} did not answer as a player database ({ex.Message}).");
+        }
+    }
+
+    /// <summary>
+    /// Reads the accounts and session keys, waiting for a database that is still starting.
+    /// </summary>
+    /// <remarks>
+    /// Imlight starts its RavenDB in the background and starts answering logins while it does, so a
+    /// launcher that reads the moment the server says it is ready can arrive a second or two before the
+    /// database's port does. That is not a database the launcher does not understand - it is one that is
+    /// not there yet - so this waits out <paramref name="wait"/> instead of reporting a layout problem,
+    /// which would switch automatic sign-in off for a server that was about to work. The last refusal is
+    /// returned as it is, so a database that really is not there still says so.
+    /// </remarks>
+    public async Task<PlayerDatabaseContents> ReadWhenAnsweringAsync(
+        int port,
+        string adminUsername,
+        string adminPassword,
+        TimeSpan wait,
+        CancellationToken cancellationToken = default) {
+
+        var deadline = DateTimeOffset.UtcNow + wait;
+        PlayerDatabaseContents contents;
+
+        while (true) {
+            contents = await ReadAsync(port, adminUsername, adminPassword, cancellationToken)
+                .ConfigureAwait(false);
+
+            // Only a database that did not answer is worth waiting for. A database that answered with a
+            // layout the launcher does not know is a different fact, and asking it again would not change
+            // the answer - it would only delay the sentence that says automatic sign-in is off.
+            var stillStarting = contents.Problem?.Contains("did not answer", StringComparison.Ordinal) == true;
+
+            if (!stillStarting || DateTimeOffset.UtcNow >= deadline || cancellationToken.IsCancellationRequested) {
+                return contents;
+            }
+
+            try {
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) {
+                return contents;
+            }
         }
     }
 
