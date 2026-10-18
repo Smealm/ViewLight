@@ -21,23 +21,30 @@ and everything it started shuts down with it.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/home.png" alt="Home"></td>
-    <td width="50%"><img src="docs/screenshots/profile.png" alt="Profile"></td>
+    <td width="50%">
+      <img src="docs/screenshots/home.png" alt="Home" width="100%">
+    </td>
+    <td width="50%">
+      <img src="https://github.com/user-attachments/assets/93b03fd8-7bf7-44e2-a539-81008a5d841d" alt="Profile" width="100%">
+    </td>
   </tr>
   <tr>
     <td><b>Home.</b> The game's banner, the Play button, and one quiet strip for the server underneath it.</td>
     <td><b>Profile.</b> The account Play signs in as, its playtime and standing, and the score circle its achievements open from.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/achievements.png" alt="Achievements"></td>
-    <td><img src="docs/screenshots/achievement-toast.png" alt="Achievement toast"></td>
+    <td>
+      <img src="docs/screenshots/achievements.png" alt="Achievements" width="100%">
+    </td>
+    <td>
+      <img src="docs/screenshots/achievement-toast.png" alt="Achievement toast" width="100%">
+    </td>
   </tr>
   <tr>
     <td><b>Achievements.</b> Grouped by category and scored, with one milestone card per ladder.</td>
     <td><b>Earned.</b> A badge announced over the game as it happens.</td>
   </tr>
 </table>
-
 ## What it does
 
 - **Finds your game.** *Detect* looks for a Wizard101 install, including one on a second drive.
