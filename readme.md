@@ -45,6 +45,7 @@ and everything it started shuts down with it.
     <td><b>Earned.</b> A badge announced over the game as it happens.</td>
   </tr>
 </table>
+
 ## What it does
 
 - **Finds your game.** *Detect* looks for a Wizard101 install, including one on a second drive.
