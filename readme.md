@@ -1,4 +1,4 @@
-﻿# ViewLight
+# ViewLight
 
 **A launcher that makes playing Wizard101 on your own private server as easy as pressing Play.**
 
@@ -744,4 +744,5 @@ written up in [docs/design-notes.md](docs/design-notes.md).
 either. Accounts, wizards, sign-ins, zones, duels and creature kills are all *read* from your own server's
 data and its log, and automatic sign-in uses the sign-in key the server already holds for this machine -
 which is exactly what the game client's own `-U` argument is designed to receive. Reading what a server
-writes down is the whole technique, so there is nothing here that could get an account banned.
+writes down is the whole technique, ~~so there is nothing here that could get an account banned~~. 
+Kingisle has started banning accounts they catch using private servers.
