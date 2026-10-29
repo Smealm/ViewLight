@@ -443,8 +443,11 @@ is a stable one must still install it rather than nothing. This is the old behav
 fixes and features are committed before they are built. It keeps a real git checkout at
 `<data>/source/imlight` (`LauncherPaths.SourceDirectory`), so:
 
-- the first press is `git clone --recurse-submodules`;
+- the first press is `git clone --recurse-submodules` (with `--branch` when a branch is chosen);
 - every later press is `git fetch` + a merge, not another clone;
+- the branch it builds is a setting of its own - `BleedingEdgeBranch`, empty meaning the repository's
+  default - and the picker beside the channel is filled from GitHub, so a fix on a feature branch can be
+  built without waiting for it to be merged;
 - the toolchain is checked *before* the publish - the .NET SDK major is read from
   `Imlight.Director.csproj`'s `TargetFramework` rather than written down here, so a project that moves to a
   newer framework is not held back by a stale check;
@@ -463,6 +466,20 @@ fixes and features are committed before they are built. It keeps a real git chec
   path downloads, unpacks and calls it with one folder; the source path builds and calls it with three.
   There is one install path. After it succeeds the Log names the installed tag and the assembly's own
   build timestamp, and the card is refreshed from that result immediately - no launcher restart.
+
+**"The newest source" is GitHub's answer, not the checkout's.** The card used to describe the checkout: its
+HEAD, and how far behind its own upstream it was. Two things went wrong with that, and both were seen on a
+real machine. A fetch that failed left the remote-tracking ref where it had been, so the card went on
+naming a commit from days before as the newest source; and a checkout left on another branch - or one whose
+upstream pointed at one - counted itself as up to date against the wrong branch entirely. `CheckAsync` now
+asks the repository itself, with one `git ls-remote --symref <url> HEAD refs/heads/*`: the symref line names
+the default branch, the heads that follow are every branch with the commit GitHub has for it. That answer
+is what the card shows, what "behind" is counted against (`HEAD..origin/<branch>`, never `@{u}`), and what
+the branch picker lists. The commit subject is then read from the object the fetch brought in, so the card
+says the words as well when it can; before the first clone there is no object, and the hash alone is still
+the honest answer. The same branch is what a build moves the checkout onto - a local branch of that name as
+it is, so local commits still merge, and one this checkout has never had made from `origin/<branch>` - and
+what is merged, so the build cannot quietly use the branch the clone happened to track.
 
 **An uncommitted edit is never merged over.** `git status --porcelain` decides: a dirty tree is built as it
 is, with a warning in the Log, because merging is how an updater loses work that is not recoverable from
@@ -2110,7 +2127,8 @@ works, the revision the two are kept on together, and the cleanup of the revisio
 both the server and the game it started are up - fixes the copy into the patch server against a revision the
 sync has moved, folds a warning the server repeats with its own timestamp in front of it, files the
 launcher's notes about a program alongside that program's lines, and leaves the tutorial to the game's own
-skip button.
+skip button; `v2.1.0` makes bleeding edge report the tip GitHub actually has for a branch rather than what
+the checkout last fetched, and lets that branch be chosen rather than inferred from the clone.
 
 **Three accounts of every build, for three different readers.** `CHANGELOG.md` is the plain one - per
 release, what was added, changed, fixed and removed, in the language of somebody who uses the launcher

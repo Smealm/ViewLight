@@ -145,6 +145,11 @@ can be broken. If you report a bug to Imlight's developers while running it, say
 their source rather than installing a release - otherwise they will look for a fault in code that was never
 released.
 
+**Branch** sits under it: a list of everything Imlight has on GitHub, so a fix that is still on a feature
+branch can be built without waiting for it to be merged. Left empty, the project's default branch is the one
+that is built. The card always names the newest commit on the branch you chose, asked of GitHub rather than
+read back from the copy on your disk.
+
 It is also the only channel that can fail on the machine rather than at GitHub. It needs:
 
 - **git**, to clone and update the checkout;

@@ -162,9 +162,13 @@ public sealed class ToolRunner : IToolRunner {
 /// <param name="ShortCommit">The same commit, abbreviated the way the tag uses it.</param>
 /// <param name="Subject">The commit subject, which is what makes a hash mean something.</param>
 /// <param name="CommittedAt">When that commit was made, when git says.</param>
-/// <param name="Behind">How many commits GitHub has that the checkout does not.</param>
+/// <param name="Behind">How many commits the branch has that the checkout does not.</param>
 /// <param name="HasLocalChanges">Whether the working tree has edits that were never committed.</param>
 /// <param name="Problem">What went wrong asking, when something did.</param>
+/// <param name="CheckoutBranch">The branch the checkout itself is on, which is not always the one chosen.</param>
+/// <param name="Latest">The newest commit on the branch that would be built, as GitHub reports it.</param>
+/// <param name="Branches">Every branch GitHub has, for the picker.</param>
+/// <param name="DefaultBranch">The branch GitHub calls the repository's default.</param>
 public sealed record EdgeSourceState(
     bool IsCloned,
     string Commit,
@@ -173,16 +177,59 @@ public sealed record EdgeSourceState(
     DateTimeOffset? CommittedAt,
     int Behind,
     bool HasLocalChanges,
-    string? Problem) {
+    string? Problem,
+    string CheckoutBranch = "",
+    EdgeLatest? Latest = null,
+    IReadOnlyList<string>? Branches = null,
+    string DefaultBranch = "") {
 
     public static EdgeSourceState NotCloned() => new(false, string.Empty, string.Empty, string.Empty, null, 0, false, null);
 
-    /// <summary>Whether the checkout is the newest source GitHub has.</summary>
-    public bool IsUpToDate => IsCloned && Behind == 0 && Problem is null;
+    /// <summary>The branch a build would be made from - the one GitHub's answer names.</summary>
+    public string Branch => Latest?.Branch ?? string.Empty;
 
-    /// <summary>What the checkout is, in one line, for a card that has room for one.</summary>
+    /// <summary>Whether the checkout is on the branch that would be built.</summary>
+    public bool IsOnBranch => Latest is null || CheckoutBranch.Length == 0
+        || string.Equals(CheckoutBranch, Latest.Branch, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether the checkout is the newest source on the branch that would be built.
+    /// </summary>
+    /// <remarks>
+    /// All three parts matter: a checkout on another branch is not the newest source of this one whatever
+    /// its commit count says, which is how a checkout left on an old feature branch used to describe itself
+    /// as up to date while the branch it was meant to build had moved on.
+    /// </remarks>
+    public bool IsUpToDate => IsCloned && Behind == 0 && Problem is null && IsOnBranch;
+
+    /// <summary>
+    /// What the source is, in one line, for a card that has room for one: the newest commit on the branch,
+    /// and what the checkout would have to do to be it.
+    /// </summary>
     public string Summary {
         get {
+            if (Latest is { } latest) {
+                var newest = $"{latest.Branch} {latest.Headline}";
+
+                if (!IsCloned) {
+                    return newest;
+                }
+
+                if (Problem is { Length: > 0 }) {
+                    return $"{newest} (could not check the checkout)";
+                }
+
+                if (!IsOnBranch) {
+                    return $"{newest} · the checkout is on {CheckoutBranch}";
+                }
+
+                if (Behind > 0) {
+                    return $"{newest} · the checkout is {Behind} commit{(Behind == 1 ? string.Empty : "s")} behind";
+                }
+
+                return HasLocalChanges ? $"{newest} · local changes" : newest;
+            }
+
             if (!IsCloned) {
                 return "Not cloned yet.";
             }
@@ -200,6 +247,28 @@ public sealed record EdgeSourceState(
             return HasLocalChanges ? $"{head} · local changes" : head;
         }
     }
+}
+
+/// <summary>One branch on the repository, and the commit GitHub says is at its tip.</summary>
+/// <param name="Name">The branch name as git names it - <c>quality-assurance</c>, <c>feat/plugins</c>.</param>
+/// <param name="Commit">The full commit at the tip, as GitHub reports it.</param>
+public sealed record EdgeBranch(string Name, string Commit);
+
+/// <summary>The newest commit on the branch a build would be made from.</summary>
+/// <param name="Branch">The branch it is on.</param>
+/// <param name="Commit">The full commit.</param>
+/// <param name="ShortCommit">The same commit, abbreviated the way the tag uses it.</param>
+/// <param name="Subject">The commit subject, when the checkout has the object to read it from.</param>
+/// <param name="CommittedAt">When it was made, under the same condition.</param>
+public sealed record EdgeLatest(
+    string Branch,
+    string Commit,
+    string ShortCommit,
+    string Subject,
+    DateTimeOffset? CommittedAt) {
+
+    /// <summary>The commit in one line: the hash, then what it says.</summary>
+    public string Headline => Subject.Length == 0 ? ShortCommit : $"{ShortCommit} · {Subject}";
 }
 
 /// <summary>The result of building Imlight from source and installing it.</summary>
@@ -320,25 +389,49 @@ public sealed class BleedingEdgeServer {
     public static bool IsEdgeTag(string? tag) => tag is { Length: > 0 } && tag.StartsWith(TagPrefix, StringComparison.Ordinal);
 
     /// <summary>
-    /// Looks at the checkout and asks GitHub whether it is behind - without changing anything.
+    /// Looks at the checkout and asks GitHub what the chosen branch's newest commit is, and where the
+    /// checkout stands against it - without changing anything.
     /// </summary>
+    /// <param name="branch">
+    /// The branch to look at, or blank for the repository's own default. A branch this repository does not
+    /// have is reported rather than silently ignored, because it is a saved choice that has gone stale.
+    /// </param>
     /// <exception cref="OperationCanceledException">The check was cancelled.</exception>
-    public async Task<EdgeSourceState> CheckAsync(CancellationToken cancellationToken = default) {
+    /// <remarks>
+    /// The newest commit is asked of GitHub - <c>git ls-remote</c> against the repository's own URL - rather
+    /// than read from the checkout or its remote-tracking refs. Those only move when a fetch succeeds, so a
+    /// launcher whose last fetch failed, or one left on another branch, used to show the commit before the
+    /// newest one as the newest source. ls-remote also answers before there is a checkout, which is what
+    /// lets the branch be chosen on a machine that has not built anything yet.
+    /// </remarks>
+    public async Task<EdgeSourceState> CheckAsync(string? branch = null, CancellationToken cancellationToken = default) {
+        var wanted = branch?.Trim() ?? string.Empty;
+
         if (!IsCloned) {
             Directory.CreateDirectory(LauncherPaths.SourceDirectory);
 
-            // There is nothing to read yet, but there is a question worth answering before the button is
-            // pressed: whether this machine has git at all. A launcher that says so on the card is better
-            // than one that spends a button press finding out.
+            // There is nothing to read yet, but there are two questions worth answering before the button
+            // is pressed: whether this machine has git at all, and which branches there are to build. A
+            // launcher that says so on the card is better than one that spends a button press finding out.
             var git = await GitAsync(["--version"], null, cancellationToken, LauncherPaths.SourceDirectory)
                 .ConfigureAwait(false);
 
-            return git.Success
-                ? EdgeSourceState.NotCloned()
-                : EdgeSourceState.NotCloned() with {
+            if (!git.Success) {
+                return EdgeSourceState.NotCloned() with {
                     Problem = "A build from source needs git, and it was not found on this machine. "
                               + Describe(git),
                 };
+            }
+
+            var available = await ReadRemoteBranchesAsync(cancellationToken).ConfigureAwait(false);
+            var newest = available.Choose(wanted);
+
+            return EdgeSourceState.NotCloned() with {
+                Problem = available.Problem ?? MissingBranch(wanted, available),
+                Branches = available.Names,
+                DefaultBranch = available.Default,
+                Latest = newest is null ? null : UnknownCommit(newest),
+            };
         }
 
         var local = await ReadLocalStateAsync(cancellationToken).ConfigureAwait(false);
@@ -347,16 +440,39 @@ public sealed class BleedingEdgeServer {
             return local;
         }
 
+        var remote = await ReadRemoteBranchesAsync(cancellationToken).ConfigureAwait(false);
+        var chosen = remote.Choose(wanted);
+
         var fetched = await GitAsync(["fetch", "--prune", "--quiet", "origin"], null, cancellationToken)
             .ConfigureAwait(false);
 
+        var problem = remote.Problem;
+
         if (!fetched.Success) {
-            return local with {
-                Problem = "Git could not reach GitHub: " + Describe(fetched),
-            };
+            problem = "Git could not reach GitHub: " + Describe(fetched);
         }
 
-        return local with { Behind = await CountBehindAsync(cancellationToken).ConfigureAwait(false) };
+        var latest = chosen is null ? null : UnknownCommit(chosen);
+
+        if (latest is not null && fetched.Success) {
+            latest = await DescribeCommitAsync(latest, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Counted against the commit GitHub named, never against whatever the checkout happens to track: an
+        // upstream left pointing at an old feature branch is exactly how "behind" came out as zero while
+        // GitHub had moved on. Nothing is counted when the fetch did not run, because the object would not
+        // be there to count - and the Problem above is what says the answer is old.
+        var behind = latest is not null && fetched.Success
+            ? await CountBehindAsync(latest.Commit, cancellationToken).ConfigureAwait(false)
+            : 0;
+
+        return local with {
+            Behind = behind,
+            Problem = problem ?? MissingBranch(wanted, remote),
+            Latest = latest,
+            Branches = remote.Names,
+            DefaultBranch = remote.Default,
+        };
     }
 
     /// <summary>
@@ -372,12 +488,17 @@ public sealed class BleedingEdgeServer {
     /// Called once, immediately before the first file is written - after the clone, the build and the disk
     /// space have all been spent, so a build that fails costs nothing that was running.
     /// </param>
+    /// <param name="branch">
+    /// The branch to build, or blank for the repository's own default. A checkout on another branch is moved
+    /// onto this one first, which is what makes a feature branch buildable without a second clone.
+    /// </param>
     /// <param name="cancellationToken">Cancels the clone, the build, or the write.</param>
     public async Task<EdgeInstallResult> InstallAsync(
         string serverPath,
         string? gameFolder = null,
         IProgress<InstallProgress>? progress = null,
         Func<Task>? beforeWriting = null,
+        string? branch = null,
         CancellationToken cancellationToken = default) {
 
         if (string.IsNullOrWhiteSpace(serverPath)) {
@@ -391,12 +512,34 @@ public sealed class BleedingEdgeServer {
         try {
             Directory.CreateDirectory(LauncherPaths.SourceDirectory);
 
+            var wanted = branch?.Trim() ?? string.Empty;
+            var remote = await ReadRemoteBranchesAsync(cancellationToken).ConfigureAwait(false);
+            var chosen = remote.Choose(wanted);
+
+            if (wanted.Length > 0 && remote.Problem is null && chosen is not null
+                && !string.Equals(chosen.Name, wanted, StringComparison.Ordinal)) {
+                warning = $"'{wanted}' is not a branch on GitHub, so the default branch ({chosen.Name}) "
+                          + "is the one that was built.";
+            }
+
             if (!IsCloned) {
                 progress?.Report(new InstallProgress(0.02, "Source", "Cloning Imlight from GitHub…"));
 
+                // The branch is named at clone time rather than checked out afterwards, so the first build
+                // never spends a moment on the default branch's files.
+                var arguments = new List<string> { "clone", "--recurse-submodules" };
+
+                if (chosen is not null) {
+                    arguments.Add("--branch");
+                    arguments.Add(chosen.Name);
+                }
+
+                arguments.Add(RepositoryUrl);
+                arguments.Add(CheckoutFolderName);
+
                 var clone = await _runner.RunAsync(
                         "git",
-                        ["clone", "--recurse-submodules", RepositoryUrl, CheckoutFolderName],
+                        arguments,
                         LauncherPaths.SourceDirectory,
                         line => progress?.Report(new InstallProgress(0.04, "Source", Condense(line))),
                         s_gitEnvironment,
@@ -410,7 +553,10 @@ public sealed class BleedingEdgeServer {
                 }
             }
             else {
-                warning = await SyncAsync(progress, cancellationToken).ConfigureAwait(false);
+                var synced = await SyncAsync(chosen?.Name, progress, cancellationToken).ConfigureAwait(false);
+                var said = new[] { warning, synced }.Where(part => part is { Length: > 0 }).ToArray();
+
+                warning = said.Length == 0 ? null : string.Join(" ", said);
             }
 
             var state = await ReadLocalStateAsync(cancellationToken).ConfigureAwait(false);
@@ -525,17 +671,23 @@ public sealed class BleedingEdgeServer {
     // ------------------------------------------------------------------ git
 
     /// <summary>
-    /// Brings the checkout up to date, and says what it did not do.
+    /// Moves the checkout onto the chosen branch and brings it up to date, and says what it did not do.
     /// </summary>
+    /// <param name="branch">The branch to build, or <c>null</c> to keep the one the checkout tracks.</param>
     /// <returns>
     /// A warning for the Log when the update was skipped on purpose, or <c>null</c> when it ran.
     /// </returns>
     /// <remarks>
     /// Uncommitted changes are the one thing this will not go around. They are somebody's work, they are
     /// not recoverable from git, and merging over them is how an updater loses a fix that was being tried
-    /// out - so the build uses the tree as it is and says so. Everything else is a normal fetch and merge.
+    /// out - so the build uses the tree as it is and says so. Everything else is a normal fetch, a checkout
+    /// when the branch that was asked for is not the one the tree is on, and a merge of GitHub's tip.
     /// </remarks>
-    private async Task<string?> SyncAsync(IProgress<InstallProgress>? progress, CancellationToken cancellationToken) {
+    private async Task<string?> SyncAsync(
+        string? branch,
+        IProgress<InstallProgress>? progress,
+        CancellationToken cancellationToken) {
+
         var status = await GitAsync(["status", "--porcelain"], null, cancellationToken).ConfigureAwait(false);
 
         if (!status.Success || status.Output.Trim().Length > 0) {
@@ -551,7 +703,28 @@ public sealed class BleedingEdgeServer {
             return $"Git could not check for newer source ({Describe(fetch)}), so the build used what was already checked out.";
         }
 
-        var behind = await CountBehindAsync(cancellationToken).ConfigureAwait(false);
+        // The branch that was chosen is the one that gets built. The checkout's own upstream is only the
+        // fallback for a launcher that has never been asked: it is a property of the clone, not a statement
+        // about what the user wants now.
+        var target = branch;
+
+        if (string.IsNullOrEmpty(target)) {
+            target = await UpstreamBranchAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (target is not null) {
+            var moved = await SwitchToAsync(target, progress, cancellationToken).ConfigureAwait(false);
+
+            if (moved is not null) {
+                return moved;
+            }
+        }
+
+        var reference = target is null
+            ? await UpstreamReferenceAsync(cancellationToken).ConfigureAwait(false)
+            : $"origin/{target}";
+
+        var behind = await CountBehindAsync(reference, cancellationToken).ConfigureAwait(false);
 
         if (behind <= 0) {
             progress?.Report(new InstallProgress(0.10, "Source", "The checkout is already the newest source."));
@@ -563,11 +736,11 @@ public sealed class BleedingEdgeServer {
 
         // Fast-forward first, because that is the ordinary case and it keeps the local branch exactly the
         // shape GitHub has. A local commit of the user's own is the case the second merge is for.
-        var merge = await GitAsync(Identity("merge", "--ff-only", "@{u}"), null, cancellationToken)
+        var merge = await GitAsync(Identity("merge", "--ff-only", reference), null, cancellationToken)
             .ConfigureAwait(false);
 
         if (!merge.Success) {
-            merge = await GitAsync(Identity("merge", "--no-edit", "@{u}"), null, cancellationToken)
+            merge = await GitAsync(Identity("merge", "--no-edit", reference), null, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!merge.Success) {
@@ -588,6 +761,191 @@ public sealed class BleedingEdgeServer {
         return null;
     }
 
+    /// <summary>
+    /// Moves the checkout onto <paramref name="branch"/>, or says why it could not be moved.
+    /// </summary>
+    /// <returns>A warning when the checkout stayed where it was, otherwise <c>null</c>.</returns>
+    /// <remarks>
+    /// A local branch of that name is checked out as it is, so commits made in this checkout are kept and
+    /// merged in above; a branch this checkout has never had is made from GitHub's tip. The tree is known to
+    /// be clean by the time this runs, so nothing uncommitted can be carried across the switch.
+    /// </remarks>
+    private async Task<string?> SwitchToAsync(
+        string branch,
+        IProgress<InstallProgress>? progress,
+        CancellationToken cancellationToken) {
+
+        var current = await GitAsync(["rev-parse", "--abbrev-ref", "HEAD"], null, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (current.Success && string.Equals(current.Output.Trim(), branch, StringComparison.Ordinal)) {
+            return null;
+        }
+
+        progress?.Report(new InstallProgress(0.08, "Source", $"Switching the checkout to {branch}…"));
+
+        var exists = await GitAsync(["rev-parse", "--verify", "--quiet", $"refs/heads/{branch}"], null,
+            cancellationToken).ConfigureAwait(false);
+
+        var hasLocalBranch = exists.Success && exists.Output.Trim().Length > 0;
+        ToolResult checkout;
+
+        if (hasLocalBranch) {
+            checkout = await GitAsync(["checkout", branch], null, cancellationToken).ConfigureAwait(false);
+        }
+        else {
+            // A clone made with one branch in its refspec has no origin/<branch> to track, so it is fetched by
+            // name first - harmless when it was already there, and the one call that makes a feature branch
+            // reachable from a checkout that was cloned for the default one.
+            await GitAsync(["fetch", "--quiet", "origin", $"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                null, cancellationToken).ConfigureAwait(false);
+
+            checkout = await GitAsync(["checkout", "-B", branch, "--track", $"origin/{branch}"], null,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return checkout.Success
+            ? null
+            : $"The checkout could not be moved to {branch} ({Describe(checkout)}), so it was built as it is.";
+    }
+
+    /// <summary>The branch the checkout tracks, without the remote's name in front, or <c>null</c>.</summary>
+    private async Task<string?> UpstreamBranchAsync(CancellationToken cancellationToken) {
+        var upstream = await GitAsync(["rev-parse", "--abbrev-ref", "@{u}"], null, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!upstream.Success) {
+            return null;
+        }
+
+        var name = upstream.Output.Trim();
+
+        if (name.StartsWith("origin/", StringComparison.Ordinal)) {
+            name = name["origin/".Length..];
+        }
+
+        return name.Length == 0 || name == "HEAD" ? null : name;
+    }
+
+    /// <summary>The reference to count and merge against when there is no branch name to use.</summary>
+    private async Task<string> UpstreamReferenceAsync(CancellationToken cancellationToken) {
+        var upstream = await GitAsync(["rev-parse", "--abbrev-ref", "@{u}"], null, cancellationToken)
+            .ConfigureAwait(false);
+
+        return upstream.Success ? "@{u}" : "origin/HEAD";
+    }
+
+    /// <summary>
+    /// Asks GitHub which branches it has and what is at the tip of each.
+    /// </summary>
+    /// <remarks>
+    /// Asked of the repository's own URL rather than of the checkout's refs, so it answers before there is a
+    /// clone and cannot be fooled by a fetch that did not run. One call: the symref line names the default
+    /// branch, and the heads that follow are every branch with the commit GitHub has for it.
+    /// </remarks>
+    private async Task<RemoteBranches> ReadRemoteBranchesAsync(CancellationToken cancellationToken) {
+        var listed = await GitAsync(
+                ["ls-remote", "--symref", RepositoryUrl, "HEAD", "refs/heads/*"],
+                null, cancellationToken, LauncherPaths.SourceDirectory)
+            .ConfigureAwait(false);
+
+        return listed.Success
+            ? ParseBranches(listed.Output)
+            : new RemoteBranches([], string.Empty, "Git could not reach GitHub: " + Describe(listed));
+    }
+
+    /// <summary>Reads <c>git ls-remote --symref</c> into branch names, tips and the default branch.</summary>
+    private static RemoteBranches ParseBranches(string output) {
+        const string heads = "refs/heads/";
+        var branches = new List<EdgeBranch>();
+        var fallback = string.Empty;
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+            if (line.StartsWith("ref: ", StringComparison.Ordinal)) {
+                var target = line[5..].Split('\t')[0].Trim();
+
+                if (target.StartsWith(heads, StringComparison.Ordinal)) {
+                    fallback = target[heads.Length..];
+                }
+
+                continue;
+            }
+
+            var parts = line.Split('\t');
+
+            if (parts.Length < 2 || !parts[1].Trim().StartsWith(heads, StringComparison.Ordinal)) {
+                continue;
+            }
+
+            branches.Add(new EdgeBranch(parts[1].Trim()[heads.Length..], parts[0].Trim()));
+        }
+
+        branches.Sort((left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
+
+        return new RemoteBranches(branches, fallback, null);
+    }
+
+    /// <summary>The branches one look at GitHub found, and what it could not ask.</summary>
+    private sealed record RemoteBranches(
+        IReadOnlyList<EdgeBranch> Branches,
+        string Default,
+        string? Problem) {
+
+        public IReadOnlyList<string> Names => Branches.Select(branch => branch.Name).ToArray();
+
+        /// <summary>
+        /// The branch a build would use: the one that was asked for, then the repository's default, then
+        /// whatever is there.
+        /// </summary>
+        public EdgeBranch? Choose(string wanted)
+            => (wanted.Length > 0
+                    ? Branches.FirstOrDefault(branch => string.Equals(branch.Name, wanted, StringComparison.Ordinal))
+                    : null)
+               ?? Branches.FirstOrDefault(branch => string.Equals(branch.Name, Default, StringComparison.Ordinal))
+               ?? Branches.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// The sentence for a branch that is saved but no longer on GitHub, or <c>null</c> when the choice is one
+    /// GitHub has (or no choice was made).
+    /// </summary>
+    private static string? MissingBranch(string wanted, RemoteBranches available) {
+        if (wanted.Length == 0 || available.Problem is not null) {
+            return null;
+        }
+
+        return available.Branches.Any(branch => string.Equals(branch.Name, wanted, StringComparison.Ordinal))
+            ? null
+            : $"'{wanted}' is not a branch on {RepositoryUrl} any more, so the newest commit shown is the "
+              + "default branch's.";
+    }
+
+    /// <summary>A branch tip as GitHub reported it, before the checkout has been asked for its words.</summary>
+    private static EdgeLatest UnknownCommit(EdgeBranch branch)
+        => new(branch.Name, branch.Commit, ShortOf(branch.Commit), string.Empty, null);
+
+    private static string ShortOf(string commit) => commit.Length <= 7 ? commit : commit[..7];
+
+    /// <summary>
+    /// Fills in the words and the date of a commit the checkout now holds.
+    /// </summary>
+    /// <remarks>
+    /// The subject is what makes a hash mean something, and it is only readable once the object is in the
+    /// checkout - which the fetch is what puts it there. A missing object is not an error: the hash is still
+    /// the answer to "what is the newest commit", and the card says it without the words.
+    /// </remarks>
+    private async Task<EdgeLatest> DescribeCommitAsync(EdgeLatest latest, CancellationToken cancellationToken) {
+        var subject = await GitAsync(["log", "-1", "--format=%s", latest.Commit], null, cancellationToken)
+            .ConfigureAwait(false);
+        var date = await GitAsync(["log", "-1", "--format=%cI", latest.Commit], null, cancellationToken)
+            .ConfigureAwait(false);
+
+        return latest with {
+            Subject = subject.Success ? subject.Output.Trim() : string.Empty,
+            CommittedAt = ReadDate(date),
+        };
+    }
+
     /// <summary>The arguments for a merge, with an identity that does not need one configured.</summary>
     /// <remarks>
     /// A merge commit wants an author, and a machine that has never used git has none - which would turn
@@ -596,12 +954,13 @@ public sealed class BleedingEdgeServer {
     private static IReadOnlyList<string> Identity(params string[] arguments)
         => ["-c", "user.name=ViewLight", "-c", "user.email=viewlight@localhost", .. arguments];
 
-    private async Task<int> CountBehindAsync(CancellationToken cancellationToken) {
-        var upstream = await GitAsync(["rev-parse", "--abbrev-ref", "@{u}"], null, cancellationToken)
-            .ConfigureAwait(false);
-
-        var reference = upstream.Success ? "@{u}" : "origin/HEAD";
-
+    /// <summary>How many commits <paramref name="reference"/> has that HEAD does not.</summary>
+    /// <remarks>
+    /// Counted against a named commit or reference - GitHub's own tip for the branch - rather than against
+    /// the checkout's upstream. The upstream is whatever branch this clone was made from, so a checkout
+    /// whose branch had been merged and never updated reported itself as up to date while GitHub moved on.
+    /// </remarks>
+    private async Task<int> CountBehindAsync(string reference, CancellationToken cancellationToken) {
         var count = await GitAsync(["rev-list", "--count", $"HEAD..{reference}"], null, cancellationToken)
             .ConfigureAwait(false);
 
@@ -622,24 +981,27 @@ public sealed class BleedingEdgeServer {
         var subject = await GitAsync(["log", "-1", "--format=%s"], null, cancellationToken).ConfigureAwait(false);
         var date = await GitAsync(["log", "-1", "--format=%cI"], null, cancellationToken).ConfigureAwait(false);
         var status = await GitAsync(["status", "--porcelain"], null, cancellationToken).ConfigureAwait(false);
-
-        DateTimeOffset? committedAt = null;
-        if (date.Success
-            && DateTimeOffset.TryParse(date.Output.Trim(), CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind, out var parsed)) {
-            committedAt = parsed;
-        }
+        var current = await GitAsync(["rev-parse", "--abbrev-ref", "HEAD"], null, cancellationToken)
+            .ConfigureAwait(false);
 
         return new EdgeSourceState(
             IsCloned: true,
             Commit: commit.Output.Trim(),
             ShortCommit: shortCommit.Output.Trim(),
             Subject: subject.Success ? subject.Output.Trim() : string.Empty,
-            CommittedAt: committedAt,
+            CommittedAt: ReadDate(date),
             Behind: 0,
             HasLocalChanges: status.Success && status.Output.Trim().Length > 0,
-            Problem: null);
+            Problem: null,
+            CheckoutBranch: current.Success ? current.Output.Trim() : string.Empty);
     }
+
+    private static DateTimeOffset? ReadDate(ToolResult date)
+        => date.Success
+           && DateTimeOffset.TryParse(date.Output.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind,
+               out var parsed)
+            ? parsed
+            : null;
 
     private Task<ToolResult> GitAsync(
         IReadOnlyList<string> arguments,

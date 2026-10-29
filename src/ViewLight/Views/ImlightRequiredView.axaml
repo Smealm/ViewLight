@@ -75,6 +75,20 @@
                            IsChecked="{Binding IsBleedingEdgeChannel, Mode=TwoWay}" />
             </StackPanel>
             <TextBlock Classes="muted note" TextWrapping="Wrap" Text="{Binding ChannelNote}" />
+
+            <!-- The branch, on the screen that has no server yet: a feature branch is exactly what
+                 somebody choosing this channel on a fresh machine is after, and it must not need a
+                 built server before it can be picked. -->
+            <StackPanel Spacing="4" IsVisible="{Binding IsBleedingEdge}"
+                        IsEnabled="{Binding !IsBusy}">
+              <TextBlock Classes="label" Text="Branch" />
+              <ComboBox MinWidth="300" HorizontalAlignment="Left"
+                        ItemsSource="{Binding EdgeBranches}"
+                        SelectedItem="{Binding EdgeBranch, Mode=TwoWay}"
+                        PlaceholderText="The repository's default branch" />
+              <TextBlock Classes="muted note" TextWrapping="Wrap"
+                         Text="{Binding EdgeBranchNote}" />
+            </StackPanel>
           </StackPanel>
 
           <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding InstallDescription}" />

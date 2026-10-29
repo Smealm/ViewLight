@@ -122,6 +122,20 @@
             <TextBlock Classes="warning" TextWrapping="Wrap"
                        Text="{Binding BleedingEdgeWarning}"
                        IsVisible="{Binding IsBleedingEdge}" />
+            <!-- Which branch, for the one channel that has branches to choose between. The list is
+                 GitHub's and arrives with the source check; empty means the repository's own default, so
+                 the box never has to be filled in before there is a server to build. -->
+            <StackPanel Spacing="4" IsVisible="{Binding IsBleedingEdge}"
+                        IsEnabled="{Binding !IsBusy}">
+              <TextBlock Classes="label" Text="Branch" />
+              <ComboBox MinWidth="300" HorizontalAlignment="Left"
+                        ItemsSource="{Binding EdgeBranches}"
+                        SelectedItem="{Binding EdgeBranch, Mode=TwoWay}"
+                        PlaceholderText="The repository's default branch" />
+              <TextBlock Classes="muted note" TextWrapping="Wrap"
+                         Text="{Binding EdgeBranchNote}" />
+            </StackPanel>
+
             <TextBlock Classes="muted note" TextWrapping="Wrap"
                        Text="{Binding EdgeTypeDumpNote}"
                        IsVisible="{Binding IsBleedingEdge}" />

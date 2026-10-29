@@ -8,6 +8,26 @@ The version number in the window, on the **About** tab, matches the tag and the 
 
 ---
 
+## v2.1.0 - 2026-10-29
+
+### Fixed
+
+- **Bleeding edge shows the newest commit on the branch, not the last one it had fetched.** The card used
+  to describe your source checkout instead of GitHub, so a checkout that had not fetched since the last
+  commit - or one left on another branch - named an older commit as "the newest source". It now asks the
+  repository for the branch's tip, counts how far behind the checkout is against that branch, and says when
+  the checkout is on a different one.
+
+### Added
+
+- **You can pick which branch bleeding edge builds.** Under **Settings → Server → Build channel** and on the
+  first screen, choosing **Bleeding edge** now offers a **Branch** list of everything GitHub has, so a fix on
+  a feature branch can be built without waiting for it to be merged into the default one. Left empty, the
+  repository's default branch is built, as before. The choice is remembered, and the build moves the
+  checkout onto that branch rather than only fetching whatever it was already tracking.
+
+---
+
 ## v2.0.0 - 2026-10-17
 
 ### Added

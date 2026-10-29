@@ -45,4 +45,23 @@ public class ServerChannelTests {
         Assert.Equal(ServerChannelChoices.BleedingEdge, reloaded.Settings.ServerChannel);
         Assert.Null(reloaded.LoadProblem);
     }
+
+    [Fact]
+    public void TheBranchForABuildFromSourceSurvivesARestart() {
+        using var workspace = new TempWorkspace();
+        var file = workspace.Path("launcher.json");
+
+        // Empty is a choice in its own right - the repository's default branch - so both states have to
+        // come back as they went in.
+        Assert.Equal(string.Empty, new LauncherSettings().BleedingEdgeBranch);
+
+        var first = new LauncherSettingsStore(file);
+        first.Settings.BleedingEdgeBranch = "feat/plugins";
+        first.Save();
+
+        var reloaded = new LauncherSettingsStore(file);
+
+        Assert.Equal("feat/plugins", reloaded.Settings.BleedingEdgeBranch);
+        Assert.Null(reloaded.LoadProblem);
+    }
 }

@@ -17,6 +17,15 @@ public class BleedingEdgeServerTests {
     private const string Commit = "0123456789abcdef0123456789abcdef01234567";
     private const string ShortCommit = "abc1234";
 
+    /// <summary>The tip of the default branch on GitHub - which is not the commit the checkout is on.</summary>
+    private const string LatestCommit = "89abcdef0123456789abcdef0123456789abcdef";
+    private const string LatestShortCommit = "89abcde";
+
+    private const string DefaultBranch = "quality-assurance";
+
+    /// <summary>One branch that only exists on GitHub, so a build of it has to move the checkout.</summary>
+    private const string OtherBranch = "feat/plugins";
+
     /// <summary>A checkout on disk, and a runner that answers as git and dotnet would.</summary>
     private sealed class ScriptedRunner : IToolRunner {
 
@@ -70,8 +79,23 @@ public class BleedingEdgeServerTests {
             return new ToolResult(0, ShortCommit, string.Empty);
         }
 
-        if (first == "rev-parse" && arguments.Count > 1 && arguments[1] == "--abbrev-ref") {
-            return new ToolResult(0, "origin/quality-assurance", string.Empty);
+        // The upstream and the checked-out branch are different questions - the first is where the branch
+        // came from, the second is where the tree is - and the answer they used to share is the bug this
+        // set of tests is about.
+        if (first == "rev-parse" && arguments.Count > 2 && arguments[1] == "--abbrev-ref") {
+            return new ToolResult(0, arguments[2] == "HEAD" ? DefaultBranch : $"origin/{DefaultBranch}",
+                string.Empty);
+        }
+
+        // GitHub's answer, with the default branch named in the symref line and the tips below it. The tip
+        // of the default branch is deliberately ahead of the commit the checkout is on.
+        if (first == "ls-remote") {
+            return new ToolResult(0,
+                $"ref: refs/heads/{DefaultBranch}\tHEAD\n"
+                + $"{LatestCommit}\tHEAD\n"
+                + $"{Commit}\trefs/heads/{OtherBranch}\n"
+                + $"{LatestCommit}\trefs/heads/{DefaultBranch}\n",
+                string.Empty);
         }
 
         if (first == "rev-list") {
@@ -143,7 +167,13 @@ public class BleedingEdgeServerTests {
 
         Assert.False(state.IsCloned);
         Assert.Null(state.Problem);
-        Assert.Contains("git --version", runner.Calls.Single());
+        Assert.Contains(runner.Calls, call => call == "git --version");
+
+        // The branch list and the newest commit arrive before the first clone, because they are asked of
+        // GitHub rather than of a checkout - which is what lets this channel be chosen and aimed at a
+        // branch on a machine that has never built anything.
+        Assert.Contains(DefaultBranch, state.Branches!);
+        Assert.Equal(LatestCommit, state.Latest?.Commit);
 
         // git has to be started somewhere that exists: a probe aimed at the checkout folder before
         // there is a checkout fails with "the directory name is invalid" and used to look exactly like
@@ -173,9 +203,81 @@ public class BleedingEdgeServerTests {
         Assert.True(state.IsCloned);
         Assert.Equal(Commit, state.Commit);
         Assert.Equal(2, state.Behind);
-        Assert.Contains(ShortCommit, state.Summary);
-        Assert.Contains("2 newer commits", state.Summary);
+        Assert.Equal(LatestShortCommit, state.Latest!.ShortCommit);
+        Assert.Contains("2 commits behind", state.Summary);
+        Assert.Contains("ls-remote", string.Join(' ', runner.Calls));
         Assert.Contains(runner.Calls, call => call.Contains("fetch --prune"));
+    }
+
+    [Fact]
+    public async Task TheNewestCommitIsGitHubsAnswerNotWhateverTheCheckoutHasFetched() {
+        using var workspace = new TempWorkspace();
+        var runner = new ScriptedRunner((_, arguments) => Answer(arguments));
+
+        var state = await new BleedingEdgeServer(runner: runner).CheckAsync();
+
+        // This is the bug the branch picker was added for: the card named the commit the checkout happened
+        // to be on as "the latest source", so a fix that had landed on GitHub since the last successful
+        // fetch never appeared at all.
+        Assert.Equal(LatestCommit, state.Latest!.Commit);
+        Assert.Contains(LatestShortCommit, state.Summary);
+        Assert.DoesNotContain(ShortCommit, state.Summary);
+    }
+
+    [Fact]
+    public async Task TheBranchesAndTheDefaultAreTheOnesGitHubHas() {
+        using var workspace = new TempWorkspace();
+        var runner = new ScriptedRunner((_, arguments) => Answer(arguments));
+
+        var state = await new BleedingEdgeServer(runner: runner).CheckAsync();
+
+        Assert.Equal([OtherBranch, DefaultBranch], state.Branches);
+        Assert.Equal(DefaultBranch, state.DefaultBranch);
+    }
+
+    [Fact]
+    public async Task TheBranchThatWasAskedForIsTheOneThatIsRead() {
+        using var workspace = new TempWorkspace();
+        CreateCheckout();
+        var runner = new ScriptedRunner((_, arguments) => Answer(arguments));
+
+        var state = await new BleedingEdgeServer(runner: runner).CheckAsync(OtherBranch);
+
+        Assert.Equal(OtherBranch, state.Latest!.Branch);
+        Assert.Equal(Commit, state.Latest.Commit);
+
+        // Behind is counted against the commit GitHub named for that branch, not against whatever the
+        // checkout happens to track.
+        Assert.Contains(runner.Calls, call => call == $"git rev-list --count HEAD..{Commit}");
+    }
+
+    [Fact]
+    public async Task ABranchGitHubNoLongerHasIsNamedAndTheDefaultIsWhatIsShown() {
+        using var workspace = new TempWorkspace();
+        var runner = new ScriptedRunner((_, arguments) => Answer(arguments));
+
+        var state = await new BleedingEdgeServer(runner: runner).CheckAsync("fix/client-desync");
+
+        Assert.NotNull(state.Problem);
+        Assert.Contains("fix/client-desync", state.Problem);
+        Assert.Equal(DefaultBranch, state.Latest!.Branch);
+    }
+
+    [Fact]
+    public async Task ACheckoutOnAnotherBranchIsNotTheNewestSourceOfTheOneThatWasChosen() {
+        using var workspace = new TempWorkspace();
+        CreateCheckout();
+        var runner = new ScriptedRunner((_, arguments) =>
+            arguments.Count > 2 && arguments[0] == "rev-parse" && arguments[1] == "--abbrev-ref"
+                && arguments[2] == "HEAD"
+                ? new ToolResult(0, OtherBranch, string.Empty)
+                : Answer(arguments));
+
+        var state = await new BleedingEdgeServer(runner: runner).CheckAsync(DefaultBranch);
+
+        Assert.False(state.IsOnBranch);
+        Assert.False(state.IsUpToDate);
+        Assert.Contains($"the checkout is on {OtherBranch}", state.Summary);
     }
 
     // ------------------------------------------------------------------ updating the checkout
@@ -228,6 +330,24 @@ public class BleedingEdgeServerTests {
         Assert.True(result.Success, result.Message);
         Assert.DoesNotContain(runner.Calls, call => call.Contains(" merge "));
         Assert.Contains("uncommitted changes", result.Warning);
+    }
+
+    [Fact]
+    public async Task BuildsTheBranchThatWasChosenRatherThanTheOneTheCheckoutTracks() {
+        using var workspace = new TempWorkspace();
+        CreateCheckout();
+
+        var runner = new ScriptedRunner((_, arguments) =>
+            arguments.Count > 0 && arguments[0] == "build" ? Build(arguments) : Answer(arguments));
+
+        var result = await Server(runner).InstallAsync(ServerFolder(workspace), branch: OtherBranch);
+
+        Assert.True(result.Success, result.Message);
+
+        // The tree is moved onto the branch first, then fast-forwarded to that branch's tip - by name, so a
+        // local branch that tracks something else cannot send the build back where it was.
+        Assert.Contains(runner.Calls, call => call == $"git checkout -B {OtherBranch} --track origin/{OtherBranch}");
+        Assert.Contains(runner.Calls, call => call.EndsWith($"merge --ff-only origin/{OtherBranch}"));
     }
 
     [Fact]
@@ -319,7 +439,10 @@ public class BleedingEdgeServerTests {
         Assert.True(result.Success, result.Message);
         Assert.Equal("edge-" + ShortCommit, result.Tag);
         Assert.Equal(Commit, result.Commit);
-        Assert.Contains(runner.Calls, call => call.Contains("clone --recurse-submodules"));
+        // The default branch is named at clone time, so choosing nothing and choosing the default are the
+        // same build without a checkout in between.
+        Assert.Contains(runner.Calls, call => call.Contains("clone --recurse-submodules")
+                                             && call.Contains($"--branch {DefaultBranch}"));
 
         // The checkout's own output folders, built the way the checkout builds itself - no staging folder
         // and no publish output path of the launcher's choosing.

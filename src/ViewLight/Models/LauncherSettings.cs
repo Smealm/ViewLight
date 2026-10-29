@@ -154,6 +154,17 @@ public sealed class LauncherSettings {
     /// <summary>Which builds the launcher installs: see <see cref="ServerChannelChoices"/>.</summary>
     public string ServerChannel { get; set; } = ServerChannelChoices.Prerelease;
 
+    /// <summary>
+    /// The branch a build from source is made from, or empty for the repository's own default branch.
+    /// </summary>
+    /// <remarks>
+    /// Imlight works on named branches - a fix sits on one of them until it is merged - so a build from
+    /// source that is always the default branch can only ever build what has already landed. It is saved as
+    /// the branch's own name because that is what git is asked for, and an empty value stays meaningful: it
+    /// is the repository's default, which is the answer that keeps working when the default is renamed.
+    /// </remarks>
+    public string BleedingEdgeBranch { get; set; } = string.Empty;
+
     /// <summary>Check GitHub for a newer build when the launcher starts.</summary>
     public bool CheckForUpdatesOnStartup { get; set; } = true;
 

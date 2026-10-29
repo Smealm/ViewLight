@@ -232,6 +232,14 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         // the setter's work is the checking and saving a person's change causes, and neither belongs on
         // the way into a window.
         ServerChannel = ServerChannelChoices.Parse(_store.Settings.ServerChannel);
+
+        // The branch is saved state as well, and written to the field for the same reason: choosing it at
+        // start-up would be a check nobody asked for, and the check the start does anyway is the one that
+        // lists the branches.
+        _edgeBranch = string.IsNullOrWhiteSpace(_store.Settings.BleedingEdgeBranch)
+            ? null
+            : _store.Settings.BleedingEdgeBranch;
+
         ShowMilestoneToasts = _store.Settings.ShowMilestoneToasts;
         // Where to land is a setting rather than a memory: a launcher left on Settings should still open
         // ready to play, so only an explicit "default page" moves it off Home.
@@ -1534,6 +1542,57 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         + "Imlight's developers, say first that you are running a build made from their source rather than "
         + "a release - otherwise they will look for a fault in code that was never released.";
 
+    /// <summary>
+    /// The branch a build from source is made from, or <c>null</c> for the repository's own default.
+    /// </summary>
+    /// <remarks>
+    /// Saved rather than remembered: Imlight works on feature branches, and somebody trying one should not
+    /// have to pick it again at every start. The list beside it is GitHub's and arrives with the source
+    /// check - a launcher that has never checked has no list, and no choice still means the default branch,
+    /// so nothing is unbuildable for want of a picker.
+    /// </remarks>
+    [ObservableProperty] private string? _edgeBranch;
+
+    /// <summary>Every branch GitHub has, in the order the picker lists them.</summary>
+    public ObservableCollection<string> EdgeBranches { get; } = [];
+
+    /// <summary>The branch the next build will use, as a name rather than as an absent choice.</summary>
+    private string EdgeBranchName => EdgeBranch ?? string.Empty;
+
+    /// <summary>What the branch picker means, in a sentence - including what leaving it empty does.</summary>
+    public string EdgeBranchNote {
+        get {
+            var chosen = EdgeBranchName;
+            var fallback = _latestEdge?.DefaultBranch ?? string.Empty;
+
+            if (_latestEdge?.Branches is not { Count: > 0 }) {
+                return "The branches are listed when the source is next checked. Left empty, the repository's "
+                       + "own default branch is the one that is built.";
+            }
+
+            if (chosen.Length > 0) {
+                return $"Built from {chosen}, whether or not it has been merged anywhere - which is how a fix "
+                       + "that is only on a feature branch gets built.";
+            }
+
+            return fallback.Length == 0
+                ? "Left empty, whichever branch GitHub calls the default is built."
+                : $"Left empty, {fallback} - Imlight's default branch - is built. Pick another to build a "
+                  + "feature branch instead.";
+        }
+    }
+
+    /// <summary>
+    /// Whether the branch list is being replaced, so the selection it clears on the way is not read as a
+    /// choice.
+    /// </summary>
+    /// <remarks>
+    /// Replacing a combo box's items clears its selection, and a cleared selection looks exactly like the
+    /// user choosing "no branch" - which would be saved and would start another check, so a refresh would
+    /// answer itself forever.
+    /// </remarks>
+    private bool _updatingEdgeBranches;
+
     /// <summary>The button that installs a server, named for what it will actually do.</summary>
     public string InstallButtonLabel => IsBleedingEdge ? "Build from source" : "Download latest";
 
@@ -1655,10 +1714,11 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         LatestReleaseText = "Checking the source…";
 
         try {
-            var state = await _edgeService.CheckAsync(cancellationToken).ConfigureAwait(true);
+            var state = await _edgeService.CheckAsync(EdgeBranchName, cancellationToken).ConfigureAwait(true);
             _latestEdge = state;
+            RefreshEdgeBranches(state);
 
-            LatestReleaseText = state.IsCloned ? state.Summary : "Not built yet.";
+            LatestReleaseText = state.IsCloned || state.Latest is not null ? state.Summary : "Not built yet.";
 
             if (state.Problem is { Length: > 0 } problem) {
                 ReleaseCheckError = problem;
@@ -1686,6 +1746,66 @@ public sealed partial class MainWindowViewModel : ObservableObject {
     }
 
     /// <summary>
+    /// Puts GitHub's branch list on screen, keeping the choice that was already made.
+    /// </summary>
+    private void RefreshEdgeBranches(EdgeSourceState state) {
+        var names = state.Branches ?? [];
+
+        if (names.Count == 0 || names.SequenceEqual(EdgeBranches, StringComparer.Ordinal)) {
+            return;
+        }
+
+        var previous = EdgeBranchName;
+
+        _updatingEdgeBranches = true;
+        try {
+            EdgeBranches.Clear();
+
+            foreach (var name in names) {
+                EdgeBranches.Add(name);
+            }
+
+            EdgeBranch = previous.Length == 0 ? null : previous;
+        }
+        finally {
+            _updatingEdgeBranches = false;
+        }
+
+        OnPropertyChanged(nameof(EdgeBranchNote));
+    }
+
+    /// <summary>
+    /// The branch changed: remember it, drop what the last one found, and ask about the new one.
+    /// </summary>
+    partial void OnEdgeBranchChanged(string? value) {
+        OnPropertyChanged(nameof(EdgeBranchNote));
+
+        if (_startingUp || _updatingEdgeBranches || IsBusy) {
+            return;
+        }
+
+        _store.Settings.BleedingEdgeBranch = value ?? string.Empty;
+        _store.Save();
+
+        if (!IsBleedingEdge) {
+            return;
+        }
+
+        // What was on screen was an answer about another branch, so it is dropped rather than compared
+        // against the new one - and the check below is what puts the new branch's newest commit there.
+        _latestEdge = null;
+        ReleaseCheckError = string.Empty;
+        LatestReleaseText = "Not checked yet.";
+
+        AppendLog(LogLevel.Info, value is { Length: > 0 }
+            ? $"Bleeding edge branch: {value}."
+            : "Bleeding edge branch: the repository's default.");
+
+        RefreshDerived();
+        _ = CheckForUpdatesAsync();
+    }
+
+    /// <summary>
     /// The channel changed: remember it, drop what the last channel found, and ask the new one.
     /// </summary>
     /// <remarks>
@@ -1704,6 +1824,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(InstallImlightLabel));
         OnPropertyChanged(nameof(InstallDescription));
         OnPropertyChanged(nameof(EdgeTypeDumpPath));
+        OnPropertyChanged(nameof(EdgeBranchNote));
         OnPropertyChanged(nameof(PrimaryActionLabel));
 
         if (_startingUp) {
@@ -1840,7 +1961,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         try {
             var result = await _edgeService
                 .InstallAsync(ServerPath, ClientPath, progress, ReleaseDatabasesForInstallAsync,
-                    _installCancellation.Token)
+                    EdgeBranchName, _installCancellation.Token)
                 .ConfigureAwait(true);
 
             if (result.Success) {
@@ -1857,9 +1978,19 @@ public sealed partial class MainWindowViewModel : ObservableObject {
                     ? result.Tag[BleedingEdgeServer.TagPrefix.Length..]
                     : result.Tag;
 
+                // What was just built is what the checkout now holds, so the card stops naming the commit
+                // from before the build. The branch's own tip is left alone: a build made from a tree with
+                // uncommitted edits is not the tip, and the card should go on saying there is newer source
+                // rather than claiming the work is done.
                 _latestEdge = _latestEdge is null
                     ? new EdgeSourceState(true, result.Commit, shortCommit, string.Empty, null, 0, false, null)
-                    : _latestEdge with { Commit = result.Commit, ShortCommit = shortCommit, Behind = 0 };
+                    : _latestEdge with {
+                        Commit = result.Commit,
+                        ShortCommit = shortCommit,
+                        Behind = string.Equals(_latestEdge.Latest?.Commit, result.Commit, StringComparison.Ordinal)
+                            ? 0
+                            : _latestEdge.Behind,
+                    };
 
                 AppendLog(LogLevel.Success,
                     $"{result.Message} ({result.FilesWritten} files written, {result.SettingsRetained} settings retained.)");
@@ -2013,9 +2144,13 @@ public sealed partial class MainWindowViewModel : ObservableObject {
             }
 
             if (IsBleedingEdge) {
-                return _latestEdge is { IsCloned: true, Commit.Length: > 0 } edge
-                       && !string.Equals(_store.Settings.InstalledEdgeCommit, edge.Commit,
-                           StringComparison.Ordinal);
+                // The branch's tip, not the checkout's commit: an install made from a checkout that is a few
+                // commits behind is still older than the branch, whatever the checkout says about itself.
+                var latest = _latestEdge?.Latest?.Commit
+                             ?? (_latestEdge is { IsCloned: true } edge ? edge.Commit : null);
+
+                return latest is { Length: > 0 }
+                       && !string.Equals(_store.Settings.InstalledEdgeCommit, latest, StringComparison.Ordinal);
             }
 
             return _latestRelease is not null
@@ -2109,7 +2244,12 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         : !ServerInstalled
             ? "The Imlight server is downloaded once - about 260 MB - and then Play starts everything."
             : IsUpdateAvailable
-                ? $"A newer server build is available ({_latestRelease!.Tag}). Update it under Settings, then Play."
+                // A build from source has no release tag to name, and its update is a rebuild rather than a
+                // download - so the line names the branch and the commit instead of a tag there is none of.
+                ? IsBleedingEdge
+                    ? $"Newer Imlight source is available on {_latestEdge?.Branch} "
+                      + $"({_latestEdge?.Latest?.ShortCommit}). Build it under Settings, then Play."
+                    : $"A newer server build is available ({_latestRelease?.Tag}). Update it under Settings, then Play."
                 : "Play starts the server and Wizard101 for you.";
 
     /// <summary>
@@ -3650,6 +3790,7 @@ public sealed partial class MainWindowViewModel : ObservableObject {
         OnPropertyChanged(nameof(InstallDescription));
         OnPropertyChanged(nameof(EdgeTypeDumpPath));
         OnPropertyChanged(nameof(EdgeTypeDumpNote));
+        OnPropertyChanged(nameof(EdgeBranchNote));
         OnPropertyChanged(nameof(ServerBuildText));
         OnPropertyChanged(nameof(ClientBuild));
         OnPropertyChanged(nameof(ClientBuildText));
